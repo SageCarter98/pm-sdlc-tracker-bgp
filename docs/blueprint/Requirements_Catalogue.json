@@ -1,0 +1,1024 @@
+{
+  "requirements": [
+    {
+      "id": "REQ-001",
+      "domain": "Identity",
+      "text": "Register organisations and verified users; create an explicit organisation membership before project access.",
+      "source": "Directive v1.2 \u00a75.1, 5.4, 9",
+      "wp": "WP03",
+      "ac": "AC01 AC02 AC21",
+      "test": "TST-001",
+      "verify": "A verified member reaches only their organisation; an unverified or unrelated account is denied.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-002",
+      "domain": "Identity",
+      "text": "Require MFA for approval authority and provide accessible setup and verified recovery without elevating rights.",
+      "source": "Directive v1.2 \u00a75.4, 7.3",
+      "wp": "WP03",
+      "ac": "AC14 AC21",
+      "test": "TST-002",
+      "verify": "An approver without MFA cannot submit; recovery restores access only after identity checks and MFA re-enrolment.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-003",
+      "domain": "Identity",
+      "text": "Resolve active tenant from authenticated server session; verify membership when switching organisations.",
+      "source": "Directive v1.2 \u00a75.1",
+      "wp": "WP03",
+      "ac": "AC02 AC14",
+      "test": "TST-003",
+      "verify": "Changing a URL, request body or cookie tenant claim cannot grant another tenant; expired membership denies access.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-004",
+      "domain": "Identity",
+      "text": "Enforce project membership and template role permissions at each service operation.",
+      "source": "Directive v1.2 \u00a75.4",
+      "wp": "WP03",
+      "ac": "AC14 AC16",
+      "test": "TST-004",
+      "verify": "Contributor, approver and assurance users receive only allowed reads and writes.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-005",
+      "domain": "Identity",
+      "text": "Record and show tenant-administrator access to projects outside their membership to the sponsor.",
+      "source": "Directive v1.2 \u00a75.4",
+      "wp": "WP03",
+      "ac": "AC14",
+      "test": "TST-005",
+      "verify": "The access event identifies actor, project and time and is visible to the sponsor.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-006",
+      "domain": "Identity",
+      "text": "Enforce separation of duties; any permitted override records approved compensating review and independent reviewer.",
+      "source": "Directive v1.2 \u00a75.4",
+      "wp": "WP07",
+      "ac": "AC14",
+      "test": "TST-006",
+      "verify": "Self-only approval is rejected unless the scoped override is valid; an empty reviewer note cannot satisfy it.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-007",
+      "domain": "Tenancy",
+      "text": "Put tenant IDs on all owned rows and enforce PostgreSQL RLS through a restricted application role.",
+      "source": "Directive v1.2 \u00a75.1",
+      "wp": "WP04",
+      "ac": "AC02",
+      "test": "TST-007",
+      "verify": "Missing tenant context returns no owned records; application roles cannot bypass RLS or act as table owners.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-008",
+      "domain": "Tenancy",
+      "text": "Reset tenant context across pooled transactions and enforce isolation in workers, files, caches, search and exports.",
+      "source": "Directive v1.2 \u00a75.1, 5.5",
+      "wp": "WP04",
+      "ac": "AC02",
+      "test": "TST-008",
+      "verify": "Reuse a connection between two tenants and run mixed-tenant jobs; no data crosses boundaries.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-009",
+      "domain": "Tenancy",
+      "text": "Run an adversarial cross-tenant suite as a blocking CI check and demonstrate detection of a seeded leak.",
+      "source": "Directive v1.2 \u00a75.1, 12",
+      "wp": "WP04",
+      "ac": "AC02",
+      "test": "TST-009",
+      "verify": "A deliberately weakened policy or service query causes the suite to fail; repaired code passes.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-010",
+      "domain": "Templates",
+      "text": "Version framework templates containing tracks, gates, classification, role, status, decision and applicability schemes.",
+      "source": "Directive v1.2 \u00a75.2",
+      "wp": "WP05",
+      "ac": "AC09 AC13",
+      "test": "TST-010",
+      "verify": "Three distinct framework fixtures represent expected classes, roles and gates without application code changes.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-011",
+      "domain": "Templates",
+      "text": "Make published versions immutable; bind each project to one version and approve explicit migrations.",
+      "source": "Directive v1.2 \u00a75.2",
+      "wp": "WP05",
+      "ac": "AC13",
+      "test": "TST-011",
+      "verify": "Publishing v2 leaves a v1 project unchanged; migration logs impact, approver and both versions.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-012",
+      "domain": "Templates",
+      "text": "Provide guided authoring, fork, blank creation and schema-validated JSON import and export.",
+      "source": "Directive v1.2 \u00a75.2, 7, 9",
+      "wp": "WP05",
+      "ac": "AC08 AC09",
+      "test": "TST-012",
+      "verify": "A tenant builds and runs a template without JSON; malformed or unsupported imports explain the failing field.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-013",
+      "domain": "Templates",
+      "text": "Restrict configurable rules to a versioned declarative vocabulary; prohibit executable code and invariant overrides.",
+      "source": "Directive v1.2 \u00a75.2.1",
+      "wp": "WP05",
+      "ac": "AC09",
+      "test": "TST-013",
+      "verify": "Rule validation rejects arbitrary expressions, unknown operators, cycles and attempts to disable audit or export.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-014",
+      "domain": "Templates",
+      "text": "Include KenAddme only after licensing clearance; otherwise supply a neutral starter.",
+      "source": "Directive v1.2 \u00a75.2, 9, 14",
+      "wp": "WP05",
+      "ac": "AC01 AC09",
+      "test": "TST-014",
+      "verify": "Release manifest records template provenance and licensing decision; unresolved content is excluded.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-015",
+      "domain": "Projects",
+      "text": "Create a project with name, template binding, class, owner and explicit members; seed applicable evidence.",
+      "source": "Directive v1.2 \u00a72.4, 5.2, 9",
+      "wp": "WP06",
+      "ac": "AC01",
+      "test": "TST-015",
+      "verify": "Creation commits project and required items together, or neither when seeding fails.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-016",
+      "domain": "Projects",
+      "text": "Represent every routine and triggered gate review as a separate occurrence with due date and evidence snapshot.",
+      "source": "Directive v1.2 \u00a75.2.1, 11",
+      "wp": "WP06",
+      "ac": "AC12",
+      "test": "TST-016",
+      "verify": "Two routine reviews and a triggered review preserve separate evidence and decisions.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-017",
+      "domain": "Evidence",
+      "text": "Track evidence status, owner, due date, completion date and reference; retain immutable revisions and change attribution.",
+      "source": "Directive v1.2 \u00a75.3, 5.5, 9",
+      "wp": "WP06",
+      "ac": "AC10 AC11",
+      "test": "TST-017",
+      "verify": "Editing creates a new revision; prior actor, time and values remain available.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-018",
+      "domain": "Evidence",
+      "text": "Validate completion against the resulting record on every update; do not allow removal of required evidence while Complete.",
+      "source": "Directive v1.2 \u00a75.3.2",
+      "wp": "WP06",
+      "ac": "AC11",
+      "test": "TST-018",
+      "verify": "A patch clearing a mandatory reference from a completed item is rejected or explicitly transitions it out of Complete.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-019",
+      "domain": "Evidence",
+      "text": "Bind approved evidence to source versions or hashes where available; disclose mutable-reference limitations.",
+      "source": "Directive v1.2 \u00a75.3.1",
+      "wp": "WP06",
+      "ac": "AC04 AC10",
+      "test": "TST-019",
+      "verify": "The approval manifest preserves exact local revision and available source version; an unversioned URL is labelled.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-020",
+      "domain": "Exceptions",
+      "text": "Validate not-applicable classifications against rules and class floor; validate exceptions by authority, scope and expiry.",
+      "source": "Directive v1.2 \u00a75.3.2",
+      "wp": "WP07",
+      "ac": "AC03 AC11",
+      "test": "TST-020",
+      "verify": "A typed status alone cannot exclude an item; expired, revoked and unrelated exceptions are rejected.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-021",
+      "domain": "Exceptions",
+      "text": "Reassess affected gates when exceptions expire or evidence changes; preserve earlier decisions.",
+      "source": "Directive v1.2 \u00a75.3.1, 5.3.2",
+      "wp": "WP07",
+      "ac": "AC10 AC11",
+      "test": "TST-021",
+      "verify": "An expired exception changes current readiness and triggers reassessment without rewriting history.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-022",
+      "domain": "Decisions",
+      "text": "Permit approval only with satisfied requirements; conditional approval needs allowed conditions, owner, deadline and activity limits.",
+      "source": "Directive v1.2 \u00a75.3.2",
+      "wp": "WP07",
+      "ac": "AC03 AC11",
+      "test": "TST-022",
+      "verify": "Missing deadline or unresolved critical blocker denies conditional approval and records the attempt.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-023",
+      "domain": "Decisions",
+      "text": "Record decisions append-only with authenticated authority, server time, occurrence, template and evidence manifest.",
+      "source": "Directive v1.2 \u00a75.3.1",
+      "wp": "WP07",
+      "ac": "AC04 AC10",
+      "test": "TST-023",
+      "verify": "Requests cannot supply an authoritative actor or timestamp; resulting records include all required bindings.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-024",
+      "domain": "Decisions",
+      "text": "Recheck authority and reviewed revision atomically; prevent stale approval and duplicate retry decisions.",
+      "source": "Directive v1.2 \u00a75.3.1",
+      "wp": "WP07",
+      "ac": "AC10",
+      "test": "TST-024",
+      "verify": "Concurrent evidence or membership changes reject stale commits; repeated identical keys return one decision.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-025",
+      "domain": "Decisions",
+      "text": "Support superseding corrections only; record a reason and original-decision link.",
+      "source": "Directive v1.2 \u00a75.3",
+      "wp": "WP07",
+      "ac": "AC04 AC12",
+      "test": "TST-025",
+      "verify": "Every application role is denied UPDATE or DELETE of decisions; a new correction retains the original.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-026",
+      "domain": "Integrity",
+      "text": "Detect privileged tampering using separately controlled verification material, with defined custody and verification frequency.",
+      "source": "Directive v1.2 \u00a75.3.1",
+      "wp": "WP08",
+      "ac": "AC04",
+      "test": "TST-026",
+      "verify": "Alter stored history in a controlled test; independent verification detects it within the approved interval.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-027",
+      "domain": "Integrity",
+      "text": "Block approval acknowledgements for affected integrity failures, preserve evidence and trigger incident handling.",
+      "source": "Directive v1.2 \u00a75.3.1",
+      "wp": "WP08",
+      "ac": "AC04",
+      "test": "TST-027",
+      "verify": "Injected mismatch denies new acknowledgements in affected scope and produces an incident record.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-028",
+      "domain": "Recovery",
+      "text": "Meet zero acknowledged-decision loss within the approved failure envelope, including interpretation records.",
+      "source": "Directive v1.2 \u00a710",
+      "wp": "WP08",
+      "ac": "AC07",
+      "test": "TST-028",
+      "verify": "Fault tests reconcile all acknowledged IDs and associated manifests after supported failures.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-029",
+      "domain": "Recovery",
+      "text": "Restore ordinary data with RPO at most one hour and service within eight hours; test quarterly in clean environments.",
+      "source": "Directive v1.2 \u00a76, 10",
+      "wp": "WP08",
+      "ac": "AC07",
+      "test": "TST-029",
+      "verify": "Restore drill measures latest recoverable ordinary write and service recovery including integrity reconciliation.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-030",
+      "domain": "Export",
+      "text": "Provide complete open-format tenant export and lossless clean-instance re-import without privilege transfer.",
+      "source": "Directive v1.2 \u00a75.3, 9, 12",
+      "wp": "WP09",
+      "ac": "AC05",
+      "test": "TST-030",
+      "verify": "Compare record IDs, counts, revisions, hashes and relationships after import; imported actors do not receive live credentials.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-031",
+      "domain": "Export",
+      "text": "Keep own-data export, audit history and MFA available on all tiers, including billing disputes.",
+      "source": "Directive v1.2 \u00a75.3, 8",
+      "wp": "WP09",
+      "ac": "AC05 AC14",
+      "test": "TST-031",
+      "verify": "A read-only billing state permits authorised exports and history access but denies ordinary writes.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-032",
+      "domain": "Usability",
+      "text": "Provide role-specific My work with project, reason, deadline, state and a direct action.",
+      "source": "Directive v1.2 \u00a77.1",
+      "wp": "WP10",
+      "ac": "AC16",
+      "test": "TST-032",
+      "verify": "Each persona finds their assigned action while unrelated assignments stay hidden.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-033",
+      "domain": "Usability",
+      "text": "Provide short guided forms, field examples, clear errors and reversible navigation without losing valid input.",
+      "source": "Directive v1.2 \u00a77.1",
+      "wp": "WP10",
+      "ac": "AC17",
+      "test": "TST-033",
+      "verify": "Back navigation and invalid fields preserve all valid responses.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-034",
+      "domain": "Usability",
+      "text": "Save and resume drafts with truthful Saving, Saved and Not saved states under a declared shared-device policy.",
+      "source": "Directive v1.2 \u00a77.2",
+      "wp": "WP10",
+      "ac": "AC18",
+      "test": "TST-034",
+      "verify": "Interrupt a save and reload within the supported boundary; saved data returns and unsaved data is not misrepresented.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-035",
+      "domain": "Usability",
+      "text": "Distinguish pending from confirmed approvals; retrieve outcome after timeout and handle concurrent edits explicitly.",
+      "source": "Directive v1.2 \u00a77.2",
+      "wp": "WP10",
+      "ac": "AC18",
+      "test": "TST-035",
+      "verify": "Drop the response after commit; recovery displays the existing decision without creating another.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-036",
+      "domain": "Usability",
+      "text": "Explain blockers in plain language and link to their corrective action without exposing restricted information.",
+      "source": "Directive v1.2 \u00a77.1",
+      "wp": "WP10",
+      "ac": "AC19",
+      "test": "TST-036",
+      "verify": "A newcomer identifies the missing item and reaches the permitted correction without external documentation.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-037",
+      "domain": "Usability",
+      "text": "Show evidence, conditions and permitted progression in a deliberate approval confirmation summary.",
+      "source": "Directive v1.2 \u00a77.3",
+      "wp": "WP10",
+      "ac": "AC20",
+      "test": "TST-037",
+      "verify": "Users explain the action permitted before submitting; opening a page or email never approves anything.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-038",
+      "domain": "Usability",
+      "text": "Support invitation landing, accessible MFA and recovery as part of the essential task journey.",
+      "source": "Directive v1.2 \u00a77.3",
+      "wp": "WP03",
+      "ac": "AC21",
+      "test": "TST-038",
+      "verify": "An invited user reaches the intended project after sign-in and can recover without a control bypass.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-039",
+      "domain": "Usability",
+      "text": "Use unambiguous dates and visible time zones; support translation structure and consistent tenant terminology.",
+      "source": "Directive v1.2 \u00a77.5",
+      "wp": "WP10",
+      "ac": "AC23",
+      "test": "TST-039",
+      "verify": "UTC storage and user-zone display agree across daylight-saving and boundary cases; labels retain decision meanings.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-040",
+      "domain": "Accessibility",
+      "text": "Meet WCAG 2.2 AA with no open A or AA failure; support all mandatory tasks on phones and with assistive technology.",
+      "source": "Directive v1.2 \u00a77, 10",
+      "wp": "WP11",
+      "ac": "AC06 AC22",
+      "test": "TST-040",
+      "verify": "Automated checks plus keyboard, screen-reader, focus, contrast and zoom reviews pass essential journeys.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-041",
+      "domain": "Usability",
+      "text": "Meet twenty-minute unaided onboarding; baseline inclusive per-group testing with approved 90% task completion.",
+      "source": "Directive v1.2 \u00a72.4, 7.6",
+      "wp": "WP11",
+      "ac": "AC01 AC22",
+      "test": "TST-041",
+      "verify": "Record sample sizes, assistance, device profiles and each group result; do not conceal a failing group in a pooled average.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-042",
+      "domain": "Usability",
+      "text": "Block release for critical approval misunderstanding until corrected and retested.",
+      "source": "Directive v1.2 \u00a77.6",
+      "wp": "WP11",
+      "ac": "AC20",
+      "test": "TST-042",
+      "verify": "Observed misunderstanding is logged as a release blocker with repeat-test evidence after the fix.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-043",
+      "domain": "Operations",
+      "text": "Baseline 99.5% monthly availability and publish measurements; approve API and slow-device render budgets.",
+      "source": "Directive v1.2 \u00a77, 10",
+      "wp": "WP12",
+      "ac": "AC15",
+      "test": "TST-043",
+      "verify": "Approved measurement definitions, traffic profile and numeric performance budgets are tested and reported.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-044",
+      "domain": "Security",
+      "text": "Threat-model tenancy, template escalation, evidence/audit abuse, enumeration, attachments and billing; perform privacy assessment.",
+      "source": "Directive v1.2 \u00a76, 11",
+      "wp": "WP02",
+      "ac": "AC15",
+      "test": "TST-044",
+      "verify": "Independent reviewers record threats, mitigations, residual risks and data-handling decisions.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-045",
+      "domain": "Security",
+      "text": "Use approved secret storage and rotation; encrypt transit and stored database/object data with separately held key material.",
+      "source": "Directive v1.2 \u00a76",
+      "wp": "WP12",
+      "ac": "AC15",
+      "test": "TST-045",
+      "verify": "Review configuration and rotation evidence; tests deny plaintext and unauthorised secret access.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-046",
+      "domain": "Operations",
+      "text": "Remediate critical vulnerabilities within seven calendar days and high within thirty; acknowledge S1 within one hour.",
+      "source": "Directive v1.2 \u00a73.4, 10",
+      "wp": "WP12",
+      "ac": "AC15",
+      "test": "TST-046",
+      "verify": "Service procedures assign on-call responsibility and track due times, escalation and remediation evidence.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-047",
+      "domain": "Operations",
+      "text": "Review access quarterly and maintain security logs with minimised personal data and defined retention.",
+      "source": "Directive v1.2 \u00a76, 10",
+      "wp": "WP12",
+      "ac": "AC15",
+      "test": "TST-047",
+      "verify": "Access-review and log-retention samples demonstrate ownership, revocation and restricted access.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-048",
+      "domain": "Data",
+      "text": "Define retention floor, legal hold and authorised disposal; preserve actor attribution within retention and clarify decision retention.",
+      "source": "Directive v1.2 \u00a75.3, 5.5",
+      "wp": "WP02",
+      "ac": "AC15",
+      "test": "TST-048",
+      "verify": "Policy review resolves retention conflicts before implementation; hold blocks eligible disposal and records its basis.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-049",
+      "domain": "Delivery",
+      "text": "Maintain source control, migrations, code review, reproducible checks and dependency/licence inventory.",
+      "source": "Directive v1.2 \u00a711, 16.5",
+      "wp": "WP01",
+      "ac": "AC15",
+      "test": "TST-049",
+      "verify": "A clean checkout builds using pinned configuration and migrations; review and inventory are attached to the build.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-050",
+      "domain": "Assurance",
+      "text": "Obtain independent penetration testing before general availability; validate accessibility, acceptance and release evidence.",
+      "source": "Directive v1.2 \u00a76, 11",
+      "wp": "WP13",
+      "ac": "AC02 AC06 AC15",
+      "test": "TST-050",
+      "verify": "Independent findings and residual-risk decisions accompany the release recommendation.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-051",
+      "domain": "Governance",
+      "text": "Maintain requirement-to-task-to-test evidence, named responsibilities, change control and recurring Class A reviews.",
+      "source": "Directive v1.2 \u00a711, 14, 18",
+      "wp": "WP01",
+      "ac": "AC15",
+      "test": "TST-051",
+      "verify": "Every mandatory item has an owner or explicit vacancy and linked evidence; no status alone grants release.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-052",
+      "domain": "Governance",
+      "text": "Use only synthetic data for initial work; remain within approved scope and external-commitment limits.",
+      "source": "Directive v1.2 \u00a715, 18",
+      "wp": "WP01",
+      "ac": "AC15",
+      "test": "TST-052",
+      "verify": "Review environments and data fixtures; production, budget and supplier decisions are separately recorded.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-053",
+      "domain": "Attachments",
+      "text": "If enabled, scan, cap, encrypt and version uploads; isolate object access and use short-lived signed download URLs.",
+      "source": "Directive v1.2 \u00a75.5, 9",
+      "wp": "WP14",
+      "ac": "AC02 AC05",
+      "test": "TST-053",
+      "verify": "Malicious or unscanned objects are quarantined; cross-tenant signing fails; old versions and export are retained.",
+      "priority": "Conditional"
+    },
+    {
+      "id": "REQ-054",
+      "domain": "Notifications",
+      "text": "If enabled, provide grouped routine reminders, task links and completion suppression with permission-filtered content.",
+      "source": "Directive v1.2 \u00a77.4, 9",
+      "wp": "WP14",
+      "ac": "AC23",
+      "test": "TST-054",
+      "verify": "Completed work generates no routine reminder; revoked users receive no protected task content.",
+      "priority": "Conditional"
+    },
+    {
+      "id": "REQ-055",
+      "domain": "Practice",
+      "text": "If enabled, use resettable fictional practice projects isolated from live reports, decisions and exports.",
+      "source": "Directive v1.2 \u00a77.4",
+      "wp": "WP14",
+      "ac": "AC23",
+      "test": "TST-055",
+      "verify": "Resetting a practice project cannot affect real records and practice decisions never enter live metrics.",
+      "priority": "Conditional"
+    },
+    {
+      "id": "REQ-056",
+      "domain": "Billing",
+      "text": "Before paid signup, implement tiering, grace periods, read-only downgrade and contracted deletion policy; never store card data.",
+      "source": "Directive v1.2 \u00a76, 8, 9",
+      "wp": "WP14",
+      "ac": "AC14",
+      "test": "TST-056",
+      "verify": "Payment tokens only; billing failure preserves export and does not directly delete data.",
+      "priority": "Conditional"
+    },
+    {
+      "id": "REQ-057",
+      "domain": "Governance",
+      "text": "Fund and schedule independent assurance and benefits review; Class A benefits review is interim at three months and formal at six.",
+      "source": "Directive v1.2 \u00a73.4, 11",
+      "wp": "WP02",
+      "ac": "AC15",
+      "test": "TST-057",
+      "verify": "Approved plan identifies assurance capacity and protected benefits-review effort without inventing allocations.",
+      "priority": "Must"
+    },
+    {
+      "id": "REQ-058",
+      "domain": "Release",
+      "text": "Obtain named release authorisation, tested migration/rollback, runbooks, monitoring and operational handover before production.",
+      "source": "Directive v1.2 \u00a711, 15",
+      "wp": "WP13",
+      "ac": "AC15",
+      "test": "TST-058",
+      "verify": "Release checklist links to actual approver decisions and rehearsals; unmet critical evidence prevents release.",
+      "priority": "Must"
+    }
+  ],
+  "work_packages": [
+    [
+      "WP01",
+      "Repository and delivery controls",
+      "None",
+      "Delivery lead",
+      "Local foundation",
+      "Controlled repository, build instructions, synthetic fixtures, requirement ledger"
+    ],
+    [
+      "WP02",
+      "Discovery and assurance decisions",
+      "WP01",
+      "Sponsor and reviewers",
+      "G1 and G2 baselines",
+      "Market, roles, data inventory, assurance plan, privacy and threat reviews"
+    ],
+    [
+      "WP03",
+      "Identity and membership",
+      "WP01",
+      "Backend lead",
+      "Local prototype then G2 baseline",
+      "Registration, sessions, MFA, invitations, project permissions"
+    ],
+    [
+      "WP04",
+      "Tenant isolation",
+      "WP03",
+      "Backend lead",
+      "Local prototype then independent verification",
+      "RLS migrations, restricted roles, pooled-session and worker isolation tests"
+    ],
+    [
+      "WP05",
+      "Templates and rule interpreter",
+      "WP01 WP02",
+      "Backend lead",
+      "Local prototype then G2 baseline",
+      "Three framework fixtures, rule schema, immutable publication, guided authoring contract"
+    ],
+    [
+      "WP06",
+      "Projects and evidence revisions",
+      "WP04 WP05",
+      "Backend lead",
+      "After design review",
+      "Atomic project seeding, evidence history, recurring occurrences"
+    ],
+    [
+      "WP07",
+      "Decisions and exceptions",
+      "WP06 WP03",
+      "Backend lead",
+      "After design review",
+      "Atomic revision checks, scoped exceptions, append-only decisions"
+    ],
+    [
+      "WP08",
+      "Integrity and recovery",
+      "WP07 WP02",
+      "Security and operations lead",
+      "After durability ADR",
+      "Independent verification path, fault tests, restore drill"
+    ],
+    [
+      "WP09",
+      "Export and import",
+      "WP06 WP07",
+      "Backend lead",
+      "After export schema review",
+      "Versioned archive, permission-safe import, round-trip reconciliation"
+    ],
+    [
+      "WP10",
+      "Essential user journeys",
+      "WP03 WP06 WP07",
+      "Frontend lead",
+      "Prototype now; integrated after dependencies",
+      "My work, guided forms, saves, blockers, decision summary"
+    ],
+    [
+      "WP11",
+      "Usability and accessibility",
+      "WP10",
+      "UX and QA lead",
+      "Formative now; acceptance before release",
+      "Participant protocol, accessible journey results, remediation evidence"
+    ],
+    [
+      "WP12",
+      "Operations and hardening",
+      "WP04 WP08",
+      "Operations lead",
+      "Before external pilot",
+      "Secrets, monitoring, vulnerability handling, performance and recovery readiness"
+    ],
+    [
+      "WP13",
+      "Independent acceptance and release",
+      "WP09 WP11 WP12",
+      "Release authority and independent QA",
+      "Project Gate 4 / Software G4",
+      "Penetration test, user acceptance, release and rollback records"
+    ],
+    [
+      "WP14",
+      "Optional and paid capabilities",
+      "WP07 WP09 WP10",
+      "Product and engineering leads",
+      "Separate scope decision",
+      "Attachments, reminders, practice and billing; no paid signup before billing acceptance"
+    ]
+  ],
+  "acceptance": [
+    {
+      "id": "AC01",
+      "text": "A person who has never read a governance framework registers, selects a starting template, creates a project and records a first gate decision, unaided, within twenty minutes.",
+      "requirements": "REQ-001 REQ-014 REQ-015 REQ-041"
+    },
+    {
+      "id": "AC02",
+      "text": "The cross-tenant isolation suite passes with zero findings, and a deliberately planted violation fails the build.",
+      "requirements": "REQ-001 REQ-003 REQ-007 REQ-008 REQ-009 REQ-050 REQ-053"
+    },
+    {
+      "id": "AC03",
+      "text": "An attempt to approve with outstanding mandatory evidence or a critical blocker is refused and logged. Conditional approval requires an allowed condition, owner, deadline and explicit activity limits; invalid or expired exceptions cannot satisfy evidence requirements.",
+      "requirements": "REQ-020 REQ-022"
+    },
+    {
+      "id": "AC04",
+      "text": "All application and administrative paths refuse decision edits and deletions. Superseding is demonstrated as the correction path. A seeded privileged-storage alteration is detected by independent integrity verification and approval processing is blocked for the affected scope.",
+      "requirements": "REQ-019 REQ-023 REQ-025 REQ-026 REQ-027"
+    },
+    {
+      "id": "AC05",
+      "text": "A tenant exports the complete governance record and re-imports it into a clean instance with no loss.",
+      "requirements": "REQ-030 REQ-031 REQ-053"
+    },
+    {
+      "id": "AC06",
+      "text": "WCAG 2.2 AA checks pass with no open Level A or AA failure.",
+      "requirements": "REQ-040 REQ-050"
+    },
+    {
+      "id": "AC07",
+      "text": "Restore into a clean environment completes within eight hours and meets the ordinary-data RPO. Fault-injection tests across the approved failure envelope demonstrate no acknowledged decision loss and successful reconstruction of the associated manifests, attribution and template versions.",
+      "requirements": "REQ-028 REQ-029"
+    },
+    {
+      "id": "AC08",
+      "text": "A tenant authors a custom template through the guided path \u2014 without editing JSON \u2014 and runs a project through it end to end.",
+      "requirements": "REQ-012"
+    },
+    {
+      "id": "AC09",
+      "text": "Across three different frameworks, the approved rule vocabulary produces the expected applicability, authority and blocker outcomes. Unsupported rules and attempts to weaken platform invariants are rejected.",
+      "requirements": "REQ-010 REQ-012 REQ-013 REQ-014"
+    },
+    {
+      "id": "AC10",
+      "text": "A change to evidence or authority during approval causes the stale attempt to be refused. Repeating a committed request with the same idempotency key produces one decision. Later material changes flag reassessment without rewriting history.",
+      "requirements": "REQ-017 REQ-019 REQ-021 REQ-023 REQ-024"
+    },
+    {
+      "id": "AC11",
+      "text": "Removing a required evidence reference cannot leave an item Complete. Unapproved exclusions, expired exceptions and conditional approval without a deadline are refused; legitimate exclusions remain visible separately in the dashboard.",
+      "requirements": "REQ-017 REQ-018 REQ-020 REQ-021 REQ-022"
+    },
+    {
+      "id": "AC12",
+      "text": "Two routine and one triggered Project Gate 5 occurrences retain distinct evidence snapshots and outcomes. Superseding a decision in one occurrence preserves all other history.",
+      "requirements": "REQ-016 REQ-025"
+    },
+    {
+      "id": "AC13",
+      "text": "Changing a published template creates a new version and leaves existing projects unchanged. An authorised project migration records its impact, approver and before and after bindings.",
+      "requirements": "REQ-010 REQ-011"
+    },
+    {
+      "id": "AC14",
+      "text": "MFA, role separation, project membership and visible administrator access are verified, including attempted privilege escalation through template configuration. Billing degradation, if enabled, retains read-only access and complete export.",
+      "requirements": "REQ-002 REQ-003 REQ-004 REQ-005 REQ-006 REQ-031 REQ-056"
+    },
+    {
+      "id": "AC15",
+      "text": "The requirements matrix links each mandatory directive requirement and each applicable prototype remediation to an acceptance test, evidence location, owner and reviewer. No implemented-control claim is based solely on this document.",
+      "requirements": "REQ-043 REQ-044 REQ-045 REQ-046 REQ-047 REQ-048 REQ-049 REQ-050 REQ-051 REQ-052 REQ-057 REQ-058"
+    },
+    {
+      "id": "AC16",
+      "text": "My work shows only authorised assignments and gives a clear next action for contributors, approvers and administrators.",
+      "requirements": "REQ-004 REQ-032"
+    },
+    {
+      "id": "AC17",
+      "text": "Users complete guided forms, return to earlier steps and resolve validation errors without losing valid entries. Advanced settings do not obstruct essential tasks.",
+      "requirements": "REQ-033"
+    },
+    {
+      "id": "AC18",
+      "text": "Under the declared storage policy, interruption and reconnection tests preserve saved drafts, correctly distinguish unsaved input and avoid duplicate decisions. Pending approvals never appear confirmed.",
+      "requirements": "REQ-034 REQ-035"
+    },
+    {
+      "id": "AC19",
+      "text": "Users identify a blocker and reach its corrective action without searching separate documentation; assistance and task failures are measured by user group.",
+      "requirements": "REQ-036"
+    },
+    {
+      "id": "AC20",
+      "text": "Approvers correctly explain the permitted next activity from the approval summary. Submission is deliberate and bound to the reviewed evidence; critical misunderstanding blocks release.",
+      "requirements": "REQ-037 REQ-042"
+    },
+    {
+      "id": "AC21",
+      "text": "Invited users reach the intended authorised project, understand their role, and complete accessible MFA setup and recovery without a control bypass.",
+      "requirements": "REQ-001 REQ-002 REQ-038"
+    },
+    {
+      "id": "AC22",
+      "text": "The baselined usability protocol meets the agreed completion threshold in each tested group and reports sample sizes and task outcomes. Essential journeys also work with keyboard, screen reader and the agreed older-phone and constrained-connection profiles.",
+      "requirements": "REQ-040 REQ-041"
+    },
+    {
+      "id": "AC23",
+      "text": "Deadlines and decision times are unambiguous across the tested time zones. If practice projects or reminders are delivered, practice decisions stay out of live reports and completed tasks stop generating routine reminders.",
+      "requirements": "REQ-039 REQ-054 REQ-055"
+    }
+  ],
+  "remediation": [
+    [
+      "TR01",
+      "Open routes and missing tenancy",
+      "REQ-001 REQ-002 REQ-003 REQ-004 REQ-007 REQ-008",
+      "WP03 WP04"
+    ],
+    [
+      "TR02",
+      "Overwritten decisions and typed authority",
+      "REQ-016 REQ-023 REQ-025",
+      "WP06 WP07"
+    ],
+    [
+      "TR03",
+      "Unverified exclusions",
+      "REQ-020 REQ-021",
+      "WP07"
+    ],
+    [
+      "TR04",
+      "Incomplete conditional approval checks",
+      "REQ-022",
+      "WP07"
+    ],
+    [
+      "TR05",
+      "Evidence reference can be cleared",
+      "REQ-018",
+      "WP06"
+    ],
+    [
+      "TR06",
+      "Inconsistent HTML and Markdown controls",
+      "REQ-016 REQ-022 REQ-037",
+      "WP06 WP07 WP10"
+    ],
+    [
+      "TR07",
+      "Prototype database and delivery foundation",
+      "REQ-007 REQ-029 REQ-049",
+      "WP01 WP04 WP08"
+    ]
+  ],
+  "decisions": [
+    [
+      "DEC01",
+      "Named delivery lead and independent reviewer",
+      "Sponsor",
+      "Before relying on their authority",
+      "Approved responsibility structure. Named delivery and independent-review appointments and their acceptance remain required."
+    ],
+    [
+      "DEC02",
+      "Market, region and residency",
+      "Sponsor and privacy reviewer",
+      "Project Gate 2 / Software G1",
+      "Approved initial focus on small agencies and consultancies. Geography, hosting region and residency remain to be selected."
+    ],
+    [
+      "DEC03",
+      "Template and platform licensing",
+      "Owner",
+      "Project Gate 2 / Software G1",
+      "Approved licensing-clearance requirement and neutral-starter fallback. No licence or third-party permission is granted by this approval."
+    ],
+    [
+      "DEC04",
+      "Frontend and API session architecture",
+      "Technical lead",
+      "Project Gate 3 / Software G2",
+      "Approved modular FastAPI, PostgreSQL, SQLAlchemy/Alembic and same-origin web architecture. Frontend framework, session mechanism and pinned versions remain to be selected."
+    ],
+    [
+      "DEC05",
+      "Durability failure envelope and mechanism",
+      "Operations and security leads",
+      "Project Gate 3 / Software G2",
+      "Approved zero-loss objective within an explicit failure envelope and independent integrity verification. Candidate A versus B, covered failures and custody remain to be selected."
+    ],
+    [
+      "DEC06",
+      "Retention, disposal and attribution",
+      "Privacy reviewer and owner",
+      "Before retention implementation",
+      "Approved retention review, attribution and disposal controls. Retention periods and the permanent-record conflict remain to be resolved before implementation."
+    ],
+    [
+      "DEC07",
+      "Rule vocabulary and three frameworks",
+      "Technical lead",
+      "Before guided authoring implementation",
+      "Approved declarative rule schema and evaluation order in Section 5.5. Vocabulary limits, third framework and its permitted use remain to be specified."
+    ],
+    [
+      "DEC08",
+      "Usability sample and performance budgets",
+      "UX and technical leads",
+      "G1 protocol; G2 technical budgets",
+      "Approved 90% unaided task completion separately for each user group and twenty-minute onboarding. Sample sizes, devices, network profile and numeric performance budgets remain to be specified."
+    ],
+    [
+      "DEC09",
+      "Budget, capacity and delivery estimate",
+      "Sponsor",
+      "Before scope extension or external commitment",
+      "Approved work-package sequence and responsibility roles. Actual staffing, funding, estimates and dates remain to be supplied; no spending commitment is created."
+    ],
+    [
+      "DEC10",
+      "Payment, free-tier and grace policy",
+      "Sponsor",
+      "Before paid capabilities",
+      "Approved payment controls and no-card-data boundary. Processor, tier limits and grace periods remain to be selected before paid use."
+    ],
+    [
+      "DEC11",
+      "Operator access and key custody",
+      "Security lead and owner",
+      "Policy G1; mechanism G2",
+      "Approved no routine operator evidence access and no decision-edit authority. Break-glass scope, approval path, tenant visibility and independent key custody remain to be specified."
+    ],
+    [
+      "DEC12",
+      "Migration of legacy tracker records",
+      "Data owner",
+      "Before importing real records",
+      "Approved provenance-preserving migration policy; never invent missing actors or approvals. Any real-data import still requires data-owner authorisation and reconciliation evidence."
+    ]
+  ],
+  "approval": {
+    "id": "APR-001",
+    "date": "2026-09-15",
+    "authority": "User approval in this conversation",
+    "instruction": "I\u2019ve gone through the pending reviews, quite ok, approve them",
+    "scope": "Owner-approved development baseline, subject to explicit unresolved inputs and governing gates",
+    "decision_statuses": [
+      "Partly decided",
+      "Partly decided",
+      "Partly decided",
+      "Partly decided",
+      "Partly decided",
+      "Partly decided",
+      "Partly decided",
+      "Partly decided",
+      "Partly decided",
+      "Partly decided",
+      "Partly decided",
+      "Decided"
+    ]
+  }
+}

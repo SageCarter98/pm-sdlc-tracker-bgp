@@ -1,0 +1,23 @@
+{
+  "_comment": "Fictional data only. Directive v1.2 Sec.18 / REQ-052 synthetic-fixture boundary. Not consumed by any code yet (WP01) -- fixed here as a data contract for WP03/WP04.",
+  "tenants": [
+    {
+      "tenant_id": "tenant-a-synth",
+      "name": "Aldergrove Community Trust (synthetic)",
+      "members": [
+        { "role": "sponsor", "email": "sponsor@tenant-a.example" },
+        { "role": "contributor", "email": "contributor@tenant-a.example" },
+        { "role": "approver", "email": "approver@tenant-a.example" }
+      ]
+    },
+    {
+      "tenant_id": "tenant-b-synth",
+      "name": "Birchwood Advisory Collective (synthetic)",
+      "members": [
+        { "role": "sponsor", "email": "sponsor@tenant-b.example" },
+        { "role": "contributor", "email": "contributor@tenant-b.example" },
+        { "role": "approver", "email": "approver@tenant-b.example" }
+      ]
+    }
+  ]
+}
