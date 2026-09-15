@@ -4,6 +4,8 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from app.core.config import settings
+from app.db import Base
+from app import models  # noqa: F401  -- imported for side effect: registers tables on Base.metadata
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)
@@ -11,8 +13,7 @@ config.set_main_option("sqlalchemy.url", settings.database_url)
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# No ORM models exist yet (WP01) — tenant-scoped tables land with WP04.
-target_metadata = None
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
