@@ -1,4 +1,5 @@
 from fastapi import Cookie, Depends, HTTPException, status
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -39,6 +40,16 @@ def get_active_membership(
     )
     if membership is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "No active membership in this organisation")
+
+    # REQ-008: reset tenant context per transaction, not per pooled
+    # connection. SET LOCAL only lasts until the transaction ends (commit,
+    # rollback, or this request's session.close()), so the next request to
+    # reuse this physical connection -- for any tenant -- starts clean; it
+    # never inherits this request's setting. No-op outside Postgres (SQLite
+    # in tests has no RLS to protect, and no SET LOCAL syntax).
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": tenant_id})
+
     return membership
 
 

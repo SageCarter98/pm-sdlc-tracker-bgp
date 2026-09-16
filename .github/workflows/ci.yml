@@ -10,10 +10,38 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci-superuser-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # CI-only synthetic credentials -- not used anywhere outside this job.
+      BGP_DATABASE_URL: postgresql+psycopg2://bgp_app:ci-app-password@localhost:5432/bgp_dev
+      BGP_MIGRATION_DATABASE_URL: postgresql+psycopg2://bgp_owner:ci-owner-password@localhost:5432/bgp_dev
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
-      - run: pytest -q
+      - name: Create bgp_dev roles and database (REQ-007 two-role setup)
+        env:
+          PGPASSWORD: ci-superuser-password
+        run: |
+          psql -h localhost -U postgres -c "CREATE ROLE bgp_owner LOGIN PASSWORD 'ci-owner-password' NOSUPERUSER NOCREATEDB NOCREATEROLE;"
+          psql -h localhost -U postgres -c "CREATE ROLE bgp_app LOGIN PASSWORD 'ci-app-password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;"
+          psql -h localhost -U postgres -c "CREATE DATABASE bgp_dev OWNER bgp_owner;"
+          psql -h localhost -U postgres -c "GRANT CONNECT ON DATABASE bgp_dev TO bgp_app;"
+          psql -h localhost -U postgres -d bgp_dev -c "GRANT USAGE ON SCHEMA public TO bgp_app;"
+      - name: Apply migrations (RLS policies -- REQ-007/008)
+        run: alembic upgrade head
+      - name: Run tests, including the adversarial cross-tenant suite (REQ-009)
+        run: pytest -q

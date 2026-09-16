@@ -8,7 +8,7 @@ from app.db import Base
 from app import models  # noqa: F401  -- imported for side effect: registers tables on Base.metadata
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.database_url)
+config.set_main_option("sqlalchemy.url", settings.migration_database_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
