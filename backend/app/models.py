@@ -3,9 +3,11 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     DateTime,
     ForeignKey,
+    Integer,
     String,
     UniqueConstraint,
 )
@@ -112,6 +114,48 @@ class MfaRecoveryCode(Base):
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="recovery_codes")
+
+
+class Template(Base):
+    """REQ-010/011/012: a versioned framework template. tenant_id is NULL
+    for platform-provided neutral starters (REQ-014), visible to every
+    tenant as a fork source; non-NULL for a tenant's own authored/forked
+    template, visible only to that tenant."""
+
+    __tablename__ = "templates"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    # Provenance only, not a DB-enforced FK: a hard FK to template_versions
+    # would make templates/template_versions mutually referential, which
+    # complicates table creation order for no real benefit at this scale.
+    forked_from_version_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    versions: Mapped[list["TemplateVersion"]] = relationship(back_populates="template")
+
+
+class TemplateVersion(Base):
+    """REQ-011: published versions are immutable (enforced in
+    app/routers/templates.py, not by a DB trigger, in this prototype) and
+    each project binds to exactly one version."""
+
+    __tablename__ = "template_versions"
+    __table_args__ = (UniqueConstraint("template_id", "version_number", name="uq_template_version"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    template_id: Mapped[str] = mapped_column(String(36), ForeignKey("templates.id"), nullable=False)
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    schema_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
+    # Nullable: platform starter versions are seeded administratively (see
+    # scripts/seed_starter_frameworks.py), attributed to no real user row.
+    created_by_user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    template: Mapped["Template"] = relationship(back_populates="versions")
 
 
 class TenantAccessEvent(Base):

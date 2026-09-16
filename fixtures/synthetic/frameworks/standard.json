@@ -1,0 +1,99 @@
+{
+  "_meta": {
+    "name": "Lighthouse Standard Framework (synthetic)",
+    "note": "Fictional framework fixture with two classes and conditional applicability. Not KenAddme content (DEC03 unresolved)."
+  },
+  "schema_version": 1,
+  "tracks": ["Delivery", "Assurance"],
+  "classes": ["Standard-Low", "Standard-High"],
+  "roles": ["contributor", "approver", "sponsor"],
+  "statuses": ["Not started", "In progress", "Complete", "Not applicable"],
+  "decision_outcomes": ["Approve", "Approve with conditions", "Hold", "Redirect"],
+  "gates": [
+    {
+      "gate_id": "S1",
+      "name": "Intake",
+      "sequence": 1,
+      "class_ids": ["Standard-Low", "Standard-High"],
+      "rules": [
+        {
+          "version": 1,
+          "rule_id": "S1.R1",
+          "class_ids": ["Standard-Low", "Standard-High"],
+          "occurrence_type": "routine",
+          "evidence_kind": "document",
+          "required_fields": ["owner", "scope"],
+          "permitted_role_ids": ["approver"],
+          "blocker_level": "hard"
+        }
+      ]
+    },
+    {
+      "gate_id": "S2",
+      "name": "Design",
+      "sequence": 2,
+      "class_ids": ["Standard-Low", "Standard-High"],
+      "rules": [
+        {
+          "version": 1,
+          "rule_id": "S2.R1",
+          "class_ids": ["Standard-High"],
+          "occurrence_type": "routine",
+          "evidence_kind": "document",
+          "applicability": {"op": "eq", "fact": "class_id", "value": "Standard-High"},
+          "required_fields": ["architecture_review"],
+          "permitted_role_ids": ["approver", "sponsor"],
+          "blocker_level": "hard"
+        },
+        {
+          "version": 1,
+          "rule_id": "S2.R2",
+          "class_ids": ["Standard-Low"],
+          "occurrence_type": "routine",
+          "evidence_kind": "note",
+          "applicability": {"op": "eq", "fact": "class_id", "value": "Standard-Low"},
+          "required_fields": [],
+          "permitted_role_ids": ["approver"],
+          "blocker_level": "advisory"
+        }
+      ]
+    },
+    {
+      "gate_id": "S3",
+      "name": "Build",
+      "sequence": 3,
+      "class_ids": ["Standard-Low", "Standard-High"],
+      "rules": [
+        {
+          "version": 1,
+          "rule_id": "S3.R1",
+          "class_ids": ["Standard-Low", "Standard-High"],
+          "occurrence_type": "routine",
+          "evidence_kind": "test_report",
+          "required_fields": ["test_evidence"],
+          "permitted_role_ids": ["approver"],
+          "blocker_level": "conditional"
+        }
+      ]
+    },
+    {
+      "gate_id": "S4",
+      "name": "Release",
+      "sequence": 4,
+      "class_ids": ["Standard-Low", "Standard-High"],
+      "rules": [
+        {
+          "version": 1,
+          "rule_id": "S4.R1",
+          "class_ids": ["Standard-High"],
+          "occurrence_type": "triggered",
+          "evidence_kind": "sign_off",
+          "applicability": {"op": "eq", "fact": "class_id", "value": "Standard-High"},
+          "required_fields": ["sponsor_sign_off"],
+          "permitted_role_ids": ["sponsor"],
+          "blocker_level": "hard"
+        }
+      ]
+    }
+  ]
+}

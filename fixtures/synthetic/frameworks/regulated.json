@@ -1,0 +1,141 @@
+{
+  "_meta": {
+    "name": "Lighthouse Regulated Framework (synthetic)",
+    "note": "Fictional, stricter framework fixture: more classes/roles/gates, hard blockers and an assurance-reviewer-only rule for the critical class. Not KenAddme content (DEC03 unresolved)."
+  },
+  "schema_version": 1,
+  "tracks": ["Delivery", "Assurance", "Compliance"],
+  "classes": ["Regulated-Standard", "Regulated-Critical"],
+  "roles": ["contributor", "approver", "sponsor", "assurance_reviewer", "tenant_administrator"],
+  "statuses": ["Not started", "In progress", "Submitted for review", "Complete", "Not applicable", "Exception approved"],
+  "decision_outcomes": ["Approve", "Approve with conditions", "Hold", "Redirect", "Terminate"],
+  "gates": [
+    {
+      "gate_id": "R1",
+      "name": "Intake",
+      "sequence": 1,
+      "class_ids": ["Regulated-Standard", "Regulated-Critical"],
+      "rules": [
+        {
+          "version": 1,
+          "rule_id": "R1.R1",
+          "class_ids": ["Regulated-Standard", "Regulated-Critical"],
+          "occurrence_type": "routine",
+          "evidence_kind": "document",
+          "required_fields": ["owner", "scope", "risk_class"],
+          "permitted_role_ids": ["approver", "tenant_administrator"],
+          "blocker_level": "hard"
+        }
+      ]
+    },
+    {
+      "gate_id": "R2",
+      "name": "Threat and Privacy Review",
+      "sequence": 2,
+      "class_ids": ["Regulated-Standard", "Regulated-Critical"],
+      "rules": [
+        {
+          "version": 1,
+          "rule_id": "R2.R1",
+          "class_ids": ["Regulated-Standard", "Regulated-Critical"],
+          "occurrence_type": "routine",
+          "evidence_kind": "document",
+          "required_fields": ["threat_model", "privacy_assessment"],
+          "permitted_role_ids": ["assurance_reviewer"],
+          "blocker_level": "hard"
+        }
+      ]
+    },
+    {
+      "gate_id": "R3",
+      "name": "Design Readiness",
+      "sequence": 3,
+      "class_ids": ["Regulated-Standard", "Regulated-Critical"],
+      "rules": [
+        {
+          "version": 1,
+          "rule_id": "R3.R1",
+          "class_ids": ["Regulated-Critical"],
+          "occurrence_type": "routine",
+          "evidence_kind": "document",
+          "applicability": {"op": "eq", "fact": "class_id", "value": "Regulated-Critical"},
+          "required_fields": ["independent_architecture_review"],
+          "permitted_role_ids": ["assurance_reviewer", "sponsor"],
+          "blocker_level": "hard"
+        }
+      ]
+    },
+    {
+      "gate_id": "R4",
+      "name": "Build and Test",
+      "sequence": 4,
+      "class_ids": ["Regulated-Standard", "Regulated-Critical"],
+      "rules": [
+        {
+          "version": 1,
+          "rule_id": "R4.R1",
+          "class_ids": ["Regulated-Standard", "Regulated-Critical"],
+          "occurrence_type": "routine",
+          "evidence_kind": "test_report",
+          "required_fields": ["test_evidence", "coverage_report"],
+          "permitted_role_ids": ["approver"],
+          "blocker_level": "conditional"
+        }
+      ]
+    },
+    {
+      "gate_id": "R5",
+      "name": "Independent Acceptance",
+      "sequence": 5,
+      "class_ids": ["Regulated-Standard", "Regulated-Critical"],
+      "rules": [
+        {
+          "version": 1,
+          "rule_id": "R5.R1",
+          "class_ids": ["Regulated-Standard", "Regulated-Critical"],
+          "occurrence_type": "triggered",
+          "evidence_kind": "sign_off",
+          "applicability": {"op": "in", "fact": "class_id", "value": ["Regulated-Standard", "Regulated-Critical"]},
+          "required_fields": ["independent_test_evidence"],
+          "permitted_role_ids": ["assurance_reviewer"],
+          "blocker_level": "hard"
+        },
+        {
+          "version": 1,
+          "rule_id": "R5.R2",
+          "class_ids": ["Regulated-Critical"],
+          "occurrence_type": "triggered",
+          "evidence_kind": "sign_off",
+          "applicability": {
+            "op": "all",
+            "conditions": [
+              {"op": "eq", "fact": "class_id", "value": "Regulated-Critical"},
+              {"op": "eq", "fact": "residual_risk_disclosed", "value": true}
+            ]
+          },
+          "required_fields": ["residual_risk_acceptance"],
+          "permitted_role_ids": ["sponsor"],
+          "blocker_level": "hard"
+        }
+      ]
+    },
+    {
+      "gate_id": "R6",
+      "name": "Release",
+      "sequence": 6,
+      "class_ids": ["Regulated-Standard", "Regulated-Critical"],
+      "rules": [
+        {
+          "version": 1,
+          "rule_id": "R6.R1",
+          "class_ids": ["Regulated-Standard", "Regulated-Critical"],
+          "occurrence_type": "triggered",
+          "evidence_kind": "sign_off",
+          "required_fields": ["sponsor_sign_off", "runbook"],
+          "permitted_role_ids": ["sponsor"],
+          "blocker_level": "hard"
+        }
+      ]
+    }
+  ]
+}

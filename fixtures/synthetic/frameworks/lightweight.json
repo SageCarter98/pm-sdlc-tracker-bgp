@@ -1,0 +1,50 @@
+{
+  "_meta": {
+    "name": "Lighthouse Lightweight Framework (synthetic)",
+    "note": "Fictional, minimal framework fixture. Not KenAddme content -- DEC03 licensing is unresolved, so no real institutional framework ships in this platform yet (REQ-014)."
+  },
+  "schema_version": 1,
+  "tracks": ["Delivery"],
+  "classes": ["Light"],
+  "roles": ["contributor", "approver"],
+  "statuses": ["Not started", "In progress", "Complete"],
+  "decision_outcomes": ["Approve", "Hold"],
+  "gates": [
+    {
+      "gate_id": "L1",
+      "name": "Intake",
+      "sequence": 1,
+      "class_ids": ["Light"],
+      "rules": [
+        {
+          "version": 1,
+          "rule_id": "L1.R1",
+          "class_ids": ["Light"],
+          "occurrence_type": "routine",
+          "evidence_kind": "note",
+          "required_fields": ["owner", "purpose"],
+          "permitted_role_ids": ["approver"],
+          "blocker_level": "hard"
+        }
+      ]
+    },
+    {
+      "gate_id": "L2",
+      "name": "Release",
+      "sequence": 2,
+      "class_ids": ["Light"],
+      "rules": [
+        {
+          "version": 1,
+          "rule_id": "L2.R1",
+          "class_ids": ["Light"],
+          "occurrence_type": "routine",
+          "evidence_kind": "checklist",
+          "required_fields": ["disposal_date"],
+          "permitted_role_ids": ["approver"],
+          "blocker_level": "advisory"
+        }
+      ]
+    }
+  ]
+}
