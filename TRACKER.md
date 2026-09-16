@@ -140,13 +140,56 @@ own evidence update when it happens.
   the seeded-leak proof was only repeated for `projects`, not the other
   four new tables, which share the same migration-generated policy but
   aren't independently re-verified.
+- **WP07** (decisions and exceptions) — built 2026-09-16, same session,
+  continuing the recovered plan order (depends on WP06+WP03, both real).
+  New tables: `exception_records`, `decision_records`, `idempotency_records`,
+  `audit_events` (migration `0005_wp07_decisions`; also backfills
+  `evidence_items.blocker_level`, which WP06 had collapsed into a single
+  `required` bool — REQ-022's conditional-approval logic needs the
+  hard/conditional/advisory distinction back). New router
+  `app/routers/decisions.py`. Implements REQ-020/021 (exceptions: authority,
+  scope and expiry are all re-checked live against server time and current
+  role membership at every readiness computation — never read from a typed
+  `status` field alone; revocation preserves the row rather than deleting
+  it), REQ-022 (conditional approval requires owner + a future deadline +
+  at least one condition; a hard blocker denies any approval outcome,
+  conditions can only defer a *conditional* blocker), REQ-023/024
+  (idempotent, append-only decision recording — an `Idempotency-Key` header
+  + `(tenant, actor, operation, key)` uniqueness makes a retried identical
+  request return the original decision rather than erroring or duplicating;
+  a changed payload under the same key is a 409, not a silent overwrite),
+  REQ-025 (decisions are correctable only via a new superseding row with a
+  mandatory reason — enforced not just by which routes exist but at the
+  **database role level**: `bgp_app`'s grant on `decision_records` is
+  SELECT+INSERT only, no UPDATE/DELETE, proven live against Postgres in
+  `test_wp07_tenant_isolation_rls.py`), and REQ-006 (separation of duties —
+  a decision where the sole preparer of every required item is also the
+  decider is rejected unless a named, independent, non-empty-noted
+  compensating reviewer is supplied). REQ-021's "reassess... trigger
+  reassessment" requirement is satisfied by construction rather than by a
+  worker: readiness (blockers, manifest digest) is recomputed fresh on
+  every preview/decide call, so there is nothing cached that could go
+  stale or need an explicit trigger. 74/74 backend tests passing (+13 from
+  WP07: 9 functional, 4 live-Postgres role/isolation proofs).
+
+  **Explicitly not implemented, not rounded up**: Blueprint Sec.5.4 step 7
+  (durability) depends on **DEC05**, which is still an open architectural
+  decision (candidate synchronous-replication vs. pending-intent-plus-
+  receipt semantics) — this pass commits atomically to the single local
+  Postgres instance and nothing more; a 201 response here does not carry
+  DEC05's eventual durability guarantee, whichever candidate gets chosen.
+  REQ-022's "activity limits" on conditional approval are not enforced
+  (no route yet restricts what a conditionally-approved project may do).
+  The full Sec.5.2 `AuditEvent`/`Checkpoint` tamper-evidence design (event
+  digest, independent checkpoint custody — REQ-026/027) is WP08's job, not
+  built here; `audit_events` in this pass is a plain append-only log.
 - **DEC07 (rule vocabulary/third framework) is still open** — WP05
   implements the schema shape Sec.5.5 already approved, but the "exact
   vocabulary and limits" the blueprint reserves for DEC07 are this
   session's working choices, not a technical-lead sign-off. Don't treat the
   prohibited-facts list or the depth-5 limit as settled without that review.
-- Still Not started across WP03/WP04/WP05/WP06: #124 (AI-generated code
-  reviewed by a human). Five work packages in, zero of them reviewed by
+- Still Not started across WP03/WP04/WP05/WP06/WP07: #124 (AI-generated
+  code reviewed by a human). Six work packages in, zero of them reviewed by
   Milton.
 
 ## Rules for updating this tracker as work proceeds

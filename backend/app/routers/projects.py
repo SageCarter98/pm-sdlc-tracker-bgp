@@ -67,6 +67,7 @@ class EvidenceItemOut(BaseModel):
     rule_id: str
     evidence_kind: str
     required: bool
+    blocker_level: str
     permitted_role_ids: list[str]
     status: str
     owner_user_id: str | None
@@ -187,6 +188,7 @@ def _seed_evidence_for_occurrence(
             rule_id=rule.rule_id,
             evidence_kind=rule.evidence_kind,
             required=rule.blocker_level != "advisory",
+            blocker_level=rule.blocker_level,
             permitted_role_ids=rule.permitted_role_ids,
             status="Not started",
             owner_user_id=None,

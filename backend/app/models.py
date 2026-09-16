@@ -245,6 +245,12 @@ class EvidenceItem(Base):
     rule_id: Mapped[str] = mapped_column(String(100), nullable=False)
     evidence_kind: Mapped[str] = mapped_column(String(50), nullable=False)
     required: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    # WP07 addition: WP06 collapsed blocker_level into the single `required`
+    # bool. REQ-022's conditional-approval logic needs the finer distinction
+    # back (hard blocks any approval; conditional can be deferred via
+    # "Approve with conditions"; advisory never blocks) -- see
+    # app/routers/decisions.py.
+    blocker_level: Mapped[str] = mapped_column(String(20), nullable=False, default="hard")
     permitted_role_ids: Mapped[list] = mapped_column(JSON, nullable=False)
 
     status: Mapped[str] = mapped_column(String(30), nullable=False)
@@ -285,4 +291,128 @@ class EvidenceRevision(Base):
     source_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class ExceptionRecord(Base):
+    """REQ-020/021: scoped to exactly one EvidenceItem. `status` transitions
+    active -> revoked only (never deleted -- REQ-021 "preserve earlier
+    decisions" applies here too: a revoked exception must stay visible as a
+    fact of history, not disappear). Validity is never read from `status`
+    alone -- app/routers/decisions.py re-checks expires_at against server
+    time and re-checks the approving actor still holds an authorising role,
+    every time readiness is computed (REQ-020's own point: "a typed status
+    alone cannot exclude an item")."""
+
+    __tablename__ = "exception_records"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"), nullable=False)
+    evidence_item_id: Mapped[str] = mapped_column(String(36), ForeignKey("evidence_items.id"), nullable=False)
+
+    reason: Mapped[str] = mapped_column(String(1000), nullable=False)
+    safeguards: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    approving_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    owner_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")  # active | revoked
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_by_user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class DecisionRecord(Base):
+    """REQ-023/025: append-only. app/routers/decisions.py never UPDATEs or
+    DELETEs a row here -- the bgp_app grant on this table (WP07 migration)
+    only includes SELECT and INSERT, so the restriction is enforced at the
+    database role level too, not just by which routes happen to exist.
+    A correction is a new row with supersedes_decision_id set and a
+    mandatory reason; the original row is untouched. manifest_json binds the
+    exact evidence-item/revision-number pairs and template_version_id this
+    decision was made against (REQ-019/023); reviewed_manifest_digest is
+    the freshness token returned by the preview endpoint and re-submitted at
+    decision time -- see decisions.py for the staleness check this defends.
+
+    Durability (Decision transaction contract step 7, blueprint Sec.5.4) is
+    explicitly NOT implemented beyond an ordinary atomic Postgres commit:
+    DEC05 (which of Candidate A/B's acknowledgement semantics to build) is
+    still an open decision, not something this pass can resolve on its own
+    authority. Do not read a 201 response from this endpoint as satisfying
+    DEC05's durability guarantee -- it only proves the local commit
+    succeeded."""
+
+    __tablename__ = "decision_records"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"), nullable=False)
+    occurrence_id: Mapped[str] = mapped_column(String(36), ForeignKey("gate_occurrences.id"), nullable=False)
+
+    actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    actor_role: Mapped[str] = mapped_column(String(30), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(30), nullable=False)
+    manifest_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    reviewed_manifest_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    conditions_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    supersedes_decision_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("decision_records.id"), nullable=True)
+    reason: Mapped[str | None] = mapped_column(String(1000), nullable=True)  # required by the API when superseding
+
+    separation_override_reviewer_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+    separation_override_note: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class IdempotencyRecord(Base):
+    """REQ-024: 'Unique scoped key' = (tenant, actor, operation, key). A
+    retried request with the same four values and the same payload replays
+    the stored outcome; the same key with a *different* payload is a
+    conflict (app/routers/decisions.py), never silently accepted as a second
+    write."""
+
+    __tablename__ = "idempotency_records"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "actor_user_id", "operation", "idempotency_key", name="uq_idempotency_scope"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
+    actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    operation: Mapped[str] = mapped_column(String(50), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    request_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    outcome_status: Mapped[str] = mapped_column(String(20), nullable=False)  # created | denied
+    outcome_decision_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("decision_records.id"), nullable=True)
+    denial_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class AuditEvent(Base):
+    """REQ-023 step 6: 'Denied attempts create a separate authorised audit
+    event; a rollback must not silently erase the refusal record.' This is a
+    plain append-only log row -- the full blueprint Sec.5.2 AuditEvent also
+    calls for an 'event digest and independent checkpoint reference' for
+    tamper detection, which is REQ-026/027, tagged WP08 (Integrity and
+    recovery), not built here. Do not treat this table as satisfying WP08's
+    tamper-evidence requirement."""
+
+    __tablename__ = "audit_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"), nullable=False)
+    occurrence_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("gate_occurrences.id"), nullable=True)
+    decision_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("decision_records.id"), nullable=True)
+
+    actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
