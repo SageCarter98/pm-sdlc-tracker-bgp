@@ -169,3 +169,120 @@ class TenantAccessEvent(Base):
     actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
     project_ref: Mapped[str] = mapped_column(String(200), nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class Project(Base):
+    """REQ-015: a project binds a tenant to one immutable template version
+    and a class declared by that version's schema. class_id/template_version_id
+    are not DB-enforced against the schema's own declared classes (SQLite
+    test runs have no cross-table CHECK support) -- app/routers/projects.py
+    validates this at creation time instead."""
+
+    __tablename__ = "projects"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    template_version_id: Mapped[str] = mapped_column(String(36), ForeignKey("template_versions.id"), nullable=False)
+    class_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    owner_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class ProjectMembership(Base):
+    """REQ-015: explicit project members, each carrying a Blueprint Sec.2
+    role -- separate from (though usually drawn from) the user's tenant-wide
+    Membership.role, since a user's authority can differ per project."""
+
+    __tablename__ = "project_memberships"
+    __table_args__ = (UniqueConstraint("project_id", "user_id", name="uq_project_membership_project_user"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    role: Mapped[str] = mapped_column(String(30), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class GateOccurrence(Base):
+    """REQ-016: one row per routine or triggered gate review. sequence is
+    per (project_id, gate_id) -- the second routine review of the same gate
+    is sequence 2, a triggered review gets its own sequence in the same
+    series, so no two occurrences of the same gate ever collide or share
+    evidence."""
+
+    __tablename__ = "gate_occurrences"
+    __table_args__ = (
+        UniqueConstraint("project_id", "gate_id", "sequence", name="uq_gate_occurrence_project_gate_sequence"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"), nullable=False)
+    gate_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    trigger: Mapped[str] = mapped_column(String(20), nullable=False)  # "routine" | "triggered"
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class EvidenceItem(Base):
+    """REQ-017: the stable, current-state row for one rule's evidence within
+    one gate occurrence. `status`/`owner_user_id`/`due_date`/`completed_date`/
+    `reference` here always mirror the latest EvidenceRevision -- they exist
+    for fast querying (my-work, listings); EvidenceRevision is the append-only
+    history of record. `required` is derived from the rule's blocker_level
+    (hard/conditional => required; advisory => not) and drives REQ-018."""
+
+    __tablename__ = "evidence_items"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"), nullable=False)
+    occurrence_id: Mapped[str] = mapped_column(String(36), ForeignKey("gate_occurrences.id"), nullable=False)
+    gate_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    rule_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    evidence_kind: Mapped[str] = mapped_column(String(50), nullable=False)
+    required: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    permitted_role_ids: Mapped[list] = mapped_column(JSON, nullable=False)
+
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    owner_user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+    due_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reference: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    latest_revision_number: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class EvidenceRevision(Base):
+    """REQ-017/019: one immutable, append-only revision. Never updated or
+    deleted after insert -- app/routers/projects.py only ever INSERTs here.
+    source_version/source_hash implement REQ-019's "bind to source versions
+    or hashes where available"; when both are absent the reference is an
+    undisclosed/mutable pointer (the API surfaces this as
+    `reference_is_mutable` rather than guessing from the reference string's
+    shape, e.g. sniffing for a URL, which would be an unreliable signal)."""
+
+    __tablename__ = "evidence_revisions"
+    __table_args__ = (
+        UniqueConstraint("evidence_item_id", "revision_number", name="uq_evidence_revision_item_number"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
+    evidence_item_id: Mapped[str] = mapped_column(String(36), ForeignKey("evidence_items.id"), nullable=False)
+    revision_number: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    owner_user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+    due_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reference: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    source_version: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    source_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

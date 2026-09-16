@@ -6,8 +6,9 @@ environments without it configured.
 
 REQ-009 requires this suite to run as a *blocking* CI check (see
 .github/workflows/ci.yml for the Postgres service container -- wired since
-WP04, still never actually executed because no git remote exists yet to
-trigger GitHub Actions) and to demonstrate detection of a seeded leak --
+WP04; a private remote exists since 2026-09-16 but nothing has been pushed
+yet, so this still has never actually executed as a real CI run) and to
+demonstrate detection of a seeded leak --
 `test_seeded_leak_in_rls_policy_is_detected` below does that: it commits a
 deliberately permissive policy, proves cross-tenant rows become visible
 through bgp_app, then restores the original policy and re-verifies isolation

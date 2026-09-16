@@ -36,11 +36,28 @@ Reproduced from `Blueprint_Working_Source.md` §2 exactly (not restated from mem
 
 ### What's actually implemented against this table so far
 
-`Membership.role` (`backend/app/models.py` line 80) is a free-text `String(30)` column — the
-six roles above are not yet enforced as a fixed enumeration anywhere in the schema or validated
-role set. `app/rule_engine.py`'s `TemplateSchema.roles` is a template-defined list, not
-necessarily this fixed platform role table — the two are related but not proven identical.
-**Gap, not rounded up**: confirming that every code path which checks a user's role actually
-draws from this exact six-role table (and rejects anything else) has not been verified as part of
-this document and should be checked when WP06/WP07's authorization logic (Project/Decision
-routes) is built, since none of that exists yet to check.
+**Correction (2026-09-16, later pass): the claim originally written here was wrong** — it said
+`Membership.role` was unvalidated free text. That's inaccurate. `app/models.py` defines a
+`Role(str, enum.Enum)` with five of the six roles above (`contributor`, `approver`, `sponsor`,
+`assurance_reviewer`, `tenant_administrator` — `platform_operator` is deliberately excluded, with
+a comment explaining it's out of tenant scope, no membership row, deferred to WP12). Every write
+path that sets a membership's role goes through this enum at the API boundary first:
+`InviteRequest.role: Role` (`app/routers/orgs.py` line 31) is a Pydantic-typed field, so an
+invalid role value is rejected before it ever reaches the database — both the initial
+tenant-creator assignment (`Role.TENANT_ADMINISTRATOR.value`, line 69) and invitation acceptance
+(`invitation.role`, line 120, itself only ever set from a validated `Role` at invite time) go
+through it. `Membership.role`'s underlying column is still `String(30)` (no DB-level CHECK
+constraint), but that's a storage detail, not an unenforced role set — the enforcement is real,
+just at the application layer rather than the schema layer.
+
+`app/rule_engine.py`'s `TemplateSchema.roles` is a separate, template-defined list (a template
+author declares which of *their* framework's roles a rule permits) — related to but not required
+to be identical to this fixed five-role platform enum, and that's correct: a tenant-authored
+governance framework's roles (e.g. "Technical Lead", "QA Lead") are a different concept from the
+platform's own membership/authority roles. Not a gap; noting it so the distinction isn't
+conflated later.
+
+This correction was found while starting WP06 and re-reading `app/deps.py`/`app/models.py`
+closely enough to wire project-role checks — a reminder that a document marked "drafted, not
+independently reviewed" can still contain plain errors, not just open judgment calls, and those
+get fixed the moment they're found rather than left for the eventual review to catch.

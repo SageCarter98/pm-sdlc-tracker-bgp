@@ -112,13 +112,42 @@ own evidence update when it happens.
   named yet to approve budget, no Gate 2 decision yet to anchor benefits-
   review dates). Same discipline as everywhere else in this project: drafted
   by an AI assistant is not the same as reviewed by Milton.
+- **WP06** (projects and evidence revisions) — built 2026-09-16, same session
+  as WP02, continuing the recovered implementation-plan order (depends on
+  WP04+WP05, both real by this point). New tables: `projects`,
+  `project_memberships`, `gate_occurrences`, `evidence_items`,
+  `evidence_revisions` (migration `0004_wp06_projects`, same RLS policy
+  shape as WP04, applied and verified against live `bgp_dev`). Implements
+  REQ-015 (atomic project creation — a monkeypatched mid-seed failure test,
+  `test_seeding_failure_leaves_no_project_row`, proves zero rows persist on
+  a partial failure, not just that the happy path works), REQ-016 (routine
+  vs. triggered gate reviews are separate `GateOccurrence` rows with their
+  own evidence, never shared — a gate with only triggered rules gets no
+  automatic occurrence at project creation), REQ-017 (evidence edits are
+  INSERT-only new `EvidenceRevision` rows, never UPDATEs, each carrying
+  `actor_user_id`), REQ-018 (a required item cannot be marked Complete
+  without a reference — since every revision replaces the full record
+  rather than patching one field, this is the only way REQ-018's "do not
+  allow removal of required evidence while Complete" can be violated, so
+  blocking it there is sufficient), and REQ-019 (`source_version`/
+  `source_hash` accepted as explicitly disclosed fields, never inferred by
+  sniffing the reference string). 61/61 backend tests passing (13 new: 9 in
+  `test_projects.py`, 4 in `test_wp06_tenant_isolation_rls.py` extending the
+  WP04 seeded-leak proof to the `projects` table specifically, per the
+  threat model's own T1.4 follow-up). **Known scope gaps, not rounded up**:
+  concurrent-occurrence-creation races are handled by the DB unique
+  constraint (a losing request gets 409) but not retried automatically, and
+  the seeded-leak proof was only repeated for `projects`, not the other
+  four new tables, which share the same migration-generated policy but
+  aren't independently re-verified.
 - **DEC07 (rule vocabulary/third framework) is still open** — WP05
   implements the schema shape Sec.5.5 already approved, but the "exact
   vocabulary and limits" the blueprint reserves for DEC07 are this
   session's working choices, not a technical-lead sign-off. Don't treat the
   prohibited-facts list or the depth-5 limit as settled without that review.
-- Still Not started across WP03/WP04/WP05: #124 (AI-generated code reviewed
-  by a human). Three work packages in, zero of them reviewed by Milton.
+- Still Not started across WP03/WP04/WP05/WP06: #124 (AI-generated code
+  reviewed by a human). Five work packages in, zero of them reviewed by
+  Milton.
 
 ## Rules for updating this tracker as work proceeds
 
