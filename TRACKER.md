@@ -75,21 +75,43 @@ own evidence update when it happens.
   itself doesn't fully take, never a silent leftover weakened policy).
   `.github/workflows/ci.yml` has provisioned a Postgres service, both roles
   and `alembic upgrade head` since WP04 — **that wiring has still never
-  actually executed**, because this repo has no git remote to push to and
-  trigger GitHub Actions. REQ-009's "blocking CI check" clause stays an open
-  gap until a real CI run is observed passing (and, ideally, failing on a
-  reintroduced leak) — don't round that part up to Complete from the local
-  config alone.
+  actually executed**. A private GitHub remote (`origin`,
+  `github.com/SageCarter98/pm-sdlc-tracker-bgp`) was created 2026-09-16, but
+  nothing has been pushed yet (deliberate — pushing is a separate, more
+  consequential decision than creating the remote). REQ-009's "blocking CI
+  check" clause stays an open gap until a real CI run is observed passing
+  (and, ideally, failing on a reintroduced leak) — don't round that part up
+  to Complete from the local config alone.
 - **WP05** (templates and declarative rule interpreter) is committed and
-  tested against SQLite: the Sec.5.5 rule vocabulary (equality/membership/
-  bounded-all-any only, no eval/exec, max nesting depth 5, a fixed
-  prohibited-facts list blocking things like `disable_audit`), template
-  create/fork/import/publish with publish-time immutability, and three
-  neutral fictional framework fixtures (not real KenAddme content — DEC03
-  licensing is still unresolved, so REQ-014's neutral-starter fallback
-  applies). 41 passed, 6 skipped (same Postgres-gated WP04 suite as before —
-  WP05 adds an RLS policy for templates but that's equally unverified until
-  Postgres is set up).
+  tested: the Sec.5.5 rule vocabulary (equality/membership/bounded-all-any
+  only, no eval/exec, max nesting depth 5, a fixed prohibited-facts list
+  blocking things like `disable_audit`), template create/fork/import/publish
+  with publish-time immutability, and three neutral fictional framework
+  fixtures (not real KenAddme content — DEC03 licensing is still unresolved,
+  so REQ-014's neutral-starter fallback applies). Its RLS policy for
+  templates is included in the same 48/48-passing live-Postgres verification
+  recorded above for WP04.
+- **WP02 (Discovery and assurance decisions) — built 2026-09-16, retroactively.**
+  WP05 lists `WP01 WP02` as its dependencies (blueprint §6), but WP02 had
+  never been done when WP05 was built — a real, unflagged sequencing
+  deviation, only caught when directly asked "is the implementation plan
+  being followed?" on 2026-09-16. Closed out per the user's instruction to
+  follow the plan: five documents drafted under `docs/wp02/` (see
+  `docs/wp02/README.md` for the index) covering REQ-044 (threat model +
+  privacy assessment, incl. one new finding — a hardcoded session-signing key
+  in `app/security.py`, already flagged in-code as prototype-only but now
+  also tracked as a threat-model line item), REQ-048 (retention/legal-hold
+  policy proposal — proposed floors explicitly marked as unconfirmed
+  defaults, not blueprint-mandated figures), REQ-057 (assurance plan — states
+  the Class A 3/6-month benefits-review cadence but does **not** invent a
+  budget or capacity number, per that requirement's own verification text),
+  the data classification scheme flagged missing since 2026-09-15
+  (G1.06), and a market/roles consolidation. **None of this is
+  independently reviewed** — tracker items #97 and #109 moved to "Submitted
+  for review", #105 stays "In progress" (it has real open inputs: no Sponsor
+  named yet to approve budget, no Gate 2 decision yet to anchor benefits-
+  review dates). Same discipline as everywhere else in this project: drafted
+  by an AI assistant is not the same as reviewed by Milton.
 - **DEC07 (rule vocabulary/third framework) is still open** — WP05
   implements the schema shape Sec.5.5 already approved, but the "exact
   vocabulary and limits" the blueprint reserves for DEC07 are this
