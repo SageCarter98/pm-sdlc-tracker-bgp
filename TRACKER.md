@@ -51,6 +51,26 @@ confirmed, and no review has actually happened yet. Don't infer review sign-off
 occurred just because the role is now named; track each actual review as its
 own evidence update when it happens.
 
+## Work packages built so far (2026-09-16)
+
+- **WP01** (repository/delivery controls) and **WP03** (identity/membership,
+  local prototype) are committed and tested against SQLite. G3 items #115
+  (source control) and #119 (tests) marked Complete; #121 (CI results) and
+  #126 (deviation log) are In progress. **#124 (AI-generated code reviewed by
+  a competent human) is deliberately left Not started — Milton has not
+  reviewed any of this code yet. Don't let anything here be treated as
+  accepted until he has.**
+- **WP04** (tenant isolation via PostgreSQL RLS) has migrations, restricted-role
+  grants and an adversarial cross-tenant test suite written (REQ-007/008/009),
+  but **none of it has run against a real Postgres yet** — it self-skips
+  without live credentials. A local Postgres 16 service is installed and
+  running; `backend/scripts/setup_postgres_dev.sql` and a `backend/.env` with
+  `BGP_DATABASE_URL`/`BGP_MIGRATION_DATABASE_URL` still need to be created
+  (owner declined to hand over the Postgres superuser password, chose to run
+  setup themselves instead — this is a real open blocker, not evidence to
+  round up). CI now provisions Postgres and both roles so the suite becomes
+  a genuine blocking check there once it runs.
+
 ## Rules for updating this tracker as work proceeds
 
 1. Draft candidate evidence matches, then **verify each one against the actual
