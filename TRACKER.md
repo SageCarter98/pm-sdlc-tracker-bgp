@@ -70,6 +70,23 @@ own evidence update when it happens.
   setup themselves instead — this is a real open blocker, not evidence to
   round up). CI now provisions Postgres and both roles so the suite becomes
   a genuine blocking check there once it runs.
+- **WP05** (templates and declarative rule interpreter) is committed and
+  tested against SQLite: the Sec.5.5 rule vocabulary (equality/membership/
+  bounded-all-any only, no eval/exec, max nesting depth 5, a fixed
+  prohibited-facts list blocking things like `disable_audit`), template
+  create/fork/import/publish with publish-time immutability, and three
+  neutral fictional framework fixtures (not real KenAddme content — DEC03
+  licensing is still unresolved, so REQ-014's neutral-starter fallback
+  applies). 41 passed, 6 skipped (same Postgres-gated WP04 suite as before —
+  WP05 adds an RLS policy for templates but that's equally unverified until
+  Postgres is set up).
+- **DEC07 (rule vocabulary/third framework) is still open** — WP05
+  implements the schema shape Sec.5.5 already approved, but the "exact
+  vocabulary and limits" the blueprint reserves for DEC07 are this
+  session's working choices, not a technical-lead sign-off. Don't treat the
+  prohibited-facts list or the depth-5 limit as settled without that review.
+- Still Not started across WP03/WP04/WP05: #124 (AI-generated code reviewed
+  by a human). Three work packages in, zero of them reviewed by Milton.
 
 ## Rules for updating this tracker as work proceeds
 
