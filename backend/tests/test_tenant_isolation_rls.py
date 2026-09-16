@@ -4,11 +4,16 @@ applied (backend/scripts/setup_postgres_dev.sql, then `alembic upgrade
 head`) -- they skip cleanly everywhere else rather than failing CI on
 environments without it configured.
 
-REQ-009 requires this suite to run as a *blocking* CI check. Today it only
-runs where Postgres is reachable (see .github/workflows/ci.yml for the
-service container) -- that CI wiring, and the "deliberately weakened policy
-causes the suite to fail" demonstration, are recorded as open in TRACKER.md
-rather than claimed done here.
+REQ-009 requires this suite to run as a *blocking* CI check (see
+.github/workflows/ci.yml for the Postgres service container -- wired since
+WP04, still never actually executed because no git remote exists yet to
+trigger GitHub Actions) and to demonstrate detection of a seeded leak --
+`test_seeded_leak_in_rls_policy_is_detected` below does that: it commits a
+deliberately permissive policy, proves cross-tenant rows become visible
+through bgp_app, then restores the original policy and re-verifies isolation
+before the test ends (via `pytest.fail` in a `finally`, not a bare assert --
+if the restore itself silently failed, the database would be left weakened
+for every later test/run, so that failure has to be loud).
 """
 import uuid
 
@@ -122,3 +127,51 @@ def test_app_role_cannot_alter_or_drop_the_table(two_tenants_with_memberships):
     with pytest.raises(Exception):
         with _app_engine.begin() as conn:
             conn.execute(text("ALTER TABLE memberships ADD COLUMN sneaky text"))
+
+
+_ORIGINAL_POLICY = (
+    "tenant_id = current_setting('app.tenant_id', true)"
+)
+
+
+def test_seeded_leak_in_rls_policy_is_detected(two_tenants_with_memberships):
+    """REQ-009: prove this suite actually catches a real tenant-isolation
+    leak, not just that it passes when nothing is broken. Deliberately
+    replaces the memberships policy with a permissive one (USING true), shows
+    that cross-tenant rows leak through bgp_app exactly as a real
+    misconfiguration would, then restores the real policy and re-checks
+    isolation holds again -- so the seeded leak never outlives this test."""
+    t = two_tenants_with_memberships
+    with _owner_engine.begin() as conn:
+        conn.execute(text(
+            "ALTER POLICY memberships_tenant_isolation ON memberships "
+            "USING (true) WITH CHECK (true)"
+        ))
+
+    try:
+        with _app_engine.connect() as conn:
+            conn.execute(text("SET app.tenant_id = :tid"), {"tid": t["tenant_a"]})
+            leaked_tenants = {
+                r.tenant_id
+                for r in conn.execute(text("SELECT tenant_id FROM memberships")).fetchall()
+            }
+        assert t["tenant_b"] in leaked_tenants, (
+            "seeded leak was not observed -- the weakened policy did not take "
+            "effect, so this test cannot claim to demonstrate detection"
+        )
+    finally:
+        with _owner_engine.begin() as conn:
+            conn.execute(text(
+                "ALTER POLICY memberships_tenant_isolation ON memberships "
+                f"USING ({_ORIGINAL_POLICY}) WITH CHECK ({_ORIGINAL_POLICY})"
+            ))
+
+    with _app_engine.connect() as conn:
+        conn.execute(text("SET app.tenant_id = :tid"), {"tid": t["tenant_a"]})
+        rows = conn.execute(text("SELECT tenant_id FROM memberships")).fetchall()
+    if [r.tenant_id for r in rows] != [t["tenant_a"]]:
+        pytest.fail(
+            "policy restore after the seeded leak did not fully take effect -- "
+            "memberships RLS may still be weakened, investigate before running "
+            "anything else against this database"
+        )

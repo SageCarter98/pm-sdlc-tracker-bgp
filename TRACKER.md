@@ -60,16 +60,26 @@ own evidence update when it happens.
   a competent human) is deliberately left Not started — Milton has not
   reviewed any of this code yet. Don't let anything here be treated as
   accepted until he has.**
-- **WP04** (tenant isolation via PostgreSQL RLS) has migrations, restricted-role
-  grants and an adversarial cross-tenant test suite written (REQ-007/008/009),
-  but **none of it has run against a real Postgres yet** — it self-skips
-  without live credentials. A local Postgres 16 service is installed and
-  running; `backend/scripts/setup_postgres_dev.sql` and a `backend/.env` with
-  `BGP_DATABASE_URL`/`BGP_MIGRATION_DATABASE_URL` still need to be created
-  (owner declined to hand over the Postgres superuser password, chose to run
-  setup themselves instead — this is a real open blocker, not evidence to
-  round up). CI now provisions Postgres and both roles so the suite becomes
-  a genuine blocking check there once it runs.
+- **WP04** (tenant isolation via PostgreSQL RLS): migrations, restricted-role
+  grants and the adversarial cross-tenant test suite (REQ-007/008/009) are
+  now **verified against real local Postgres (2026-09-16)**, not just
+  written — `alembic upgrade head` applied cleanly to `bgp_dev`
+  (`bgp_owner`/`bgp_app` roles created via
+  `backend/scripts/setup_postgres_dev.sql` + `reset_dev_passwords.ps1`), and
+  the full backend suite is 48/48 passing, including all 6 previously-skipped
+  RLS tests. A 7th test, `test_seeded_leak_in_rls_policy_is_detected`, was
+  added the same day to satisfy REQ-009's "demonstrate detection of a seeded
+  leak" clause directly: it commits a deliberately permissive policy, proves
+  bgp_app can then see cross-tenant rows, restores the real policy, and
+  re-verifies isolation before finishing (loud `pytest.fail` if the restore
+  itself doesn't fully take, never a silent leftover weakened policy).
+  `.github/workflows/ci.yml` has provisioned a Postgres service, both roles
+  and `alembic upgrade head` since WP04 — **that wiring has still never
+  actually executed**, because this repo has no git remote to push to and
+  trigger GitHub Actions. REQ-009's "blocking CI check" clause stays an open
+  gap until a real CI run is observed passing (and, ideally, failing on a
+  reintroduced leak) — don't round that part up to Complete from the local
+  config alone.
 - **WP05** (templates and declarative rule interpreter) is committed and
   tested against SQLite: the Sec.5.5 rule vocabulary (equality/membership/
   bounded-all-any only, no eval/exec, max nesting depth 5, a fixed
