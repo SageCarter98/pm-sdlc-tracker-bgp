@@ -57,6 +57,37 @@ def test_preview_reports_hard_blockers_before_evidence_complete(client):
     assert body["manifest_digest"]
 
 
+def test_preview_gives_plain_language_blocker_explanations_and_permitted_outcomes(client):
+    """REQ-036 (plain-language blocker + corrective action) and REQ-037
+    (permitted-progression confirmation summary)."""
+    tenant_id, created, _admin_id, _approver_id = _setup_project_with_second_approver(client)
+    project_id = created["project"]["id"]
+    s1_occurrence_id = next(o["id"] for o in created["occurrences"] if o["gate_id"] == "S1")
+    s1_item_id = next(e["id"] for e in created["evidence_items"] if e["gate_id"] == "S1")
+
+    blocked = client.post(f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={})
+    body = blocked.json()
+    assert len(body["blocker_explanations"]) == 1
+    explanation = body["blocker_explanations"][0]
+    assert explanation["item_id"] == s1_item_id
+    assert "S1" in explanation["explanation"]
+    assert s1_item_id in explanation["corrective_action"]
+    # a hard blocker exists -- Approve is not reachable, but Hold/Redirect/
+    # Terminate always are, and "Approve with conditions" is structurally
+    # reachable once conditions are supplied.
+    assert "Approve" not in body["permitted_outcomes"]
+    assert "Hold" in body["permitted_outcomes"]
+
+    client.post(
+        f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
+        json={"base_revision": 1, "status": "Complete", "reference": "doc-1"},
+    )
+    clear = client.post(f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={})
+    clear_body = clear.json()
+    assert clear_body["blocker_explanations"] == []
+    assert "Approve" in clear_body["permitted_outcomes"]
+
+
 def test_decision_denied_when_hard_blocker_unresolved(client):
     tenant_id, created, _admin_id, _approver_id = _setup_project_with_second_approver(client)
     project_id = created["project"]["id"]

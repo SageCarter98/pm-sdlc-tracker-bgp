@@ -311,13 +311,54 @@ own evidence update when it happens.
 
   94/94 backend tests passing (+10: 7 functional, 3 live-Postgres
   isolation on `export_jobs`).
+- **WP10** (essential user journeys) — built 2026-09-17. Depends on
+  WP03+WP06+WP07 (blueprint §6), all real. Genuinely mixed scope, checked
+  against the blueprint before writing code rather than assumed: REQ-032/
+  034/036/037 are backend-buildable; REQ-033 (guided-form back-navigation
+  preserving input) and REQ-039's display half (timezone rendering,
+  translation structure) are frontend-only concerns — **no frontend exists
+  yet, DEC04 is still unresolved**, same shape of honest limitation as
+  WP08's DEC05 gate, just a different open decision. Built what's
+  buildable, named what isn't, same as every WP so far.
+
+  - **REQ-034** (save/resume drafts): new `drafts` table (migration
+    `0008_wp10_drafts`) + `app/routers/drafts.py`. Owner-scoped per user
+    within a tenant (never visible to another user, even a tenant
+    administrator) — enforced at the application layer, not RLS, since
+    the existing `app.tenant_id` session variable only expresses
+    tenant-level scoping; a second session variable for per-user scoping
+    was judged not worth the complexity for a same-tenant,
+    non-adversarial-within-tenant requirement. Same optimistic-concurrency
+    `base_revision` pattern as evidence revisions.
+  - **REQ-036/037** (plain-language blockers + permitted-progression
+    confirmation summary): `app/routers/decisions.py`'s preview endpoint
+    now returns `blocker_explanations` (plain-language reason +
+    corrective-action API call per blocker) and `permitted_outcomes`
+    (every outcome current readiness would allow, not just the one
+    outcome the caller happened to query) — additive fields, nothing
+    existing changed shape.
+  - **REQ-032** (My work: project, reason, deadline, state, direct
+    action): `GET /my-work` now wraps each item with `project_name`,
+    `reason` ("why is this yours"), and `direct_action` (the literal next
+    API call) — `deadline`/`state` were already on the item
+    (`due_date`/`status`).
+  - **REQ-035** (pending vs. confirmed approvals, retrieve outcome after
+    timeout): already substantially satisfied by WP07 (Idempotency-Key +
+    `GET /decisions/{id}`) — verified, not rebuilt. One honest gap not
+    rounded up: there is no live "Pending" decision status distinct from
+    "committed", because that distinction is DEC05 Candidate B's own
+    concept (pending intent + durable receipt) — same DEC05 gate as
+    WP07/WP08's durability gaps, not a WP10 omission.
+
+  103/103 backend tests passing (+9: 4 draft tests, 1 preview-enrichment
+  test, 1 my-work-enrichment test, 3 live-Postgres isolation on `drafts`).
 - **DEC07 (rule vocabulary/third framework) is still open** — WP05
   implements the schema shape Sec.5.5 already approved, but the "exact
   vocabulary and limits" the blueprint reserves for DEC07 are this
   session's working choices, not a technical-lead sign-off. Don't treat the
   prohibited-facts list or the depth-5 limit as settled without that review.
-- Still Not started across WP03/WP04/WP05/WP06/WP07/WP08/WP09: #124
-  (AI-generated code reviewed by a human). Eight work packages in, zero of
+- Still Not started across WP03/WP04/WP05/WP06/WP07/WP08/WP09/WP10: #124
+  (AI-generated code reviewed by a human). Nine work packages in, zero of
   them reviewed by Milton.
 
 ## Rules for updating this tracker as work proceeds

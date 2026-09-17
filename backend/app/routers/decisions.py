@@ -96,6 +96,7 @@ def _compute_readiness(db: Session, project: Project, occurrence: GateOccurrence
     )
 
     hard_blockers, conditional_blockers, advisory_unsatisfied = [], [], []
+    blocker_explanations = []
     for item in items:
         if item.status == "Complete":
             continue
@@ -109,6 +110,19 @@ def _compute_readiness(db: Session, project: Project, occurrence: GateOccurrence
         if excepted:
             continue
         (hard_blockers if item.blocker_level == "hard" else conditional_blockers).append(item.id)
+        blocker_explanations.append({
+            "item_id": item.id,
+            "gate_id": item.gate_id,
+            "blocker_level": item.blocker_level,
+            # REQ-036: plain language, no restricted information (item id
+            # and gate/kind are already scoped to a project this caller is
+            # a member of by the time this function runs).
+            "explanation": (
+                f"Gate {item.gate_id}: a {item.blocker_level} '{item.evidence_kind}' item "
+                f"(currently '{item.status}') has not been marked Complete."
+            ),
+            "corrective_action": f"POST /orgs/{{tenant_id}}/evidence/{item.id}/revisions with status 'Complete' and a reference",
+        })
 
     manifest = {
         "template_version_id": project.template_version_id,
@@ -120,6 +134,7 @@ def _compute_readiness(db: Session, project: Project, occurrence: GateOccurrence
         "hard_blockers": hard_blockers,
         "conditional_blockers": conditional_blockers,
         "advisory_unsatisfied": advisory_unsatisfied,
+        "blocker_explanations": blocker_explanations,
     }
 
 
@@ -138,12 +153,26 @@ class PreviewRequest(BaseModel):
     outcome: str | None = None
 
 
+class BlockerExplanation(BaseModel):
+    item_id: str
+    gate_id: str
+    blocker_level: str
+    explanation: str
+    corrective_action: str
+
+
 class PreviewResponse(BaseModel):
     occurrence_id: str
     manifest_digest: str
     hard_blockers: list[str]
     conditional_blockers: list[str]
     advisory_unsatisfied: list[str]
+    blocker_explanations: list[BlockerExplanation]
+    # REQ-037: 'show... permitted progression in a deliberate approval
+    # confirmation summary' -- every outcome the template declares that
+    # current readiness would allow right now, not just the one outcome
+    # (if any) the caller happened to ask about below.
+    permitted_outcomes: list[str]
     outcome_allowed: bool | None = None
     outcome_denial_reason: str | None = None
 
@@ -198,6 +227,26 @@ def _outcome_eligibility(schema: TemplateSchema, outcome: str, readiness: dict, 
         return True, None
 
     return False, f"outcome '{outcome}' is declared by the template but not handled by this prototype's decision logic"
+
+
+def _permitted_outcomes(schema: TemplateSchema, readiness: dict) -> list[str]:
+    """REQ-037's confirmation-summary list. Deliberately more lenient than
+    _outcome_eligibility for 'Approve with conditions': that outcome is
+    structurally reachable whenever no hard blocker exists, even before
+    the caller has actually supplied conditions -- the summary's job is to
+    tell the user which *paths* are open, not to pre-validate a specific
+    conditions payload they haven't written yet."""
+    permitted = []
+    for outcome in schema.decision_outcomes:
+        if outcome in ("Hold", "Redirect", "Terminate"):
+            permitted.append(outcome)
+        elif readiness["hard_blockers"]:
+            continue
+        elif outcome == "Approve" and not readiness["conditional_blockers"]:
+            permitted.append(outcome)
+        elif outcome == "Approve with conditions":
+            permitted.append(outcome)
+    return permitted
 
 
 def _check_separation_of_duties(db: Session, project_id: str, occurrence: GateOccurrence, actor_user_id: str, override: SeparationOverrideIn | None) -> None:
@@ -259,6 +308,8 @@ def preview_decision(
         hard_blockers=readiness["hard_blockers"],
         conditional_blockers=readiness["conditional_blockers"],
         advisory_unsatisfied=readiness["advisory_unsatisfied"],
+        blocker_explanations=readiness["blocker_explanations"],
+        permitted_outcomes=_permitted_outcomes(schema, readiness),
         outcome_allowed=outcome_allowed,
         outcome_denial_reason=outcome_denial_reason,
     )

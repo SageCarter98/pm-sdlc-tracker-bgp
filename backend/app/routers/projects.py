@@ -405,7 +405,22 @@ def create_occurrence(
     )
 
 
-@router.get("/orgs/{tenant_id}/my-work", response_model=list[EvidenceItemOut])
+class MyWorkItemOut(BaseModel):
+    """REQ-032: 'role-specific My work with project, reason, deadline,
+    state and a direct action.' Wraps EvidenceItemOut with the three
+    fields that requirement names beyond what the item already carries
+    (deadline = due_date, state = status -- both already on the item)."""
+
+    item: EvidenceItemOut
+    project_id: str
+    project_name: str
+    reason: str
+    due_date: datetime | None
+    status: str
+    direct_action: str
+
+
+@router.get("/orgs/{tenant_id}/my-work", response_model=list[MyWorkItemOut])
 def my_work(
     tenant_id: str,
     cursor: str | None = None,
@@ -413,11 +428,16 @@ def my_work(
     limit: int = 20,
     db: Session = Depends(get_db),
     membership: Membership = Depends(get_active_membership),
-) -> list[EvidenceItem]:
+) -> list[MyWorkItemOut]:
     """Blueprint Sec.5.3 GET /api/my-work: permitted tasks and next actions,
     membership scoped, paginated. 'Permitted' here means: assigned directly
     to this user, or unassigned but within a project this user belongs to
-    with a role the rule permits (rule.permitted_role_ids)."""
+    with a role the rule permits (rule.permitted_role_ids). TST-032:
+    'Each persona finds their assigned action while unrelated assignments
+    stay hidden' -- the query below is the hiding half; `reason` and
+    `direct_action` below are the finding half, so a future frontend (none
+    exists yet, DEC04) doesn't have to re-derive 'why is this mine' or
+    'what do I do about it' from raw evidence-item fields itself."""
     my_project_ids = [
         pid for (pid,) in db.query(ProjectMembership.project_id).filter(ProjectMembership.user_id == membership.user_id).all()
     ]
@@ -425,6 +445,7 @@ def my_work(
         pm.project_id: pm.role
         for pm in db.query(ProjectMembership).filter(ProjectMembership.project_id.in_(my_project_ids)).all()
     }
+    project_names = {p.id: p.name for p in db.query(Project).filter(Project.id.in_(my_project_ids)).all()}
 
     q = db.query(EvidenceItem).filter(EvidenceItem.tenant_id == tenant_id, EvidenceItem.project_id.in_(my_project_ids))
     if status_filter:
@@ -433,12 +454,29 @@ def my_work(
         q = q.filter(EvidenceItem.id > cursor)
     q = q.order_by(EvidenceItem.id).limit(limit)
 
-    results = []
+    results: list[MyWorkItemOut] = []
     for item in q.all():
         if item.owner_user_id == membership.user_id:
-            results.append(item)
+            reason = "You are the assigned owner of this evidence item."
         elif item.owner_user_id is None and my_pm_by_project.get(item.project_id) in item.permitted_role_ids:
-            results.append(item)
+            reason = f"Unassigned, and your role ('{my_pm_by_project.get(item.project_id)}') is permitted to act on it."
+        else:
+            continue
+
+        if item.status == "Complete":
+            direct_action = "No action needed -- already Complete."
+        else:
+            direct_action = f"POST /orgs/{tenant_id}/evidence/{item.id}/revisions with status 'Complete' and a reference"
+
+        results.append(MyWorkItemOut(
+            item=EvidenceItemOut.model_validate(item),
+            project_id=item.project_id,
+            project_name=project_names.get(item.project_id, ""),
+            reason=reason,
+            due_date=item.due_date,
+            status=item.status,
+            direct_action=direct_action,
+        ))
     return results
 
 

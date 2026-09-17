@@ -234,3 +234,42 @@ def test_other_tenant_cannot_list_or_create_in_this_tenants_projects(client):
     _create_org_as_admin(client, "admin@tenant-b.example")
     resp = client.get(f"/orgs/{tenant_a}/projects")
     assert resp.status_code == 403
+
+
+def test_my_work_reports_reason_deadline_state_and_direct_action(client):
+    """REQ-032: 'role-specific My work with project, reason, deadline,
+    state and a direct action.'"""
+    tenant_id = _create_org_as_admin(client)
+    version_id, _ = _publish_standard_template(client, tenant_id)
+    created = _create_project(client, tenant_id, version_id, "Standard-High").json()
+    s1_item_id = next(e["id"] for e in created["evidence_items"] if e["gate_id"] == "S1")
+    admin_login = client.post("/auth/login", json={"email": "admin@tenant-a.example", "password": "correct horse battery staple"})
+    admin_id = admin_login.json()["id"]
+
+    # S1.R1's permitted_role_ids is ["approver"] (fixtures/synthetic/frameworks/standard.json)
+    # and the project creator's own project role is their tenant role
+    # (tenant_administrator here) -- so this item only shows up in the
+    # admin's my-work once explicitly assigned to them as owner.
+    client.post(
+        f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
+        json={"base_revision": 1, "status": "Not started", "owner_user_id": admin_id, "reference": None},
+    )
+
+    work = client.get(f"/orgs/{tenant_id}/my-work")
+    assert work.status_code == 200, work.text
+    body = work.json()
+    entry = next(e for e in body if e["item"]["id"] == s1_item_id)
+    assert entry["project_id"] == created["project"]["id"]
+    assert entry["project_name"] == created["project"]["name"]
+    assert entry["status"] == "Not started"
+    assert "owner" in entry["reason"]
+    assert s1_item_id in entry["direct_action"]
+
+    client.post(
+        f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
+        json={"base_revision": 2, "status": "Complete", "owner_user_id": admin_id, "reference": "doc-1"},
+    )
+    after = client.get(f"/orgs/{tenant_id}/my-work").json()
+    entry_after = next(e for e in after if e["item"]["id"] == s1_item_id)
+    assert entry_after["status"] == "Complete"
+    assert "No action needed" in entry_after["direct_action"]

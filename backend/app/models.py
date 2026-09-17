@@ -542,3 +542,29 @@ class ImportedActorProvenance(Base):
     source_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
     matched_local_user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class Draft(Base):
+    """WP10/REQ-034: 'Save and resume drafts with truthful Saving, Saved
+    and Not saved states.' The truthful-state UI behaviour itself is a
+    frontend concern (none exists yet, DEC04) -- what this table gives a
+    future frontend to build that on: a reliable, optimistically-concurrent
+    save/resume primitive. `draft_key` is caller-chosen and owner-scoped
+    (never shared between users, even in the same tenant -- Blueprint
+    Sec.5.2: 'Owner scoped'), e.g. 'evidence:{item_id}' or 'project:new'.
+    'Draft is not a decision; jobs require fresh authorisation' (Blueprint
+    Sec.5.2) -- saving or resuming a draft never bypasses the real
+    authorization check at actual-submission time; nothing here is ever
+    read by any other endpoint."""
+
+    __tablename__ = "drafts"
+    __table_args__ = (UniqueConstraint("tenant_id", "user_id", "draft_key", name="uq_draft_scope"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    draft_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    form_data: Mapped[dict] = mapped_column(JSON, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
