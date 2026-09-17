@@ -478,3 +478,67 @@ class IntegrityIncident(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolved_by_user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
     resolution_note: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+
+
+class ExportJob(Base):
+    """REQ-030/031: a complete, open-format export of one tenant's data.
+    Synchronous in this prototype (built and returned within one request,
+    not queued to the worker the blueprint's own architecture section
+    describes -- no worker exists yet, WP01's own scope). `archive_json`
+    holds the full archive so GET can re-fetch it later without
+    regenerating; `expires_at` is recorded but nothing purges on it yet
+    (planned surface)."""
+
+    __tablename__ = "export_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
+    requested_by_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="complete")
+    format_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    archive_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    archive_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class ImportJob(Base):
+    """REQ-030: 'lossless clean-instance re-import without privilege
+    transfer'. status: quarantined (archive received, not yet checked) ->
+    validated (schema/checksums/tenant-binding checked, nothing live yet --
+    Blueprint Sec.5.6 'quarantine') -> committed (rows created) | rejected.
+    `commit_report` is the round-trip reconciliation TST-030 asks for:
+    counts, IDs and digests compared against what validate() found."""
+
+    __tablename__ = "import_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
+    requested_by_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="quarantined")
+    archive_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    validation_report: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    commit_report: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    committed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ImportedActorProvenance(Base):
+    """REQ-030: 'imported actors do not receive live credentials' /
+    Blueprint Sec.5.6: 'Historical actors are mapped to provenance
+    records, not silently created as authorised users.' One row per
+    distinct source actor in the archive, per import: `matched_local_user_id`
+    is set only when the source actor's email matches a real, currently
+    active member of the importing tenant (app/routers/exports.py) -- never
+    invented, never granted new access by the act of matching."""
+
+    __tablename__ = "imported_actor_provenance"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
+    import_job_id: Mapped[str] = mapped_column(String(36), ForeignKey("import_jobs.id"), nullable=False)
+    source_actor_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    source_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    matched_local_user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

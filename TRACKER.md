@@ -261,13 +261,63 @@ own evidence update when it happens.
 
   84/84 backend tests passing after all of the above (was 81 before WP08's
   own 10 new tests, net after the fixture fixes).
+- **WP09** (export and import) — built 2026-09-17. Depends on WP06+WP07
+  (blueprint §6), both real. New tables `export_jobs`, `import_jobs`,
+  `imported_actor_provenance` (migration `0007_wp09_export_import`, same
+  RLS shape as WP06/07, applied and verified live), new router
+  `app/routers/exports.py`.
+
+  **Deliberate scope decision, made explicit rather than silently
+  assumed**: only *current state* (templates/versions, projects/
+  memberships, occurrences, evidence items — each recreated as a single
+  fresh baseline revision) is re-created as live rows on import.
+  Decisions, exceptions, audit events and integrity checkpoints export as
+  read-only historical sections in the archive but are **not** re-inserted
+  as live governance rows. Rationale: Blueprint Sec.5.6 warns "legacy
+  missing attribution is labelled as missing; it is never reconstructed as
+  a verified approval" — recreating a *live* `DecisionRecord`/
+  `ExceptionRecord` under its original historical actor is exactly that
+  reconstruction, and those tables' actor columns are NOT NULL in a way a
+  genuinely unmatched historical actor can't honestly satisfy without
+  either fabricating an actor or relaxing a constraint that exists for
+  good reason. Whether/how live decision history should carry across an
+  import is a real product question, left open rather than decided here.
+
+  REQ-030 ("lossless clean-instance re-import without privilege
+  transfer"): every imported row gets a fresh id (never reuses the
+  archive's original ids); imported actors are matched to real local users
+  only by e-mail via `ImportedActorProvenance`, re-checked live at commit
+  time (not trusted from the earlier validate() report, same discipline as
+  `decisions.py`'s stale-manifest check); an unmatched actor on a NOT-NULL
+  column falls back to the importing user, never a fabricated identity —
+  proven by `test_unmatched_actor_falls_back_to_importer_not_fabricated`.
+  Each archive section carries its own sha256 digest in the manifest,
+  making the archive self-verifying without needing the original
+  `ExportJob` row (important since import may happen on a different,
+  fresh instance) — `test_tampered_archive_is_rejected_at_validation`
+  proves a single-field edit is caught. REQ-031 (own-data export always
+  available): export has no role gate beyond active membership and no
+  billing-tier gate to remove later, since billing tiers aren't built yet
+  (WP14) — correctly nothing to gate on, not an oversight.
+
+  A real bug caught by running the SQLite suite, not just live Postgres:
+  the first draft passed exported timestamps (serialized to ISO strings
+  for JSON transport) straight back into the ORM on import without
+  parsing them back to `datetime` objects. SQLite's DateTime type rejects
+  a bare string outright and caught this immediately; Postgres would have
+  silently accepted the string via psycopg2's adapter, masking the bug on
+  the one dialect this project otherwise insists on testing live — a
+  concrete case for why both test paths matter, not just Postgres.
+
+  94/94 backend tests passing (+10: 7 functional, 3 live-Postgres
+  isolation on `export_jobs`).
 - **DEC07 (rule vocabulary/third framework) is still open** — WP05
   implements the schema shape Sec.5.5 already approved, but the "exact
   vocabulary and limits" the blueprint reserves for DEC07 are this
   session's working choices, not a technical-lead sign-off. Don't treat the
   prohibited-facts list or the depth-5 limit as settled without that review.
-- Still Not started across WP03/WP04/WP05/WP06/WP07/WP08: #124
-  (AI-generated code reviewed by a human). Seven work packages in, zero of
+- Still Not started across WP03/WP04/WP05/WP06/WP07/WP08/WP09: #124
+  (AI-generated code reviewed by a human). Eight work packages in, zero of
   them reviewed by Milton.
 
 ## Rules for updating this tracker as work proceeds
