@@ -45,3 +45,9 @@ jobs:
         run: alembic upgrade head
       - name: Run tests, including the adversarial cross-tenant suite (REQ-009)
         run: pytest -q
+      - name: Dependency vulnerability scan (REQ-046)
+        run: |
+          pip install pip-audit==2.7.3
+          pip-audit -r requirements.txt
+      - name: Secret scan (REQ-046)
+        uses: gitleaks/gitleaks-action@v2

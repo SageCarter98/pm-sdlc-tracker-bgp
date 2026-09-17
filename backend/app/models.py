@@ -58,9 +58,13 @@ class User(Base):
     verified: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
-    # MFA -- REQ-002. Session mechanism and final crypto choices remain DEC04;
-    # this is a local prototype, not an approved production design.
-    mfa_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # MFA -- REQ-002. Session mechanism remains DEC04. mfa_secret holds a
+    # Fernet-encrypted TOTP seed since WP12/REQ-045 (migration
+    # 0009_wp12_hardening.py widened this column from 64 to 255 chars --
+    # a Fernet token for a 32-char base32 secret is ~140 chars, well past
+    # the old plaintext-sized column); see app/security.py's
+    # encrypt_mfa_secret/decrypt_mfa_secret.
+    mfa_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
 
     memberships: Mapped[list["Membership"]] = relationship(back_populates="user")
@@ -114,6 +118,34 @@ class MfaRecoveryCode(Base):
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="recovery_codes")
+
+
+class SecurityLogEvent(Base):
+    """WP12/REQ-047: 'maintain security logs with minimised personal data
+    and defined retention.' A global identity-level log, like `users` and
+    `mfa_recovery_codes` (WP04's own migration: 'global identities, not
+    tenant-owned rows') -- login/register/MFA events happen before any
+    tenant is selected (this app's session model resolves tenant per
+    request from the URL, re-verified against membership, REQ-003; login
+    itself is tenant-agnostic), so there is no tenant_id to scope RLS on.
+    Access is enforced at the application layer instead: every read path
+    filters to the requesting user's own user_id (own-data only, REQ-031),
+    never exposed to a tenant administrator or anyone else in this pass --
+    see app/routers/auth.py's security-log endpoint. `detail` deliberately
+    excludes password/code values, only ever recording outcome and a
+    minimal identifier (email), per 'minimised personal data'. Retention
+    is not automatically enforced (no scheduler exists yet, a gap named
+    since WP01) -- see docs/wp02/data_retention_policy.md's already-drafted
+    proposed floors."""
+
+    __tablename__ = "security_log_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=True)
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
 class Template(Base):

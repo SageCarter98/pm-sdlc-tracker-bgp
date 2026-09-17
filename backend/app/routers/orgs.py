@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.deps import get_active_membership, get_current_user, require_mfa, require_role
 from app.models import Invitation, Membership, Role, Tenant, User
+from app.security_log import log_security_event
 
 router = APIRouter(tags=["orgs"])
 
@@ -81,7 +82,7 @@ def create_invitation(
     tenant_id: str,
     payload: InviteRequest,
     db: Session = Depends(get_db),
-    _membership: Membership = Depends(require_role(Role.TENANT_ADMINISTRATOR)),
+    membership: Membership = Depends(require_role(Role.TENANT_ADMINISTRATOR)),
 ) -> InviteOut:
     token = secrets.token_urlsafe(32)
     invitation = Invitation(
@@ -92,6 +93,7 @@ def create_invitation(
         expires_at=datetime.now(timezone.utc) + INVITATION_TTL,
     )
     db.add(invitation)
+    log_security_event(db, "invitation_created", user_id=membership.user_id, tenant_id=tenant_id, detail={"invited_email": payload.email, "role": payload.role.value})
     db.commit()
     return InviteOut(invitation_id=invitation.id, token=token)
 
@@ -120,6 +122,7 @@ def accept_invitation(
     membership = Membership(tenant_id=invitation.tenant_id, user_id=user.id, role=invitation.role)
     invitation.accepted_at = datetime.now(timezone.utc)
     db.add(membership)
+    log_security_event(db, "invitation_accepted", user_id=user.id, tenant_id=invitation.tenant_id, detail={"role": invitation.role})
     db.commit()
     db.refresh(membership)
     return membership
@@ -139,3 +142,37 @@ def approval_gate_check(tenant_id: str, user: User = Depends(require_mfa)) -> di
     exist to protect. Delete once POST /api/occurrences/{id}/decisions
     (Blueprint Sec.5.3/5.4) is built and carries this same dependency."""
     return {"ok": True}
+
+
+class AccessReviewEntryOut(BaseModel):
+    user_id: str
+    email: str
+    role: str
+    active: bool
+    member_since: datetime
+
+
+@router.get("/orgs/{tenant_id}/access-review", response_model=list[AccessReviewEntryOut])
+def access_review(
+    tenant_id: str, db: Session = Depends(get_db), _membership: Membership = Depends(require_role(Role.TENANT_ADMINISTRATOR))
+) -> list[AccessReviewEntryOut]:
+    """WP12/REQ-047: 'review access quarterly' -- this is the mechanism
+    (a complete, current membership listing for a tenant administrator to
+    actually review) not the cadence itself, which stays an operational
+    practice this endpoint doesn't schedule (same honest split as WP08's
+    checkpoint-frequency note: the capability exists, running it on a
+    real quarterly cycle is a process decision, not code). Includes
+    inactive (revoked) memberships too -- a review that only shows who
+    currently has access can't confirm past revocations actually took
+    effect."""
+    rows = (
+        db.query(Membership, User)
+        .join(User, User.id == Membership.user_id)
+        .filter(Membership.tenant_id == tenant_id)
+        .order_by(Membership.created_at)
+        .all()
+    )
+    return [
+        AccessReviewEntryOut(user_id=u.id, email=u.email, role=m.role, active=m.active, member_since=m.created_at)
+        for m, u in rows
+    ]

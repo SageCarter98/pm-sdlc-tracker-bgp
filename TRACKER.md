@@ -352,14 +352,70 @@ own evidence update when it happens.
 
   103/103 backend tests passing (+9: 4 draft tests, 1 preview-enrichment
   test, 1 my-work-enrichment test, 3 live-Postgres isolation on `drafts`).
+- **WP12** (operations and hardening) — built 2026-09-17. Depends on
+  WP04+WP08 (blueprint §6), both real. Scoped against the blueprint before
+  coding, same discipline as every WP since WP08: REQ-045/046/047 are
+  backend/CI-buildable; REQ-043's numeric performance-budget *approval* is
+  DEC08-gated, and a real 99.5% monthly-availability baseline needs
+  production traffic history this local prototype has never had and can't
+  honestly fabricate — only the measurement mechanism was built.
+
+  - **REQ-045** closes two real, previously-named gaps directly:
+    `app/security.py`'s hardcoded session-signing key (threat model
+    finding, `docs/wp02/threat_model_and_privacy_assessment.md` §7) is now
+    `settings.session_secret_key`, env-overridable with a safe
+    random-per-process default -- no more literal secret committed to
+    source. `users.mfa_secret` (same threat model doc's privacy section,
+    "stored in the clear... flagged, not mitigated") is now Fernet-encrypted
+    at rest with a *separately held* key (`settings.mfa_encryption_key`,
+    a different env var than the database credentials) -- migration
+    `0009_wp12_hardening` widens the column from 64 to 255 chars for the
+    ciphertext. Named gap, not silently left: rotating `mfa_encryption_key`
+    today would make every already-enrolled user's secret undecryptable —
+    there is one active key and no re-encryption path.
+  - **REQ-046** (partial — detection, not the SLA-tracking process): CI
+    now runs `pip-audit` and a secret scan (`gitleaks`) on every push —
+    this was flagged as missing since WP03/WP04 (`#120`/G3.06: "No...
+    secret scan or dependency/security scan configured yet"). **Running it
+    for real immediately found 14 known vulnerabilities** across
+    `cryptography` (the package this very WP12 pass had just pinned),
+    `pytest`, and `starlette` — not hypothetical, an actual `pip-audit`
+    run against this repo's real pins. Fixed: `cryptography` 43.0.3→50.0.1,
+    `pytest` 8.3.3→9.1.1, `fastapi` 0.115.0→0.141.1 (pulling a patched
+    `starlette` 1.6.0, now pinned directly too) — full suite re-run clean
+    at each step, 112/112 passing after. The actual remediation-SLA
+    tracking/on-call process REQ-046 also asks for (7-day critical/30-day
+    high/1-hour S1 ack) needs a named on-call owner and a real
+    vulnerability-disclosure pipeline this prototype doesn't have — not
+    invented here.
+  - **REQ-047** (partial): new `security_log_events` table (global, no
+    RLS — same precedent as `users`/`mfa_recovery_codes`, since
+    login/register/MFA events are tenant-agnostic; app-layer self-scoping
+    only, own-data per REQ-031) logs register/login success+failure/MFA
+    verify-failed/MFA-enabled/MFA-recovery-used/invitation-created/
+    invitation-accepted — `GET /auth/security-log`. New
+    `GET /orgs/{tenant_id}/access-review` lists full tenant membership
+    (including inactive/revoked) for periodic review — the mechanism, not
+    the quarterly cadence itself (same honest split as WP08's checkpoint-
+    frequency note). Retention stays as proposed in
+    `docs/wp02/data_retention_policy.md`, not automatically enforced (no
+    scheduler exists, a gap named since WP01).
+  - **REQ-043** (partial): a telemetry middleware logs structured
+    per-request latency/status (one Blueprint §5.7 minimum-telemetry item)
+    and `GET /status` reports version/environment/uptime. Explicitly not a
+    monitoring platform — no aggregation, alerting, or historical
+    retention of its own.
+
+  112/112 backend tests passing (+9: 7 hardening tests, 2 status/telemetry
+  tests).
 - **DEC07 (rule vocabulary/third framework) is still open** — WP05
   implements the schema shape Sec.5.5 already approved, but the "exact
   vocabulary and limits" the blueprint reserves for DEC07 are this
   session's working choices, not a technical-lead sign-off. Don't treat the
   prohibited-facts list or the depth-5 limit as settled without that review.
-- Still Not started across WP03/WP04/WP05/WP06/WP07/WP08/WP09/WP10: #124
-  (AI-generated code reviewed by a human). Nine work packages in, zero of
-  them reviewed by Milton.
+- Still Not started across WP03/WP04/WP05/WP06/WP07/WP08/WP09/WP10/WP12:
+  #124 (AI-generated code reviewed by a human). Ten work packages in, zero
+  of them reviewed by Milton.
 
 ## Rules for updating this tracker as work proceeds
 
