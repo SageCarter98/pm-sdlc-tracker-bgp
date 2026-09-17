@@ -7,6 +7,10 @@ from app.models import ROLES_REQUIRING_MFA, Membership, Role, User
 from app.security import read_session_token
 
 SESSION_COOKIE = "bgp_session"
+# BGP-F01: separate cookie for the password-verified/second-factor-pending
+# state -- never read by get_current_user, so a pre-auth token can never be
+# used as if it were a real session, no matter what claims it carries.
+PREAUTH_SESSION_COOKIE = "bgp_preauth"
 
 
 def get_current_user(
@@ -15,13 +19,27 @@ def get_current_user(
 ) -> User:
     if bgp_session is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
-    user_id = read_session_token(bgp_session)
-    if user_id is None:
+    payload = read_session_token(bgp_session)
+    if payload is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session invalid or expired")
-    user = db.get(User, user_id)
-    if user is None:
+    user = db.get(User, payload.get("user_id"))
+    # BGP-F01: a session signed before a factor reset/replacement (which
+    # bumps users.token_version -- app/routers/mfa.py) must stop working,
+    # not keep being honoured just because its signature still verifies.
+    if user is None or user.token_version != payload.get("tv"):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session invalid or expired")
     return user
+
+
+def get_session_mfa_verified(bgp_session: str | None = Cookie(default=None)) -> bool:
+    """BGP-F01: whether THIS session actually completed a second-factor
+    challenge. Deliberately independent of get_current_user/users.mfa_enabled
+    -- an account-level 'MFA is enrolled' flag is not evidence that the
+    session presenting it ever passed a second-factor check."""
+    if bgp_session is None:
+        return False
+    payload = read_session_token(bgp_session)
+    return bool(payload and payload.get("mfa_verified"))
 
 
 def get_active_membership(
@@ -67,10 +85,18 @@ def require_role(*allowed: Role):
 def require_mfa(
     user: User = Depends(get_current_user),
     membership: Membership = Depends(get_active_membership),
+    mfa_verified: bool = Depends(get_session_mfa_verified),
 ) -> User:
     """REQ-002: MFA required for approval authority. Applies to any role in
     ROLES_REQUIRING_MFA, not just 'approver' by name -- sponsors and tenant
-    administrators hold approval-adjacent authority too (Blueprint Sec.2)."""
-    if Role(membership.role) in ROLES_REQUIRING_MFA and not user.mfa_enabled:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "MFA is required for this role before approving")
+    administrators hold approval-adjacent authority too (Blueprint Sec.2).
+
+    BGP-F01 fix: gated on `mfa_verified` (this session actually completed a
+    second-factor challenge -- app/routers/mfa.py's verify/login-verify are
+    the only places that ever set it) AND `user.mfa_enabled` (the account
+    still has an active factor right now), not on `user.mfa_enabled` alone.
+    A password-only session, or a session left over from before a factor
+    reset, satisfies neither."""
+    if Role(membership.role) in ROLES_REQUIRING_MFA and not (mfa_verified and user.mfa_enabled):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "MFA verification is required for this session before approving")
     return user

@@ -5,7 +5,11 @@ routes exist -- bgp_app's grant on decision_records is SELECT+INSERT only
 exception_records, the one other WP07 table with an evidence-item-scoped
 relationship worth proving directly rather than assuming from the shared
 migration loop (see test_wp06_tenant_isolation_rls.py's own docstring for
-why this repetition matters -- threat model finding T1.4)."""
+why this repetition matters -- threat model finding T1.4).
+
+BGP-F02 (migration 0010_bgp_f01_f02_fixes) adds compensating_reviews with
+the identical SELECT+INSERT-only shape as decision_records -- proven the
+same way below, not assumed from the shared migration loop either."""
 import uuid
 
 import pytest
@@ -81,11 +85,20 @@ def seeded_decision_and_exception():
             ),
             {"id": exception_id, "tid": tenant_id, "pid": project_id, "item": item_id, "uid": user_id},
         )
+        review_id = str(uuid.uuid4())
+        conn.execute(
+            text(
+                "INSERT INTO compensating_reviews (id, tenant_id, project_id, occurrence_id, reviewer_user_id, manifest_digest, note, created_at) "
+                "VALUES (:id, :tid, :pid, :oid, :uid, 'deadbeef', 'test review', now())"
+            ),
+            {"id": review_id, "tid": tenant_id, "pid": project_id, "oid": occurrence_id, "uid": user_id},
+        )
 
-    yield {"tenant_id": tenant_id, "decision_id": decision_id, "exception_id": exception_id}
+    yield {"tenant_id": tenant_id, "decision_id": decision_id, "exception_id": exception_id, "review_id": review_id}
 
     with _owner_engine.begin() as conn:
         conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": tenant_id})
+        conn.execute(text("DELETE FROM compensating_reviews WHERE id = :id"), {"id": review_id})
         conn.execute(text("DELETE FROM exception_records WHERE id = :id"), {"id": exception_id})
         conn.execute(text("DELETE FROM decision_records WHERE id = :id"), {"id": decision_id})
         conn.execute(text("DELETE FROM evidence_items WHERE id = :id"), {"id": item_id})
@@ -124,4 +137,26 @@ def test_app_role_can_still_select_and_insert_decisions(seeded_decision_and_exce
 def test_missing_tenant_context_returns_no_exception_rows(seeded_decision_and_exception):
     with _app_engine.connect() as conn:
         rows = conn.execute(text("SELECT * FROM exception_records")).fetchall()
+    assert rows == []
+
+
+def test_app_role_cannot_update_a_compensating_review(seeded_decision_and_exception):
+    t = seeded_decision_and_exception
+    with pytest.raises(ProgrammingError, match="permission denied"):
+        with _app_engine.begin() as conn:
+            conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_id"]})
+            conn.execute(text("UPDATE compensating_reviews SET note = 'edited' WHERE id = :id"), {"id": t["review_id"]})
+
+
+def test_app_role_cannot_delete_a_compensating_review(seeded_decision_and_exception):
+    t = seeded_decision_and_exception
+    with pytest.raises(ProgrammingError, match="permission denied"):
+        with _app_engine.begin() as conn:
+            conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_id"]})
+            conn.execute(text("DELETE FROM compensating_reviews WHERE id = :id"), {"id": t["review_id"]})
+
+
+def test_missing_tenant_context_returns_no_compensating_review_rows(seeded_decision_and_exception):
+    with _app_engine.connect() as conn:
+        rows = conn.execute(text("SELECT * FROM compensating_reviews")).fetchall()
     assert rows == []

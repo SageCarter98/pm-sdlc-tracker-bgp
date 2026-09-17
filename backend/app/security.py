@@ -15,8 +15,20 @@ _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 # field's docstring in app/core/config.py for why this changed 2026-09-17
 # and what it does and doesn't fix. Rotation and DEC11 key custody remain
 # not settled here.
-_SESSION_SERIALIZER = URLSafeTimedSerializer(secret_key=settings.session_secret_key)
+#
+# BGP-F01: two DISTINCT serializers (different `salt`, so a token signed by
+# one never verifies under the other, even with the same underlying key) --
+# a full session token and a pre-auth (password-verified, second-factor-
+# pending) token must never be interchangeable, or a pre-auth token could be
+# replayed as if it were a real, MFA-satisfying session.
+_SESSION_SERIALIZER = URLSafeTimedSerializer(secret_key=settings.session_secret_key, salt="bgp-session-v2")
 SESSION_MAX_AGE_SECONDS = 60 * 60 * 12
+
+_PREAUTH_SERIALIZER = URLSafeTimedSerializer(secret_key=settings.session_secret_key, salt="bgp-mfa-preauth")
+# Deliberately much shorter than a real session: this token only proves
+# "password just verified, second factor still owed" and should not remain
+# usable to attempt MFA long after the password step.
+PREAUTH_MAX_AGE_SECONDS = 60 * 5
 
 # WP12/REQ-045: encrypts users.mfa_secret at rest. Fernet is authenticated
 # (tampering is detected, not just confidentiality) and self-describes its
@@ -36,16 +48,37 @@ def verify_password(password: str, password_hash: str) -> bool:
     return _pwd_context.verify(password, password_hash)
 
 
-def create_session_token(user_id: str) -> str:
-    return _SESSION_SERIALIZER.dumps({"user_id": user_id})
+def create_session_token(user_id: str, token_version: int, mfa_verified: bool) -> str:
+    """BGP-F01: `mfa_verified` records whether THIS session actually
+    completed a second-factor challenge -- never inferred later from the
+    account's `mfa_enabled` flag, which only shows enrolment. `token_version`
+    is compared against the live `users.token_version` on every request
+    (app/deps.py) so a factor reset/replacement can invalidate sessions
+    signed before it, even though this serializer itself is stateless."""
+    return _SESSION_SERIALIZER.dumps({"user_id": user_id, "tv": token_version, "mfa_verified": mfa_verified})
 
 
-def read_session_token(token: str) -> str | None:
+def read_session_token(token: str) -> dict | None:
     try:
-        data = _SESSION_SERIALIZER.loads(token, max_age=SESSION_MAX_AGE_SECONDS)
+        return _SESSION_SERIALIZER.loads(token, max_age=SESSION_MAX_AGE_SECONDS)
     except (BadSignature, SignatureExpired):
         return None
-    return data.get("user_id")
+
+
+def create_preauth_token(user_id: str, token_version: int) -> str:
+    """BGP-F01: issued after password verification when the account has MFA
+    enabled. Carries no `mfa_verified` claim and is signed under a different
+    salt than a real session (see _PREAUTH_SERIALIZER) -- it can only be
+    redeemed at POST /auth/mfa/login-verify, never accepted anywhere a full
+    session is required."""
+    return _PREAUTH_SERIALIZER.dumps({"user_id": user_id, "tv": token_version})
+
+
+def read_preauth_token(token: str) -> dict | None:
+    try:
+        return _PREAUTH_SERIALIZER.loads(token, max_age=PREAUTH_MAX_AGE_SECONDS)
+    except (BadSignature, SignatureExpired):
+        return None
 
 
 def new_totp_secret() -> str:

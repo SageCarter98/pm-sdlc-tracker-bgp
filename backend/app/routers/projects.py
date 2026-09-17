@@ -539,8 +539,27 @@ def create_evidence_revision(
     edit replaces the full record rather than patching one field: clearing
     the reference is only possible by also moving status away from
     Complete in the same revision). REQ-019: source_version/source_hash are
-    accepted as-given, never inferred from the reference string's shape."""
-    item = db.query(EvidenceItem).filter(EvidenceItem.id == evidence_item_id, EvidenceItem.tenant_id == tenant_id).one_or_none()
+    accepted as-given, never inferred from the reference string's shape.
+
+    BGP-F03: the item row is locked FOR UPDATE (a no-op on SQLite) before
+    the base_revision check -- the same fixed lock order (evidence rows,
+    single-row here) that decisions.py's _compute_readiness(lock=True)
+    uses for its multi-row lock, so the two can only ever wait on each
+    other, never deadlock. This closes the read-then-write race for
+    base_revision itself (two concurrent submissions with the same
+    base_revision now serialise: the second sees the FIRST's committed
+    latest_revision_number once it acquires the lock, and its own
+    base_revision check -- now correctly comparing against fresh data --
+    rejects it with the existing 409, before it ever reaches the insert)
+    and, together with decisions.py's matching lock, closes the
+    'evidence changed between a decision's readiness read and its commit'
+    race from the other side."""
+    item = (
+        db.query(EvidenceItem)
+        .filter(EvidenceItem.id == evidence_item_id, EvidenceItem.tenant_id == tenant_id)
+        .with_for_update()
+        .one_or_none()
+    )
     if item is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Evidence item not found")
     _require_project_member(db, item.project_id, membership.user_id)
@@ -576,6 +595,20 @@ def create_evidence_revision(
     item.completed_date = payload.completed_date
     item.reference = payload.reference
     item.latest_revision_number = next_revision
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # BGP-F03 defense-in-depth: with the lock above this should already
+        # be unreachable in practice (the second writer's base_revision
+        # check now runs against fresh data and rejects it first) -- kept
+        # so a genuine collision on uq_evidence_revision_item_number is
+        # still a clean, deterministic 409, never a bare 500, as the
+        # required correction ('deterministic outcomes, not unhandled
+        # database errors') asks for generally, not only for decisions.
+        db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"base_revision {payload.base_revision} is stale -- current is {item.latest_revision_number}",
+        )
 
     return get_evidence_item(tenant_id, evidence_item_id, db, membership)

@@ -1,18 +1,10 @@
 """WP07: REQ-020/021 (exceptions), REQ-022/023/024/025 (decisions), REQ-006
-(separation of duties)."""
-import pyotp
+(separation of duties, BGP-F02)."""
 import pytest
 from datetime import datetime, timedelta, timezone
 
-from tests.conftest import register_and_login
+from tests.conftest import enable_mfa, login, register_and_login
 from tests.test_projects import _create_org_as_admin, _create_project, _invite_and_accept, _publish_standard_template
-
-
-def _enable_mfa(client) -> None:
-    enroll = client.post("/auth/mfa/enroll")
-    secret = pyotp.parse_uri(enroll.json()["provisioning_uri"]).secret
-    verify = client.post("/auth/mfa/verify", json={"code": pyotp.TOTP(secret).now()})
-    assert verify.status_code == 200, verify.text
 
 
 def _setup_project_with_second_approver(client):
@@ -21,12 +13,11 @@ def _setup_project_with_second_approver(client):
     the project -- needed for separation-of-duties overrides. Returns
     (tenant_id, project, s1_item, admin_id, approver_id)."""
     tenant_id = _create_org_as_admin(client)
-    _enable_mfa(client)
-    admin_login = client.post("/auth/login", json={"email": "admin@tenant-a.example", "password": "correct horse battery staple"})
-    admin_id = admin_login.json()["id"]
+    enable_mfa(client)
+    admin_id = client.get("/auth/me").json()["id"]
 
     approver_id = _invite_and_accept(client, tenant_id, "approver2@tenant-a.example", "approver")
-    _enable_mfa(client)
+    enable_mfa(client)
 
     register_and_login(client, "admin@tenant-a.example")
     version_id, _ = _publish_standard_template(client, tenant_id)
@@ -130,17 +121,97 @@ def test_full_approval_flow_with_separation_of_duties_override(client):
     )
     assert denied.status_code == 403, denied.text  # REQ-006: self-only approval rejected
 
+    # A bare reviewer_user_id + note is no longer accepted (BGP-F02) -- the
+    # independent reviewer must record an actual review from their OWN
+    # authenticated session first.
+    still_denied = client.post(
+        f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/decisions",
+        json={
+            "outcome": "Approve",
+            "manifest_digest": digest,
+            "separation_override": {"review_id": "not-a-real-review"},
+        },
+        headers={"Idempotency-Key": "key-2b"},
+    )
+    assert still_denied.status_code == 403, still_denied.text
+
+    login(client, "approver2@tenant-a.example")
+    review = client.post(
+        f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/compensating-reviews",
+        json={"note": "Reviewed independently by approver2"},
+    )
+    assert review.status_code == 201, review.text
+    assert review.json()["reviewer_user_id"] == approver_id
+
+    login(client, "admin@tenant-a.example")
     approved = client.post(
         f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/decisions",
         json={
             "outcome": "Approve",
             "manifest_digest": digest,
-            "separation_override": {"reviewer_user_id": approver_id, "note": "Reviewed independently by approver2"},
+            "separation_override": {"review_id": review.json()["id"]},
         },
         headers={"Idempotency-Key": "key-3"},
     )
     assert approved.status_code == 201, approved.text
     assert approved.json()["outcome"] == "Approve"
+
+
+def test_compensating_review_cannot_be_created_by_the_would_be_self_approver(client):
+    """BGP-F02: the review endpoint records the CALLER as reviewer_user_id --
+    there is no field to submit someone else's identity, so admin cannot
+    manufacture a review that would later "independently" clear their own
+    self-only approval."""
+    tenant_id, created, admin_id, approver_id = _setup_project_with_second_approver(client)
+    project_id = created["project"]["id"]
+    s1_occurrence_id = next(o["id"] for o in created["occurrences"] if o["gate_id"] == "S1")
+
+    review = client.post(
+        f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/compensating-reviews",
+        json={"note": "I reviewed my own work"},
+    )
+    assert review.status_code == 201, review.text
+    assert review.json()["reviewer_user_id"] == admin_id
+
+
+def test_stale_compensating_review_rejected_after_evidence_changes(client):
+    """BGP-F02 verification point 3: a compensating review recorded against
+    one evidence manifest must not clear self-only approval once the
+    manifest has changed."""
+    tenant_id, created, admin_id, approver_id = _setup_project_with_second_approver(client)
+    project_id = created["project"]["id"]
+    s1_occurrence_id = next(o["id"] for o in created["occurrences"] if o["gate_id"] == "S1")
+    s1_item_id = next(e["id"] for e in created["evidence_items"] if e["gate_id"] == "S1")
+
+    _complete_item(client, tenant_id, s1_item_id)
+    client.post(
+        f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
+        json={"base_revision": 2, "status": "Complete", "owner_user_id": admin_id, "reference": "doc-1", "source_hash": "x"},
+    )
+
+    login(client, "approver2@tenant-a.example")
+    review = client.post(
+        f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/compensating-reviews",
+        json={"note": "Reviewed independently by approver2"},
+    ).json()
+
+    login(client, "admin@tenant-a.example")
+    # Evidence changes again after the review was recorded -- new revision,
+    # new manifest_digest, the review above no longer matches it.
+    client.post(
+        f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
+        json={"base_revision": 3, "status": "Complete", "owner_user_id": admin_id, "reference": "doc-2", "source_hash": "y"},
+    )
+    preview = client.post(f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={})
+    fresh_digest = preview.json()["manifest_digest"]
+
+    stale = client.post(
+        f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/decisions",
+        json={"outcome": "Approve", "manifest_digest": fresh_digest, "separation_override": {"review_id": review["id"]}},
+        headers={"Idempotency-Key": "stale-review-key"},
+    )
+    assert stale.status_code == 403, stale.text
+    assert "stale" in stale.text.lower()
 
 
 def test_idempotent_retry_returns_same_decision_not_a_conflict(client):
@@ -344,9 +415,9 @@ def test_decision_commit_failure_leaves_no_partial_state(client, monkeypatch):
 
 def test_only_decision_authority_roles_can_record_decisions(client):
     tenant_id = _create_org_as_admin(client)
-    _enable_mfa(client)
+    enable_mfa(client)
     contributor_id = _invite_and_accept(client, tenant_id, "contributor@tenant-a.example", "contributor")
-    _enable_mfa(client)
+    enable_mfa(client)
 
     register_and_login(client, "admin@tenant-a.example")
     version_id, _ = _publish_standard_template(client, tenant_id)

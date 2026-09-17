@@ -430,6 +430,138 @@ own evidence update when it happens.
   #124 (AI-generated code reviewed by a human). Ten work packages in, zero
   of them reviewed by Milton.
 
+## BGP-F01/BGP-F02 remediation (2026-09-17)
+
+`BGP_Development_Review_Findings_v1.0.pdf` (an AI-authored source review,
+explicitly not an independent human sign-off — see "Named roles" above,
+same "naming is not reviewing" point) flagged five open findings. Fixed the
+two High findings the user asked to fix first, per the report's own
+recommended order (BGP-F03/F04/F05 remain open):
+
+- **BGP-F01 (session-bound MFA)**: `POST /auth/login` no longer issues a
+  full `bgp_session` cookie for an MFA-enabled account by itself — an
+  account with MFA enrolled gets a short-lived pre-auth cookie and
+  `mfa_required: true`; only `POST /auth/mfa/login-verify` (new endpoint,
+  checks the TOTP code against that pre-auth cookie) issues the real
+  session, and only that session carries `mfa_verified: true`.
+  `require_mfa`/`_require_decision_authority` now gate on that session
+  claim AND the live `users.mfa_enabled` flag, never the account flag
+  alone. New `users.token_version` (migration `0010_bgp_f01_f02_fixes`,
+  applied to live `bgp_dev`) is bumped on factor verification and on
+  recovery, invalidating every other previously-issued session token for
+  that user immediately — `app/deps.py`'s `get_current_user` checks it on
+  every request. `POST /auth/mfa/enroll` now refuses to replace an already-
+  enrolled factor unless the calling session itself already passed a
+  second-factor check (password-only cannot overwrite an existing factor).
+- **BGP-F02 (real compensating review)**: `SeparationOverrideIn` no longer
+  takes a `reviewer_user_id`/`note` the deciding actor could just type
+  themselves. New `POST .../occurrences/{id}/compensating-reviews`
+  (new `compensating_reviews` table, same migration) records the review as
+  an authenticated, MFA-verified action from the REVIEWER's own session,
+  bound to the occurrence and the evidence manifest digest at review time.
+  `_check_separation_of_duties` re-validates all of it fresh at
+  decision-commit time — occurrence match, manifest freshness (a changed
+  manifest makes an old review stale, not valid), reviewer independence,
+  and the reviewer's still-active decision authority (mirrors
+  `_exception_is_currently_valid`'s existing "re-check, never trust a
+  stored flag" pattern). `decision_records.separation_override_review_id`
+  traces a decision back to the specific review row.
+
+116 backend tests passing on SQLite (was 112, +4: 2 MFA-session tests in
+`test_identity.py`, 2 compensating-review tests in `test_decisions.py`;
+one existing separation-of-duties test rewritten to use the real flow).
+Plus 3 new live-Postgres RLS tests on `compensating_reviews`
+(`test_wp07_tenant_isolation_rls.py`, same SELECT+INSERT-only /
+tenant-isolation shape proven for `decision_records`) — all verified
+against real `bgp_dev`, migration `0010` applied there. Committed locally,
+not yet pushed.
+
+**Honestly still open**: BGP-F03 (decision-check concurrency), BGP-F04
+(export/import history loss) and BGP-F05 (stale README) are untouched by
+this pass. `#124` stays Not started — this fix was written by the same
+agent as the rest of the codebase, not reviewed by Milton.
+
+## BGP-F03/F04/F05 remediation (2026-09-17, same day) — user said "proceed with them"
+
+- **BGP-F03 (decision-check concurrency)**: `decisions.py`'s
+  `_compute_readiness(lock=True)` now takes `SELECT ... FOR UPDATE` on an
+  occurrence's evidence rows (ordered by id, so it can never deadlock
+  against `create_evidence_revision`'s single-row lock added the same way)
+  before a decision reads readiness and commits — closing the "evidence
+  changed between readiness evaluation and commit" race for real, not just
+  via the pre-existing manifest-digest staleness check (which only catches
+  a change that had already committed *before* the read started, not one
+  racing it). `_require_decision_authority` similarly locks the caller's
+  `ProjectMembership` row. Two new partial unique indexes (migration
+  `0011_bgp_f03_concurrency`) — one root (non-superseding) decision per
+  occurrence, one supersession per decision — close the "two concurrent
+  requests both pass every check before either commits" race at the
+  database level; `_record_decision` catches the resulting `IntegrityError`
+  and re-derives the same deterministic 409 the up-front check would have
+  given, never a bare 500. `create_evidence_revision` got the identical
+  defence for `uq_evidence_revision_item_number`. No revoke-membership
+  endpoint exists yet in this codebase, so the "revoke authority mid-flight"
+  scenario BGP-F03 names is proven by locking the row directly with raw SQL
+  in the new test file rather than through a real HTTP endpoint — an
+  honestly-scoped substitute, not a claim that endpoint exists.
+
+  New `backend/tests/test_bgp_f03_decision_concurrency.py` (4 tests, live
+  Postgres only): two lock-blocking proofs (a second session's write
+  provably blocks, via a short `lock_timeout` rather than real threads) and
+  two DB-constraint proofs (a second root decision / second supersession is
+  refused by Postgres itself). 95 SQLite + 31 live-Postgres tests passing
+  overall after this pass (was 92 + 27).
+
+- **BGP-F04 (export/import history loss)**: every exportable live-recreated
+  table (templates, versions, projects, occurrences, evidence items) now
+  carries a `source_id` (migration `0012_bgp_f04_export_import`) — NULL for
+  a natively-created row (its own `id` is its stable source id), set on
+  import to the archive's original id and never touched again, so identity
+  survives `id` regenerating on every hop. Evidence items export their FULL
+  revision history (not just current state), each revision's own
+  `source_version`/`source_hash` included. Decisions export their full
+  `manifest_json`/`conditions_json`/compensating-review linkage; a new
+  `compensating_reviews` archive section covers BGP-F02's table. Imported
+  decisions/exceptions/audit events/integrity receipts/compensating reviews
+  are now preserved in `ImportedHistoricalRecord` — read-only, never live
+  rows (Blueprint Sec.5.6's warning against reconstructing an unattributed
+  historical record as a verified approval still holds) — and re-emitted on
+  a LATER export of the importing tenant, closing the actual bug: this
+  content used to be visible in the archive that was imported and then
+  silently gone from every export afterwards. `commit_import`'s malformed-
+  archive path now raises a clean 422 (`KeyError`/`ValueError`/`TypeError`
+  caught explicitly) instead of an unhandled 500, with the same
+  transactional rollback as before leaving no partially-created project.
+
+  New tests in `test_export_import.py`: full revision history + source
+  hashes surviving one import; a conditional decision + compensating
+  review + exception + superseding decision all surviving a SECOND export
+  of the importing tenant, keyed by the same `source_id` as the original,
+  with only the live-row references (`project_id`) remapped; a corrupted
+  archive (digest recomputed after tampering, so it passes validation)
+  rejected cleanly at commit with no partial state. One real bug caught by
+  these tests before landing: the commit path never added evidence items to
+  `id_map`, so every historical exception/decision referencing an evidence
+  item was silently skipped as a "broken reference" — fixed same session.
+
+- **BGP-F05 (stale README)**: rewritten to describe the actual WP01/WP03-
+  WP10/WP12 build (not the WP01-only skeleton), the real two-role (+backup)
+  Postgres setup with migrations, the `BGP_SESSION_SECRET_KEY`/
+  `BGP_MFA_ENCRYPTION_KEY` persistence gotcha named explicitly (a fresh
+  random key each restart quietly makes every enrolled user's MFA secret
+  undecryptable), real test commands (with the "a skip is not a pass"
+  caveat), and the DEC01 status correction (resolved -- lead and reviewer
+  named -- but still not an actual completed review by Milton, which the
+  README previously didn't say and needed to). `app/main.py`'s own
+  module docstring updated to match, since the README points there for the
+  fullest up-to-date summary.
+
+**Still honestly open**: no CI run has been deliberately broken to prove a
+relevant check goes red (same gap named after the CI-green milestone
+above). `#124` stays Not started — none of this was reviewed by Milton.
+Committed locally? — not yet; only edited this session, no commit or push
+requested.
+
 ## Rules for updating this tracker as work proceeds
 
 1. Draft candidate evidence matches, then **verify each one against the actual

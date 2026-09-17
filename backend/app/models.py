@@ -67,6 +67,14 @@ class User(Base):
     mfa_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # BGP-F01: bumped whenever a previously-issued session token must stop
+    # working -- a new factor becomes active (app/routers/mfa.py:verify) or
+    # recovery resets one (app/routers/mfa.py:recover). app/deps.py's
+    # get_current_user compares this against the value embedded in the
+    # session cookie at issuance; a mismatch means the session predates the
+    # security change and is rejected, not silently honoured.
+    token_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+
     memberships: Mapped[list["Membership"]] = relationship(back_populates="user")
     recovery_codes: Mapped[list["MfaRecoveryCode"]] = relationship(back_populates="user")
 
@@ -163,6 +171,20 @@ class Template(Base):
     # would make templates/template_versions mutually referential, which
     # complicates table creation order for no real benefit at this scale.
     forked_from_version_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # BGP-F04 (canonical docstring for this pattern, repeated on every
+    # exportable live-recreated table -- TemplateVersion, Project,
+    # GateOccurrence, EvidenceItem): NULL for a row created natively in
+    # this tenant (its own `id` IS its stable source id). Set on import to
+    # the ARCHIVE's original id, which never changes again on a later
+    # re-export even though `id` here is always freshly generated at
+    # import time (app/routers/exports.py's commit_import never reuses an
+    # archive's ids, REQ-030's own 'clean instance' requirement). Every
+    # export reads `source_id or id` for this field so a re-exported
+    # archive keeps pointing at the SAME original record across an
+    # unbounded chain of export -> import -> export hops -- the 'stable
+    # mapping' BGP-F04's required correction asks for, closing 'regenerated
+    # local IDs alone must not hide missing data' (verification point 3).
+    source_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     versions: Mapped[list["TemplateVersion"]] = relationship(back_populates="template")
@@ -186,6 +208,8 @@ class TemplateVersion(Base):
     created_by_user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # BGP-F04: see Template.source_id's docstring -- same pattern.
+    source_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
     template: Mapped["Template"] = relationship(back_populates="versions")
 
@@ -218,6 +242,8 @@ class Project(Base):
     template_version_id: Mapped[str] = mapped_column(String(36), ForeignKey("template_versions.id"), nullable=False)
     class_id: Mapped[str] = mapped_column(String(100), nullable=False)
     owner_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    # BGP-F04: see Template.source_id's docstring -- same pattern.
+    source_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
@@ -256,6 +282,8 @@ class GateOccurrence(Base):
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     trigger: Mapped[str] = mapped_column(String(20), nullable=False)  # "routine" | "triggered"
     due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # BGP-F04: see Template.source_id's docstring -- same pattern.
+    source_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
@@ -291,6 +319,8 @@ class EvidenceItem(Base):
     completed_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reference: Mapped[str | None] = mapped_column(String(500), nullable=True)
     latest_revision_number: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # BGP-F04: see Template.source_id's docstring -- same pattern.
+    source_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
@@ -393,8 +423,42 @@ class DecisionRecord(Base):
     supersedes_decision_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("decision_records.id"), nullable=True)
     reason: Mapped[str | None] = mapped_column(String(1000), nullable=True)  # required by the API when superseding
 
+    # BGP-F02: reviewer_id/note are a denormalised snapshot of the
+    # CompensatingReview row named below, copied at decision time for cheap
+    # display -- review_id is the actual binding, verified fresh
+    # (occurrence, manifest, reviewer independence and authority) every time
+    # in app/routers/decisions.py's _check_separation_of_duties. Neither
+    # field is ever populated from a client-supplied reviewer name again.
+    separation_override_review_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("compensating_reviews.id"), nullable=True)
     separation_override_reviewer_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
     separation_override_note: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class CompensatingReview(Base):
+    """REQ-006/BGP-F02: an actual review action, created from the
+    independent reviewer's OWN authenticated, MFA-verified session --
+    app/routers/decisions.py's create_compensating_review is the only way
+    a row here comes to exist, so `reviewer_user_id` is never a name the
+    deciding actor merely typed. `manifest_digest` binds it to the exact
+    evidence state the reviewer actually saw at review time; the
+    separation-of-duties check re-reads this row at decision-commit time
+    and rejects it if the occurrence, the manifest digest, or the
+    reviewer's active decision authority no longer match -- a stored row is
+    never treated as permanently valid. Never UPDATEd or DELETEd by the
+    app (see migration 0010's grant, same SELECT+INSERT-only shape as
+    decision_records, REQ-025's precedent)."""
+
+    __tablename__ = "compensating_reviews"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"), nullable=False)
+    occurrence_id: Mapped[str] = mapped_column(String(36), ForeignKey("gate_occurrences.id"), nullable=False)
+    reviewer_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    manifest_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    note: Mapped[str] = mapped_column(String(1000), nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
@@ -573,6 +637,43 @@ class ImportedActorProvenance(Base):
     source_actor_id: Mapped[str] = mapped_column(String(36), nullable=False)
     source_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
     matched_local_user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class ImportedHistoricalRecord(Base):
+    """BGP-F04: decisions, exceptions, audit events, integrity receipts and
+    compensating reviews from an imported archive are NOT recreated as live
+    rows (app/routers/exports.py's module docstring already explains why --
+    Blueprint Sec.5.6's warning against reconstructing an unattributed
+    historical record as if it were a verified local approval, and several
+    of those tables have NOT NULL actor columns an unmatched historical
+    actor cannot honestly satisfy). Before this fix they were simply
+    dropped on import -- present in the archive that was imported, gone
+    from every export the importing tenant ever makes again. This table is
+    where they go instead: one row per historical record, read-only,
+    keyed by (tenant_id, kind, source_id) so re-importing the same archive
+    twice cannot duplicate it. `payload_json` is the same shape
+    app/routers/exports.py already puts in an archive's `decisions` /
+    `exceptions` / `audit` / `integrity_receipts` / `compensating_reviews`
+    sections, with only the LIVE-row references inside it (project_id,
+    occurrence_id, evidence_item_id) remapped to this instance's regenerated
+    ids -- `id`/`source_id` and any decision-to-decision or decision-to-
+    review links stay exactly as first exported, forever, which is what
+    lets a later export of THIS tenant reproduce the identical content a
+    caller can reconcile against the original (BGP-F04 verification point
+    3: 'regenerated local IDs alone must not hide missing data'). Nothing
+    here confers login or approval rights -- it is inert JSON no
+    authorization check ever reads."""
+
+    __tablename__ = "imported_historical_records"
+    __table_args__ = (UniqueConstraint("tenant_id", "kind", "source_id", name="uq_imported_historical_record"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
+    import_job_id: Mapped[str] = mapped_column(String(36), ForeignKey("import_jobs.id"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    source_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    payload_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 

@@ -6,13 +6,15 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.deps import get_active_membership, require_mfa
+from app.deps import get_active_membership, get_session_mfa_verified, require_mfa
 from app.integrity import has_open_incident
 from app.models import (
     AuditEvent,
+    CompensatingReview,
     DecisionRecord,
     EvidenceItem,
     ExceptionRecord,
@@ -82,18 +84,32 @@ def _exception_is_currently_valid(db: Session, exc: ExceptionRecord) -> bool:
     return approver_membership is not None and approver_membership.role in DECISION_AUTHORITY_ROLES
 
 
-def _compute_readiness(db: Session, project: Project, occurrence: GateOccurrence) -> dict:
+def _compute_readiness(db: Session, project: Project, occurrence: GateOccurrence, *, lock: bool = False) -> dict:
     """Returns {manifest, manifest_digest, hard_blockers, conditional_blockers,
     advisory_unsatisfied} -- always computed fresh against current evidence
     and exception state, never cached. This *is* REQ-021's reassessment
     mechanism: there is no stored 'readiness' to go stale and no background
-    job to trigger, because nothing here is ever read from a cache."""
-    items = (
-        db.query(EvidenceItem)
-        .filter(EvidenceItem.occurrence_id == occurrence.id)
-        .order_by(EvidenceItem.id)
-        .all()
-    )
+    job to trigger, because nothing here is ever read from a cache.
+
+    BGP-F03: `lock=True` (decision-commit callers only, never preview/review
+    -- locking there would only cost concurrent readers correctness they
+    don't need) takes `SELECT ... FOR UPDATE` on these evidence rows,
+    ordered by id -- the same fixed order create_evidence_revision locks a
+    single row in (app/routers/projects.py), so two transactions can only
+    ever wait on each other, never deadlock. A concurrent evidence write for
+    an item in THIS occurrence now blocks until this transaction commits or
+    rolls back, so the readiness this function returns cannot go stale
+    between being read here and the decision committing -- closing the
+    'evidence changed between readiness evaluation and commit' race the
+    manifest_digest staleness check alone could not (that check only
+    catches a change that had already committed before this call started,
+    not one racing it). A no-op on SQLite (no FOR UPDATE support there) --
+    this project's real concurrency guarantee is proved against live
+    Postgres, see test_bgp_f03_decision_concurrency.py."""
+    query = db.query(EvidenceItem).filter(EvidenceItem.occurrence_id == occurrence.id).order_by(EvidenceItem.id)
+    if lock:
+        query = query.with_for_update()
+    items = query.all()
 
     hard_blockers, conditional_blockers, advisory_unsatisfied = [], [], []
     blocker_explanations = []
@@ -145,8 +161,27 @@ class ConditionsIn(BaseModel):
 
 
 class SeparationOverrideIn(BaseModel):
-    reviewer_user_id: str
+    """BGP-F02: identifies a CompensatingReview row the independent reviewer
+    already created from their OWN session (POST .../compensating-reviews)
+    -- the deciding actor can no longer just name a colleague and a note
+    themselves."""
+
+    review_id: str
+
+
+class CompensatingReviewIn(BaseModel):
     note: str
+
+
+class CompensatingReviewOut(BaseModel):
+    id: str
+    occurrence_id: str
+    reviewer_user_id: str
+    manifest_digest: str
+    note: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
 
 
 class PreviewRequest(BaseModel):
@@ -249,9 +284,25 @@ def _permitted_outcomes(schema: TemplateSchema, readiness: dict) -> list[str]:
     return permitted
 
 
-def _check_separation_of_duties(db: Session, project_id: str, occurrence: GateOccurrence, actor_user_id: str, override: SeparationOverrideIn | None) -> None:
-    """REQ-006: self-only approval is rejected unless a valid, non-empty
-    compensating-review override names an independent reviewer."""
+def _check_separation_of_duties(
+    db: Session,
+    tenant_id: str,
+    project_id: str,
+    occurrence: GateOccurrence,
+    actor_user_id: str,
+    manifest_digest: str,
+    override: SeparationOverrideIn | None,
+) -> CompensatingReview | None:
+    """REQ-006/BGP-F02: self-only approval is rejected unless `override`
+    names a CompensatingReview row -- and that row is re-validated here,
+    fresh, every time, never trusted as still good just because it exists:
+    it must be for this exact occurrence, its manifest_digest must match
+    what the decision is being made against right now (a changed evidence
+    manifest since the review means a stale review, not a valid one), the
+    reviewer must be independent of the decider, and the reviewer must
+    currently hold active, non-revoked decision authority (the same
+    'active membership + authorising role' re-check REQ-020's exception
+    validity already uses, see _exception_is_currently_valid)."""
     required_items = (
         db.query(EvidenceItem)
         .filter(EvidenceItem.occurrence_id == occurrence.id, EvidenceItem.blocker_level != "advisory")
@@ -259,27 +310,77 @@ def _check_separation_of_duties(db: Session, project_id: str, occurrence: GateOc
     )
     preparers = {i.owner_user_id for i in required_items if i.owner_user_id is not None}
     if not preparers or preparers != {actor_user_id}:
-        return  # not a self-only-approval situation
+        return None  # not a self-only-approval situation
 
-    if override is None or not override.note.strip():
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Self-only approval requires a compensating review override with a non-empty note (REQ-006)")
-    if override.reviewer_user_id == actor_user_id:
+    if override is None:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Self-only approval requires an independent compensating review (REQ-006) -- "
+            "have another approver record one via POST .../compensating-reviews first",
+        )
+
+    review = (
+        db.query(CompensatingReview)
+        .filter(CompensatingReview.id == override.review_id, CompensatingReview.tenant_id == tenant_id, CompensatingReview.project_id == project_id)
+        .one_or_none()
+    )
+    if review is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Compensating review not found for this project")
+    if review.occurrence_id != occurrence.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "That compensating review was recorded for a different occurrence")
+    if review.manifest_digest != manifest_digest:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "That compensating review is stale -- evidence has changed since it was recorded; have the reviewer record a fresh one",
+        )
+    if review.reviewer_user_id == actor_user_id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "The compensating reviewer must be independent of the deciding actor")
+
+    reviewer_membership = (
+        db.query(Membership)
+        .filter(Membership.tenant_id == tenant_id, Membership.user_id == review.reviewer_user_id, Membership.active.is_(True))
+        .one_or_none()
+    )
+    if reviewer_membership is None or reviewer_membership.role not in DECISION_AUTHORITY_ROLES:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "The compensating reviewer no longer holds active approval authority")
     reviewer_pm = (
         db.query(ProjectMembership)
-        .filter(ProjectMembership.project_id == project_id, ProjectMembership.user_id == override.reviewer_user_id)
+        .filter(ProjectMembership.project_id == project_id, ProjectMembership.user_id == review.reviewer_user_id)
         .one_or_none()
     )
     if reviewer_pm is None or reviewer_pm.role not in DECISION_AUTHORITY_ROLES:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "The compensating reviewer must hold approval authority on this project")
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "The compensating reviewer no longer holds approval authority on this project")
+
+    return review
 
 
-def _require_decision_authority(db: Session, project_id: str, user: User) -> ProjectMembership:
-    pm = _require_project_member(db, project_id, user.id)
+def _require_decision_authority(db: Session, project_id: str, user: User, mfa_verified: bool) -> ProjectMembership:
+    """BGP-F03: locks the caller's ProjectMembership row FOR UPDATE (a
+    no-op on SQLite) instead of using the shared, unlocked
+    _require_project_member -- read-only paths (preview, get_decision,
+    list_exceptions) must not pay for or hold this lock, but every path
+    that goes on to actually commit a decision-adjacent write should
+    participate in the same 'authority is re-read inside protection'
+    guarantee _compute_readiness's lock=True gives evidence. Always
+    acquired before any evidence-row lock in the same request (fixed lock
+    order: membership, then evidence -- see _compute_readiness's docstring)
+    so two concurrent decision-committing transactions can only ever wait
+    on each other, never deadlock."""
+    pm = (
+        db.query(ProjectMembership)
+        .filter(ProjectMembership.project_id == project_id, ProjectMembership.user_id == user.id)
+        .with_for_update()
+        .one_or_none()
+    )
+    if pm is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Not a member of this project")
     if pm.role not in DECISION_AUTHORITY_ROLES:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Role does not permit recording decisions")
-    if pm.role in DECISION_AUTHORITY_ROLES and not user.mfa_enabled:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "MFA is required for this role before deciding (REQ-002)")
+    # BGP-F01: session-bound, same reasoning as app/deps.py's require_mfa --
+    # user.mfa_enabled alone (an account-level flag) is not evidence this
+    # session ever completed a second-factor check.
+    if not (mfa_verified and user.mfa_enabled):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "MFA verification is required for this session before deciding (REQ-002)")
     return pm
 
 
@@ -383,7 +484,10 @@ def _record_decision(
             )
 
     schema = _load_bound_schema(db, tenant_id, project.template_version_id)
-    readiness = _compute_readiness(db, project, occurrence)
+    # BGP-F03: locked -- see _compute_readiness's docstring. Held from here
+    # through the commit below, so nothing can change these evidence items
+    # out from under this decision between reading them and committing.
+    readiness = _compute_readiness(db, project, occurrence, lock=True)
 
     def _deny(reason_text: str, http_status: int) -> None:
         db.add(
@@ -418,9 +522,12 @@ def _record_decision(
     if not allowed:
         _deny(denial_reason, status.HTTP_422_UNPROCESSABLE_ENTITY)
 
+    compensating_review = None
     if payload.outcome in ("Approve", "Approve with conditions"):
         try:
-            _check_separation_of_duties(db, project.id, occurrence, membership.user_id, payload.separation_override)
+            compensating_review = _check_separation_of_duties(
+                db, tenant_id, project.id, occurrence, membership.user_id, readiness["manifest_digest"], payload.separation_override
+            )
         except HTTPException as exc:
             _deny(str(exc.detail), exc.status_code)
 
@@ -436,8 +543,11 @@ def _record_decision(
         conditions_json=payload.conditions.model_dump(mode="json") if payload.conditions else None,
         supersedes_decision_id=supersedes_decision_id,
         reason=reason,
-        separation_override_reviewer_id=payload.separation_override.reviewer_user_id if payload.separation_override else None,
-        separation_override_note=payload.separation_override.note if payload.separation_override else None,
+        # BGP-F02: sourced from the verified CompensatingReview row, never
+        # from client-supplied reviewer_user_id/note again.
+        separation_override_review_id=compensating_review.id if compensating_review else None,
+        separation_override_reviewer_id=compensating_review.reviewer_user_id if compensating_review else None,
+        separation_override_note=compensating_review.note if compensating_review else None,
     )
     db.add(decision)
     db.flush()
@@ -464,7 +574,57 @@ def _record_decision(
             outcome_decision_id=decision.id,
         )
     )
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # BGP-F03: a concurrent request for the SAME occurrence/decision won
+        # the race and committed first -- this is exactly the case the
+        # upfront idempotency/already-decided/already-superseded checks
+        # above could not catch, because both requests passed them before
+        # either had committed. Never let this surface as a bare 500;
+        # re-derive which real-DB guarantee actually fired (the same three
+        # this function already checks up front: uq_idempotency_scope,
+        # and, live-Postgres only, the partial unique indexes from
+        # migration 0011_bgp_f03_concurrency) and answer exactly
+        # as if that check had caught it originally.
+        db.rollback()
+
+        winner = (
+            db.query(IdempotencyRecord)
+            .filter(
+                IdempotencyRecord.tenant_id == tenant_id,
+                IdempotencyRecord.actor_user_id == membership.user_id,
+                IdempotencyRecord.operation == operation,
+                IdempotencyRecord.idempotency_key == idempotency_key,
+            )
+            .one_or_none()
+        )
+        if winner is not None:
+            if winner.request_digest != request_digest:
+                raise HTTPException(status.HTTP_409_CONFLICT, "Idempotency-Key already used for a different request")
+            if winner.outcome_status == "denied":
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, winner.denial_reason)
+            won_decision = db.get(DecisionRecord, winner.outcome_decision_id)
+            return DecisionOut.model_validate(won_decision)
+
+        if supersedes_decision_id is None:
+            other_root = db.query(DecisionRecord).filter(DecisionRecord.occurrence_id == occurrence.id).first()
+            if other_root is not None:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    f"Occurrence already has decision {other_root.id} -- use POST /decisions/{{id}}/superseding to correct it",
+                )
+        else:
+            other_supersession = (
+                db.query(DecisionRecord).filter(DecisionRecord.supersedes_decision_id == supersedes_decision_id).first()
+            )
+            if other_supersession is not None:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    f"Decision {supersedes_decision_id} was already superseded by {other_supersession.id} -- supersede that one instead",
+                )
+
+        raise  # an unrecognised integrity conflict -- surface it rather than guessing
     db.refresh(decision)
     return DecisionOut.model_validate(decision)
 
@@ -481,6 +641,7 @@ def create_decision(
     payload: DecisionRequest,
     db: Session = Depends(get_db),
     user: User = Depends(require_mfa),
+    mfa_verified: bool = Depends(get_session_mfa_verified),
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> DecisionOut:
     """Blueprint Sec.5.4 steps 1-6, 8: authenticate/MFA (dependency), resolve
@@ -489,7 +650,7 @@ def create_decision(
     and append the decision atomically. Step 7 (DEC05 durability) is
     explicitly not implemented -- see DecisionRecord's docstring."""
     project = _get_owned_project_or_404(db, tenant_id, project_id)
-    membership = _require_decision_authority(db, project_id, user)
+    membership = _require_decision_authority(db, project_id, user, mfa_verified)
     occurrence = _get_occurrence_or_404(db, project_id, occurrence_id)
 
     return _record_decision(
@@ -532,6 +693,7 @@ def supersede_decision(
     payload: SupersedingRequest,
     db: Session = Depends(get_db),
     user: User = Depends(require_mfa),
+    mfa_verified: bool = Depends(get_session_mfa_verified),
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
 ) -> DecisionOut:
     """REQ-025: 'support superseding corrections only'. The original row is
@@ -552,7 +714,7 @@ def supersede_decision(
         )
 
     project = _get_owned_project_or_404(db, tenant_id, original.project_id)
-    membership = _require_decision_authority(db, project.id, user)
+    membership = _require_decision_authority(db, project.id, user, mfa_verified)
     occurrence = _get_occurrence_or_404(db, project.id, original.occurrence_id)
 
     return _record_decision(
@@ -602,13 +764,14 @@ def create_exception(
     payload: CreateExceptionRequest,
     db: Session = Depends(get_db),
     user: User = Depends(require_mfa),
+    mfa_verified: bool = Depends(get_session_mfa_verified),
 ) -> ExceptionOut:
     """REQ-020: authority, scope and expiry are all validated up front, not
     left to be inferred later from a typed status."""
     item = db.query(EvidenceItem).filter(EvidenceItem.id == evidence_item_id, EvidenceItem.tenant_id == tenant_id).one_or_none()
     if item is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Evidence item not found")
-    membership = _require_decision_authority(db, item.project_id, user)
+    membership = _require_decision_authority(db, item.project_id, user, mfa_verified)
 
     if _as_utc(payload.expires_at) <= _as_utc(payload.starts_at):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "expires_at must be after starts_at")
@@ -656,13 +819,14 @@ def revoke_exception(
     exception_id: str,
     db: Session = Depends(get_db),
     user: User = Depends(require_mfa),
+    mfa_verified: bool = Depends(get_session_mfa_verified),
 ) -> ExceptionOut:
     """REQ-021: revocation never deletes the row -- the fact that an
     exception existed and was later revoked stays visible."""
     exc = db.query(ExceptionRecord).filter(ExceptionRecord.id == exception_id, ExceptionRecord.tenant_id == tenant_id).one_or_none()
     if exc is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Exception not found")
-    membership = _require_decision_authority(db, exc.project_id, user)
+    membership = _require_decision_authority(db, exc.project_id, user, mfa_verified)
 
     if exc.status == "revoked":
         raise HTTPException(status.HTTP_409_CONFLICT, "Already revoked")
@@ -697,3 +861,57 @@ def list_exceptions(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Evidence item not found")
     _require_project_member(db, item.project_id, membership.user_id)
     return db.query(ExceptionRecord).filter(ExceptionRecord.evidence_item_id == item.id).order_by(ExceptionRecord.created_at).all()
+
+
+@router.post(
+    "/orgs/{tenant_id}/projects/{project_id}/occurrences/{occurrence_id}/compensating-reviews",
+    response_model=CompensatingReviewOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_compensating_review(
+    tenant_id: str,
+    project_id: str,
+    occurrence_id: str,
+    payload: CompensatingReviewIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_mfa),
+    mfa_verified: bool = Depends(get_session_mfa_verified),
+) -> CompensatingReviewOut:
+    """REQ-006/BGP-F02: the independent reviewer's OWN authenticated,
+    MFA-verified action -- `reviewer_user_id` below is always this caller's
+    own id, never a name someone else typed. Binds to the CURRENT evidence
+    manifest (`_compute_readiness` freshly, not a client-supplied digest) so
+    a later evidence change makes this review stale automatically; see
+    _check_separation_of_duties, which re-validates all of this again at
+    decision-commit time rather than trusting this row indefinitely."""
+    if not payload.note.strip():
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "A review note is required")
+    project = _get_owned_project_or_404(db, tenant_id, project_id)
+    membership = _require_decision_authority(db, project_id, user, mfa_verified)
+    occurrence = _get_occurrence_or_404(db, project_id, occurrence_id)
+    readiness = _compute_readiness(db, project, occurrence)
+
+    review = CompensatingReview(
+        tenant_id=tenant_id,
+        project_id=project_id,
+        occurrence_id=occurrence.id,
+        reviewer_user_id=membership.user_id,
+        manifest_digest=readiness["manifest_digest"],
+        note=payload.note,
+    )
+    db.add(review)
+    db.flush()
+    db.add(
+        AuditEvent(
+            tenant_id=tenant_id,
+            project_id=project.id,
+            occurrence_id=occurrence.id,
+            actor_user_id=membership.user_id,
+            event_type="compensating_review_recorded",
+            detail={"review_id": review.id},
+            sequence=_next_audit_sequence(db, project.id),
+        )
+    )
+    db.commit()
+    db.refresh(review)
+    return CompensatingReviewOut.model_validate(review)

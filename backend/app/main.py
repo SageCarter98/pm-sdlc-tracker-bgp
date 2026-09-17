@@ -19,9 +19,13 @@ app = FastAPI(
         "with atomic occurrence seeding (WP06), exceptions/decisions with "
         "idempotent, append-only recording (WP07), hash-chain integrity "
         "checkpoints with incident-blocking (WP08), open-format tenant "
-        "export/import (WP09 -- current-state only; decisions/exceptions/"
-        "audit export as historical read-only sections, not re-created as "
-        "live rows on import), and essential-journey backend support "
+        "export/import (WP09 -- full evidence revision history and full "
+        "decision/exception/compensating-review content, since BGP-F04; "
+        "decisions/exceptions/audit/integrity-receipts/compensating-reviews "
+        "stay historical-only, never re-created as live rows on import, "
+        "but ARE preserved and re-emitted on a later export of the "
+        "importing tenant -- see ImportedHistoricalRecord), and "
+        "essential-journey backend support "
         "(WP10 -- My work with reason/direct-action, save/resume drafts, "
         "plain-language blocker explanations and a permitted-outcomes "
         "confirmation summary). No frontend exists yet (DEC04 unresolved) "
@@ -40,9 +44,21 @@ app = FastAPI(
         "secret scans (REQ-045/046/047) -- REQ-043's numeric performance "
         "budgets remain DEC08-gated, and a real 99.5% monthly-availability "
         "baseline needs production traffic history this prototype has "
-        "never had; only the measurement mechanism (below) is built."
+        "never had; only the measurement mechanism (below) is built. "
+        "2026-09-17: BGP_Development_Review_Findings_v1.0.pdf's BGP-F01-F04 "
+        "fixed -- login only issues a real session after a session-bound "
+        "second-factor check (app/routers/mfa.py's login-verify), a "
+        "compensating review is now an authenticated action from the "
+        "reviewer's own session (CompensatingReview), decision commits and "
+        "evidence-revision writes take coordinated row locks plus two "
+        "partial unique indexes close the remaining races (see "
+        "decisions.py's _compute_readiness/_require_decision_authority "
+        "docstrings), and export/import gained per-row source_id stability "
+        "and full historical preservation described above. BGP-F05 "
+        "(README) fixed the same day. See TRACKER.md for details and the "
+        "tests proving each one."
     ),
-    version="0.1.0-wp12",
+    version="0.1.0-bgp-remediation",
 )
 
 app.include_router(auth.router)

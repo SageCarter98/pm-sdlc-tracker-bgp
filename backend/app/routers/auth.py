@@ -5,9 +5,9 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.deps import SESSION_COOKIE, get_current_user
+from app.deps import PREAUTH_SESSION_COOKIE, SESSION_COOKIE, get_current_user
 from app.models import SecurityLogEvent, User
-from app.security import create_session_token, hash_password, verify_password
+from app.security import create_preauth_token, create_session_token, hash_password, verify_password
 from app.security_log import log_security_event
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -47,28 +47,48 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> User:
     return user
 
 
-@router.post("/login", response_model=UserOut)
-def login(payload: LoginRequest, response: Response, db: Session = Depends(get_db)) -> User:
+@router.post("/login")
+def login(payload: LoginRequest, response: Response, db: Session = Depends(get_db)) -> dict:
     """WP12/REQ-047: both outcomes are logged -- a failed attempt against a
     real email records that user_id (so the account holder can see
     someone tried), a failed attempt against an unknown email records
     user_id=None (there is no account to attribute it to, and this must
-    never reveal whether the email exists via a different log shape)."""
+    never reveal whether the email exists via a different log shape).
+
+    BGP-F01 fix: password verification alone never issues a full session
+    any more. An account with MFA enabled instead gets a short-lived
+    pre-auth cookie and `mfa_required: true` -- the caller must complete
+    POST /auth/mfa/login-verify to get a real `bgp_session` cookie. An
+    account with no MFA enrolled still gets a full session directly (there
+    is no second factor to withhold it for)."""
     user = db.query(User).filter(User.email == payload.email).one_or_none()
     if user is None or not verify_password(payload.password, user.password_hash):
         log_security_event(db, "login_failure", user_id=user.id if user else None, detail={"email": payload.email})
         db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid email or password")
-    token = create_session_token(user.id)
+
+    # A fresh login attempt must never inherit a stale cookie of either kind.
+    response.delete_cookie(SESSION_COOKIE)
+    response.delete_cookie(PREAUTH_SESSION_COOKIE)
+
+    if user.mfa_enabled:
+        preauth = create_preauth_token(user.id, user.token_version)
+        response.set_cookie(PREAUTH_SESSION_COOKIE, preauth, httponly=True, samesite="lax")
+        log_security_event(db, "login_password_verified_mfa_pending", user_id=user.id)
+        db.commit()
+        return {"mfa_required": True}
+
+    token = create_session_token(user.id, user.token_version, mfa_verified=False)
     response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax")
     log_security_event(db, "login_success", user_id=user.id)
     db.commit()
-    return user
+    return {"mfa_required": False, **UserOut.model_validate(user).model_dump()}
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 def logout(response: Response) -> None:
     response.delete_cookie(SESSION_COOKIE)
+    response.delete_cookie(PREAUTH_SESSION_COOKIE)
 
 
 @router.get("/me", response_model=UserOut)

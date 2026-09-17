@@ -1,3 +1,4 @@
+import pyotp
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -34,8 +35,40 @@ def client():
     app.dependency_overrides.clear()
 
 
-def register_and_login(client, email: str, password: str = "correct horse battery staple"):
-    client.post("/auth/register", json={"email": email, "password": password})
+def enable_mfa(client) -> str:
+    """Enrols and verifies TOTP MFA for the CURRENTLY authenticated session
+    (BGP-F01: enrolling/replacing a factor requires either no existing
+    factor yet, or a session that already passed one -- see
+    app/routers/mfa.py's enroll). Returns the base32 secret and caches it on
+    the client, keyed by email, so a later login() for the same user can
+    complete the login-time second factor without the caller having to
+    thread the secret through every call site."""
+    enroll = client.post("/auth/mfa/enroll")
+    assert enroll.status_code == 200, enroll.text
+    secret = pyotp.parse_uri(enroll.json()["provisioning_uri"]).secret
+    verify = client.post("/auth/mfa/verify", json={"code": pyotp.TOTP(secret).now()})
+    assert verify.status_code == 200, verify.text
+    email = client.get("/auth/me").json()["email"]
+    client._mfa_secrets = getattr(client, "_mfa_secrets", {})
+    client._mfa_secrets[email] = secret
+    return secret
+
+
+def login(client, email: str, password: str = "correct horse battery staple", mfa_secret: str | None = None):
+    """BGP-F01: /auth/login alone no longer returns a full session for an
+    MFA-enabled account -- this completes the second step
+    (POST /auth/mfa/login-verify) when required, using an explicitly passed
+    secret or the one enable_mfa() cached for this email on this client."""
     resp = client.post("/auth/login", json={"email": email, "password": password})
     assert resp.status_code == 200, resp.text
+    if resp.json().get("mfa_required"):
+        secret = mfa_secret or getattr(client, "_mfa_secrets", {}).get(email)
+        assert secret is not None, f"{email} requires MFA but no secret is known for it in this test"
+        resp = client.post("/auth/mfa/login-verify", json={"code": pyotp.TOTP(secret).now()})
+        assert resp.status_code == 200, resp.text
     return resp
+
+
+def register_and_login(client, email: str, password: str = "correct horse battery staple"):
+    client.post("/auth/register", json={"email": email, "password": password})
+    return login(client, email, password)
