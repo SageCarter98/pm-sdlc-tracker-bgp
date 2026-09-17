@@ -74,14 +74,22 @@ own evidence update when it happens.
   re-verifies isolation before finishing (loud `pytest.fail` if the restore
   itself doesn't fully take, never a silent leftover weakened policy).
   `.github/workflows/ci.yml` has provisioned a Postgres service, both roles
-  and `alembic upgrade head` since WP04 — **that wiring has still never
-  actually executed**. A private GitHub remote (`origin`,
-  `github.com/SageCarter98/pm-sdlc-tracker-bgp`) was created 2026-09-16, but
-  nothing has been pushed yet (deliberate — pushing is a separate, more
-  consequential decision than creating the remote). REQ-009's "blocking CI
-  check" clause stays an open gap until a real CI run is observed passing
-  (and, ideally, failing on a reintroduced leak) — don't round that part up
-  to Complete from the local config alone.
+  and `alembic upgrade head` since WP04. **Update 2026-09-17: pushed to the
+  private remote (`origin`, `github.com/SageCarter98/pm-sdlc-tracker-bgp`,
+  created 2026-09-16) and the resulting CI run is real and green** — run
+  [35185824036](https://github.com/SageCarter98/pm-sdlc-tracker-bgp/actions/runs/35185824036):
+  `pytest -q` (112/112 at that commit), including the
+  adversarial cross-tenant suite, passed on a real GitHub Actions runner
+  against a real Postgres service container, not just locally. REQ-009's
+  "blocking CI check" clause is now genuinely satisfied — this closes the
+  gap flagged since WP04. (The first attempt, run 35185489159, failed at
+  the secret-scan step for an unrelated reason — a `gitleaks-action`
+  git-diff-range bug on a repo's first-ever push, not a leaked secret; see
+  the WP12 entry below and the CI fix commit `6f58cc6` for the full
+  account.) Still not demonstrated live: a run failing red on a
+  reintroduced leak — the local `test_seeded_leak_in_rls_policy_is_detected`
+  proves the suite itself catches it, but no CI run has been deliberately
+  broken to watch it go red end-to-end.
 - **WP05** (templates and declarative rule interpreter) is committed and
   tested: the Sec.5.5 rule vocabulary (equality/membership/bounded-all-any
   only, no eval/exec, max nesting depth 5, a fixed prohibited-facts list
@@ -387,7 +395,12 @@ own evidence update when it happens.
     tracking/on-call process REQ-046 also asks for (7-day critical/30-day
     high/1-hour S1 ack) needs a named on-call owner and a real
     vulnerability-disclosure pipeline this prototype doesn't have — not
-    invented here.
+    invented here. **Update 2026-09-17**: pushed and both scans ran for
+    real on GitHub Actions (run 35185824036, green) — the secret-scan step
+    needed one follow-up fix first (`gitleaks-action`'s git-diff-range
+    logic breaks on a repo's very first push; switched to scanning the
+    working tree directly, commit `6f58cc6`), found and fixed the same day
+    it was pushed, not left broken.
   - **REQ-047** (partial): new `security_log_events` table (global, no
     RLS — same precedent as `users`/`mfa_recovery_codes`, since
     login/register/MFA events are tenant-agnostic; app-layer self-scoping
