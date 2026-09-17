@@ -18,5 +18,13 @@ class Settings(BaseSettings):
     # BGP_MIGRATION_DATABASE_URL in backend/.env once bgp_owner exists.
     migration_database_url: str = "postgresql+psycopg2://bgp_owner:CHANGE-ME-OWNER@localhost:5432/bgp_dev"
 
+    # WP08/REQ-029: BYPASSRLS, read-only role used only by
+    # scripts/restore_drill.py's pg_dump step -- bgp_owner (correctly, since
+    # 2026-09-17) cannot read tenant-owned rows without a tenant context,
+    # which pg_dump has no way to provide per-row. Never used by the running
+    # application. Set BGP_BACKUP_DATABASE_URL in backend/.env once
+    # bgp_backup exists.
+    backup_database_url: str = "postgresql+psycopg2://bgp_backup:CHANGE-ME-BACKUP@localhost:5432/bgp_dev"
+
 
 settings = Settings()

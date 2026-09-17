@@ -395,12 +395,11 @@ class IdempotencyRecord(Base):
 
 class AuditEvent(Base):
     """REQ-023 step 6: 'Denied attempts create a separate authorised audit
-    event; a rollback must not silently erase the refusal record.' This is a
-    plain append-only log row -- the full blueprint Sec.5.2 AuditEvent also
-    calls for an 'event digest and independent checkpoint reference' for
-    tamper detection, which is REQ-026/027, tagged WP08 (Integrity and
-    recovery), not built here. Do not treat this table as satisfying WP08's
-    tamper-evidence requirement."""
+    event; a rollback must not silently erase the refusal record.' The
+    'event digest and independent checkpoint reference' half of blueprint
+    Sec.5.2's AuditEvent description is WP08's IntegrityCheckpoint below,
+    computed over these rows rather than stored on them directly (a
+    checkpoint covers a contiguous range of events, not one event each)."""
 
     __tablename__ = "audit_events"
 
@@ -416,3 +415,66 @@ class AuditEvent(Base):
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class IntegrityCheckpoint(Base):
+    """REQ-026: 'separately controlled verification material, with defined
+    custody'. Each row folds every AuditEvent since the previous checkpoint
+    into one sha256 chain digest (see app/integrity.py) and, once written,
+    cannot be UPDATEd or DELETEd by ANY role -- not bgp_app, not bgp_owner
+    (the table owner). Migration 0006_wp08_integrity.py sets FORCE ROW
+    LEVEL SECURITY with only SELECT and INSERT policies defined; Postgres
+    denies any command with no matching policy by default, and FORCE makes
+    that apply to the table owner too, which ordinary RLS does not.
+
+    Read the limit of this honestly: it stops tampering via UPDATE/DELETE
+    DML, including by the owner role. It does NOT stop a sufficiently
+    privileged actor (bgp_owner, or any Postgres superuser) from instead
+    running `ALTER TABLE ... NO FORCE ROW LEVEL SECURITY`, dropping the
+    policy, or dropping the table outright -- DDL rights aren't something
+    REVOKE can take from an owner. Blueprint line 704 says this plainly:
+    'a stored hash chain alone neither prevents privileged rewriting nor
+    proves disaster durability.' Genuine independence from a rogue DBA
+    needs verification material with custody OUTSIDE this Postgres
+    instance entirely -- a separate system this project has no credentials
+    for yet. What this table does prove: tampering by the bgp_app role
+    (the one a compromised application or SQL injection would actually
+    hold) is both prevented and, for events that predate it, detected by
+    the next checkpoint's verification."""
+
+    __tablename__ = "integrity_checkpoints"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"), nullable=False)
+
+    from_sequence: Mapped[int | None] = mapped_column(Integer, nullable=True)  # exclusive; None = genesis
+    to_sequence: Mapped[int] = mapped_column(Integer, nullable=False)  # inclusive
+    event_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    chain_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class IntegrityIncident(Base):
+    """REQ-027: 'Block approval acknowledgements for affected integrity
+    failures, preserve evidence and trigger incident handling.' Created by
+    app/integrity.py's verify_integrity() when a checkpoint fails to
+    re-derive; app/routers/decisions.py denies new decisions on any project
+    with an open incident. Ordinary table (not append-only like the
+    checkpoint above) -- its whole purpose is the status transition from
+    open to resolved, which is a legitimate application-level state change,
+    not tamper-evidence material itself."""
+
+    __tablename__ = "integrity_incidents"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"), nullable=False)
+
+    detail: Mapped[dict] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="open")  # open | resolved
+    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_by_user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+    resolution_note: Mapped[str | None] = mapped_column(String(1000), nullable=True)

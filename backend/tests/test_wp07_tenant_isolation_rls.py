@@ -43,6 +43,7 @@ def seeded_decision_and_exception():
             text("INSERT INTO users (id, email, password_hash, verified, created_at, mfa_enabled) VALUES (:id, :email, 'x', false, now(), false)"),
             {"id": user_id, "email": f"{user_id}@example.com"},
         )
+        conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": tenant_id})
         conn.execute(text("INSERT INTO templates (id, tenant_id, name, created_at) VALUES (:id, :tid, 'T', now())"), {"id": template_id, "tid": tenant_id})
         conn.execute(
             text(
@@ -84,6 +85,7 @@ def seeded_decision_and_exception():
     yield {"tenant_id": tenant_id, "decision_id": decision_id, "exception_id": exception_id}
 
     with _owner_engine.begin() as conn:
+        conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": tenant_id})
         conn.execute(text("DELETE FROM exception_records WHERE id = :id"), {"id": exception_id})
         conn.execute(text("DELETE FROM decision_records WHERE id = :id"), {"id": decision_id})
         conn.execute(text("DELETE FROM evidence_items WHERE id = :id"), {"id": item_id})
@@ -99,7 +101,7 @@ def test_app_role_cannot_update_a_decision(seeded_decision_and_exception):
     t = seeded_decision_and_exception
     with pytest.raises(ProgrammingError, match="permission denied"):
         with _app_engine.begin() as conn:
-            conn.execute(text("SET app.tenant_id = :tid"), {"tid": t["tenant_id"]})
+            conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_id"]})
             conn.execute(text("UPDATE decision_records SET outcome = 'Hold' WHERE id = :id"), {"id": t["decision_id"]})
 
 
@@ -107,14 +109,14 @@ def test_app_role_cannot_delete_a_decision(seeded_decision_and_exception):
     t = seeded_decision_and_exception
     with pytest.raises(ProgrammingError, match="permission denied"):
         with _app_engine.begin() as conn:
-            conn.execute(text("SET app.tenant_id = :tid"), {"tid": t["tenant_id"]})
+            conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_id"]})
             conn.execute(text("DELETE FROM decision_records WHERE id = :id"), {"id": t["decision_id"]})
 
 
 def test_app_role_can_still_select_and_insert_decisions(seeded_decision_and_exception):
     t = seeded_decision_and_exception
     with _app_engine.connect() as conn:
-        conn.execute(text("SET app.tenant_id = :tid"), {"tid": t["tenant_id"]})
+        conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_id"]})
         rows = conn.execute(text("SELECT id FROM decision_records WHERE id = :id"), {"id": t["decision_id"]}).fetchall()
     assert [r.id for r in rows] == [t["decision_id"]]
 

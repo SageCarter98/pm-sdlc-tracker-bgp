@@ -267,6 +267,50 @@ def test_conditional_approval_requires_owner_and_future_deadline(client):
     assert still_blocked_because_hard.status_code == 422, still_blocked_because_hard.text
 
 
+def test_decision_commit_failure_leaves_no_partial_state(client, monkeypatch):
+    """REQ-028 ('zero acknowledged-decision loss... including interpretation
+    records') has a locally-testable component even though the full
+    requirement is gated on DEC05 (see TRACKER.md): a crash or fault right
+    at commit time must never leave a DecisionRecord without its
+    AuditEvent/IdempotencyRecord siblings, or vice versa. This does NOT
+    prove zero loss across node/zone/region failures -- only that a local
+    failure can't produce a torn, partially-recorded decision."""
+    from sqlalchemy.orm import Session as OrmSession
+
+    from app.db import get_db
+    from app.main import app
+    from app.models import AuditEvent, DecisionRecord, IdempotencyRecord
+
+    tenant_id, created, admin_id, approver_id = _setup_project_with_second_approver(client)
+    project_id = created["project"]["id"]
+    s1_occurrence_id = next(o["id"] for o in created["occurrences"] if o["gate_id"] == "S1")
+    s1_item_id = next(e["id"] for e in created["evidence_items"] if e["gate_id"] == "S1")
+
+    client.post(
+        f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
+        json={"base_revision": 1, "status": "Complete", "owner_user_id": approver_id, "reference": "doc-1"},
+    )
+    preview = client.post(f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={})
+    digest = preview.json()["manifest_digest"]
+
+    def _boom(self, *args, **kwargs):
+        raise RuntimeError("simulated crash at commit time")
+
+    monkeypatch.setattr(OrmSession, "commit", _boom)
+    with pytest.raises(RuntimeError):
+        client.post(
+            f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/decisions",
+            json={"outcome": "Approve", "manifest_digest": digest},
+            headers={"Idempotency-Key": "crash-key"},
+        )
+    monkeypatch.undo()
+
+    db = next(app.dependency_overrides[get_db]())
+    assert db.query(DecisionRecord).filter(DecisionRecord.project_id == project_id).count() == 0
+    assert db.query(AuditEvent).filter(AuditEvent.project_id == project_id, AuditEvent.event_type == "decision_recorded").count() == 0
+    assert db.query(IdempotencyRecord).filter(IdempotencyRecord.idempotency_key == "crash-key").count() == 0
+
+
 def test_only_decision_authority_roles_can_record_decisions(client):
     tenant_id = _create_org_as_admin(client)
     _enable_mfa(client)

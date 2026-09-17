@@ -35,7 +35,16 @@ pytestmark = pytest.mark.skipif(not POSTGRES_AVAILABLE, reason="live Postgres wi
 @pytest.fixture()
 def two_tenants_with_projects():
     """Seed two tenants, each with a user, a published template/version, and
-    one project -- all as bgp_owner (setup, not the thing under test)."""
+    one project -- all as bgp_owner. bgp_owner is NOT exempt from RLS (see
+    test_tenant_isolation_rls.py's two_tenants_with_memberships docstring
+    for the 2026-09-17 superuser-bug story): templates, template_versions
+    and projects are all RLS-governed with a tenant-matching WITH CHECK
+    (template_versions' policy has no explicit WITH CHECK, so Postgres
+    reuses its USING clause -- which still requires app.tenant_id to match
+    via the parent template lookup), so each tenant's rows are seeded under
+    their own SET LOCAL app.tenant_id, one tenant fully at a time, rather
+    than interleaved. tenants/users have no RLS (WP04's own migration:
+    'global identities, not tenant-owned rows')."""
     tenant_a, tenant_b = str(uuid.uuid4()), str(uuid.uuid4())
     user_a, user_b = str(uuid.uuid4()), str(uuid.uuid4())
     template_a, template_b = str(uuid.uuid4()), str(uuid.uuid4())
@@ -53,12 +62,16 @@ def two_tenants_with_projects():
                      "VALUES (:id, :email, 'x', false, now(), false)"),
                 {"id": uid, "email": email},
             )
-        for tpl_id, tid in [(template_a, tenant_a), (template_b, tenant_b)]:
+
+        for tid, tpl_id, ver_id, pid, uid in [
+            (tenant_a, template_a, version_a, project_a, user_a),
+            (tenant_b, template_b, version_b, project_b, user_b),
+        ]:
+            conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": tid})
             conn.execute(
                 text("INSERT INTO templates (id, tenant_id, name, created_at) VALUES (:id, :tid, 'T', now())"),
                 {"id": tpl_id, "tid": tid},
             )
-        for ver_id, tpl_id, uid in [(version_a, template_a, user_a), (version_b, template_b, user_b)]:
             conn.execute(
                 text(
                     "INSERT INTO template_versions (id, template_id, version_number, schema_json, status, "
@@ -67,7 +80,6 @@ def two_tenants_with_projects():
                 ),
                 {"id": ver_id, "tpl": tpl_id, "schema": minimal_schema, "uid": uid},
             )
-        for pid, tid, ver_id, uid in [(project_a, tenant_a, version_a, user_a), (project_b, tenant_b, version_b, user_b)]:
             conn.execute(
                 text(
                     "INSERT INTO projects (id, tenant_id, name, template_version_id, class_id, owner_user_id, created_at) "
@@ -79,9 +91,11 @@ def two_tenants_with_projects():
     yield {"tenant_a": tenant_a, "tenant_b": tenant_b, "project_a": project_a, "project_b": project_b}
 
     with _owner_engine.begin() as conn:
-        conn.execute(text("DELETE FROM projects WHERE tenant_id IN (:a, :b)"), {"a": tenant_a, "b": tenant_b})
-        conn.execute(text("DELETE FROM template_versions WHERE id IN (:a, :b)"), {"a": version_a, "b": version_b})
-        conn.execute(text("DELETE FROM templates WHERE id IN (:a, :b)"), {"a": template_a, "b": template_b})
+        for tid, ver_id, tpl_id in [(tenant_a, version_a, template_a), (tenant_b, version_b, template_b)]:
+            conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": tid})
+            conn.execute(text("DELETE FROM projects WHERE tenant_id = :tid"), {"tid": tid})
+            conn.execute(text("DELETE FROM template_versions WHERE id = :id"), {"id": ver_id})
+            conn.execute(text("DELETE FROM templates WHERE id = :id"), {"id": tpl_id})
         conn.execute(text("DELETE FROM users WHERE id IN (:a, :b)"), {"a": user_a, "b": user_b})
         conn.execute(text("DELETE FROM tenants WHERE id IN (:a, :b)"), {"a": tenant_a, "b": tenant_b})
 
@@ -95,7 +109,7 @@ def test_missing_tenant_context_returns_no_project_rows(two_tenants_with_project
 def test_cross_tenant_project_is_invisible_even_by_direct_id(two_tenants_with_projects):
     t = two_tenants_with_projects
     with _app_engine.connect() as conn:
-        conn.execute(text("SET app.tenant_id = :tid"), {"tid": t["tenant_a"]})
+        conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_a"]})
         rows = conn.execute(text("SELECT * FROM projects WHERE id = :pid"), {"pid": t["project_b"]}).fetchall()
     assert rows == []
 
@@ -103,7 +117,7 @@ def test_cross_tenant_project_is_invisible_even_by_direct_id(two_tenants_with_pr
 def test_correct_tenant_context_sees_only_its_own_project(two_tenants_with_projects):
     t = two_tenants_with_projects
     with _app_engine.connect() as conn:
-        conn.execute(text("SET app.tenant_id = :tid"), {"tid": t["tenant_a"]})
+        conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_a"]})
         rows = conn.execute(text("SELECT id FROM projects")).fetchall()
     assert [r.id for r in rows] == [t["project_a"]]
 
@@ -121,7 +135,7 @@ def test_seeded_leak_in_projects_rls_policy_is_detected(two_tenants_with_project
 
     try:
         with _app_engine.connect() as conn:
-            conn.execute(text("SET app.tenant_id = :tid"), {"tid": t["tenant_a"]})
+            conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_a"]})
             leaked_ids = {r.id for r in conn.execute(text("SELECT id FROM projects")).fetchall()}
         assert t["project_b"] in leaked_ids, "seeded leak was not observed -- the weakened policy did not take effect"
     finally:
@@ -131,7 +145,7 @@ def test_seeded_leak_in_projects_rls_policy_is_detected(two_tenants_with_project
             ))
 
     with _app_engine.connect() as conn:
-        conn.execute(text("SET app.tenant_id = :tid"), {"tid": t["tenant_a"]})
+        conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_a"]})
         rows = conn.execute(text("SELECT id FROM projects")).fetchall()
     if [r.id for r in rows] != [t["project_a"]]:
         pytest.fail("policy restore after the seeded leak did not fully take effect on `projects`")

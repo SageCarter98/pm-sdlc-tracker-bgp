@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.deps import get_active_membership, require_mfa
+from app.integrity import has_open_incident
 from app.models import (
     AuditEvent,
     DecisionRecord,
@@ -304,6 +305,20 @@ def _record_decision(
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, existing.denial_reason)
         decision = db.get(DecisionRecord, existing.outcome_decision_id)
         return DecisionOut.model_validate(decision)
+
+    # REQ-027: an open integrity incident on this project blocks every new
+    # decision, not just ones touching the affected evidence -- the
+    # blueprint's own wording ("affected scope") would let this be scoped
+    # more narrowly once verify_integrity() can localise which occurrence(s)
+    # a checkpoint mismatch actually covers; today a checkpoint spans a
+    # whole project's audit trail, so project-wide is the honest scope,
+    # not an arbitrarily broader block than necessary.
+    open_incident = has_open_incident(db, project.id)
+    if open_incident is not None:
+        raise HTTPException(
+            status.HTTP_423_LOCKED,
+            f"Project has an open integrity incident ({open_incident.id}) -- new decisions are blocked until it is resolved (REQ-027)",
+        )
 
     if supersedes_decision_id is None:
         # Only reached on a genuinely new request (no idempotency match

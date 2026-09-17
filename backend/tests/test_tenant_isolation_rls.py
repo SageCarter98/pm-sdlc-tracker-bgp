@@ -40,8 +40,18 @@ pytestmark = pytest.mark.skipif(not POSTGRES_AVAILABLE, reason="live Postgres wi
 
 @pytest.fixture()
 def two_tenants_with_memberships():
-    """Seed two tenants with one membership row each, as bgp_owner (bypasses
-    RLS as the table owner -- this is setup, not the thing under test)."""
+    """Seed two tenants with one membership row each, as bgp_owner. bgp_owner
+    is NOT exempt from RLS here -- FORCE ROW LEVEL SECURITY (migration
+    0002_wp04_rls.py) applies to the table owner too (a real bug was found
+    and fixed 2026-09-17: bgp_owner had accidentally been created as an
+    actual Postgres superuser, which unconditionally bypasses RLS
+    regardless of FORCE; superuser status was removed, and every owner-seeded
+    fixture in this project, this one included, needed SET LOCAL
+    app.tenant_id before each tenant-owned INSERT as a result -- see
+    TRACKER.md for the full story). `tenants`/`users` have no RLS at all
+    (WP04's own migration docstring: 'global identities, not tenant-owned
+    rows'), so only the `memberships` inserts below need the tenant context
+    set immediately before each one."""
     tenant_a, tenant_b = str(uuid.uuid4()), str(uuid.uuid4())
     user_a, user_b = str(uuid.uuid4()), str(uuid.uuid4())
     with _owner_engine.begin() as conn:
@@ -53,11 +63,13 @@ def two_tenants_with_memberships():
                      "VALUES (:id, :email, 'x', false, now(), false)"),
                 {"id": uid, "email": email},
             )
+        conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": tenant_a})
         conn.execute(
             text("INSERT INTO memberships (id, tenant_id, user_id, role, active, created_at) "
                  "VALUES (:id, :tid, :uid, 'contributor', true, now())"),
             {"id": str(uuid.uuid4()), "tid": tenant_a, "uid": user_a},
         )
+        conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": tenant_b})
         conn.execute(
             text("INSERT INTO memberships (id, tenant_id, user_id, role, active, created_at) "
                  "VALUES (:id, :tid, :uid, 'contributor', true, now())"),
@@ -65,7 +77,12 @@ def two_tenants_with_memberships():
         )
     yield {"tenant_a": tenant_a, "tenant_b": tenant_b, "user_a": user_a, "user_b": user_b}
     with _owner_engine.begin() as conn:
-        conn.execute(text("DELETE FROM memberships WHERE tenant_id IN (:a, :b)"), {"a": tenant_a, "b": tenant_b})
+        # DELETE on memberships is RLS-governed too (FOR ALL, no command
+        # restriction in migration 0002_wp04_rls.py) -- one tenant context
+        # at a time, same reasoning as the inserts above.
+        for tid in (tenant_a, tenant_b):
+            conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": tid})
+            conn.execute(text("DELETE FROM memberships WHERE tenant_id = :tid"), {"tid": tid})
         conn.execute(text("DELETE FROM users WHERE id IN (:a, :b)"), {"a": user_a, "b": user_b})
         conn.execute(text("DELETE FROM tenants WHERE id IN (:a, :b)"), {"a": tenant_a, "b": tenant_b})
 
@@ -83,7 +100,7 @@ def test_cross_tenant_row_is_invisible_even_by_direct_id(two_tenants_with_member
     application code, is what's blocking it."""
     t = two_tenants_with_memberships
     with _app_engine.connect() as conn:
-        conn.execute(text("SET app.tenant_id = :tid"), {"tid": t["tenant_a"]})
+        conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_a"]})
         rows = conn.execute(text("SELECT * FROM memberships WHERE user_id = :uid"), {"uid": t["user_b"]}).fetchall()
     assert rows == []
 
@@ -91,7 +108,7 @@ def test_cross_tenant_row_is_invisible_even_by_direct_id(two_tenants_with_member
 def test_correct_tenant_context_sees_only_its_own_row(two_tenants_with_memberships):
     t = two_tenants_with_memberships
     with _app_engine.connect() as conn:
-        conn.execute(text("SET app.tenant_id = :tid"), {"tid": t["tenant_a"]})
+        conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_a"]})
         rows = conn.execute(text("SELECT tenant_id FROM memberships")).fetchall()
     assert [r.tenant_id for r in rows] == [t["tenant_a"]]
 
@@ -151,7 +168,7 @@ def test_seeded_leak_in_rls_policy_is_detected(two_tenants_with_memberships):
 
     try:
         with _app_engine.connect() as conn:
-            conn.execute(text("SET app.tenant_id = :tid"), {"tid": t["tenant_a"]})
+            conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_a"]})
             leaked_tenants = {
                 r.tenant_id
                 for r in conn.execute(text("SELECT tenant_id FROM memberships")).fetchall()
@@ -168,7 +185,7 @@ def test_seeded_leak_in_rls_policy_is_detected(two_tenants_with_memberships):
             ))
 
     with _app_engine.connect() as conn:
-        conn.execute(text("SET app.tenant_id = :tid"), {"tid": t["tenant_a"]})
+        conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_a"]})
         rows = conn.execute(text("SELECT tenant_id FROM memberships")).fetchall()
     if [r.tenant_id for r in rows] != [t["tenant_a"]]:
         pytest.fail(
