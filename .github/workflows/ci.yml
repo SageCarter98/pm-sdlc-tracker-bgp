@@ -50,4 +50,21 @@ jobs:
           pip install pip-audit==2.7.3
           pip-audit -r requirements.txt
       - name: Secret scan (REQ-046)
-        uses: gitleaks/gitleaks-action@v2
+        # gitleaks/gitleaks-action@v2 constructs a git-log diff range from
+        # the push event's before/after commits; on this repo's very first
+        # push that range was <root-commit>^..HEAD, and <root-commit>^
+        # doesn't exist (a repository's first commit has no parent) --
+        # confirmed 2026-09-17, run 35185489159: "fatal: ambiguous
+        # argument... unknown revision". Not a leaked secret, a real CI
+        # bug in how that action builds its scan range for a repo's first
+        # ever push. Scanning the working tree directly (--no-git) sidesteps
+        # the whole class of git-history-range edge cases; the tradeoff is
+        # this only catches secrets present in the current checkout, not
+        # ones committed and later removed -- an acceptable scope for a
+        # repository with no prior secret-leak history to audit.
+        working-directory: .
+        run: |
+          curl -sSL -o gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          ./gitleaks detect --no-git --source . -v
+          rm -f gitleaks gitleaks.tar.gz
