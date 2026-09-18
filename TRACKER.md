@@ -556,11 +556,18 @@ agent as the rest of the codebase, not reviewed by Milton.
   module docstring updated to match, since the README points there for the
   fullest up-to-date summary.
 
+Committed (`b1fb402`) and pushed to `origin/master` same session (user said
+"commit" then "push it"). Real CI run confirmed green on this exact commit:
+[35283094768](https://github.com/SageCarter98/pm-sdlc-tracker-bgp/actions/runs/35283094768)
+— migrations 0010–0012 applied cleanly against a fresh Postgres service
+container, the full pytest suite (including the live-Postgres RLS/
+concurrency suites) passed, `pip-audit` and the secret scan both came back
+clean.
+
 **Still honestly open**: no CI run has been deliberately broken to prove a
-relevant check goes red (same gap named after the CI-green milestone
-above). `#124` stays Not started — none of this was reviewed by Milton.
-Committed locally? — not yet; only edited this session, no commit or push
-requested.
+relevant check goes red (same gap named after the earlier CI-green
+milestone). `#124` stays Not started — none of this was reviewed by
+Milton.
 
 ## Rules for updating this tracker as work proceeds
 
