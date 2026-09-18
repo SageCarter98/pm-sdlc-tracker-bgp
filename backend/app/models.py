@@ -67,6 +67,17 @@ class User(Base):
     mfa_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # BGP-F01 follow-up: a factor REPLACEMENT is proposed here, encrypted the
+    # same way as mfa_secret, while the currently-active mfa_secret/
+    # mfa_enabled are left completely untouched. Only a successful
+    # app/routers/mfa.py:verify() call atomically promotes this to the live
+    # mfa_secret -- so an abandoned, failed or expired replacement (see
+    # PENDING_MFA_MAX_AGE_SECONDS in app/security.py) leaves the original
+    # working factor exactly as it was, and a password-only session can no
+    # longer make the account appear unenrolled mid-replacement.
+    pending_mfa_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    pending_mfa_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # BGP-F01: bumped whenever a previously-issued session token must stop
     # working -- a new factor becomes active (app/routers/mfa.py:verify) or
     # recovery resets one (app/routers/mfa.py:recover). app/deps.py's
@@ -354,6 +365,24 @@ class EvidenceRevision(Base):
 
     actor_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+    # BGP-F04 follow-up: same source_id pattern as Template/Project/
+    # EvidenceItem/GateOccurrence (see Template.source_id), but for AUTHOR
+    # identity rather than the row itself. actor_user_id is always a real,
+    # resolvable local user (falls back to the importing user when the
+    # archive's actor could not be matched -- app/routers/exports.py's
+    # resolve()) because it is a NOT-NULL FK used for referential integrity;
+    # it must never be read as "this local user really authored this" once a
+    # row has been imported. source_actor_id, set only at import time, is
+    # the archive's original actor id and is what re-export must report as
+    # the author -- so an unmatched actor's identity survives an export/
+    # import/export round trip instead of silently becoming the importer.
+    # source_actor_email travels with it (same source_email idea as
+    # ImportedActorProvenance) because source_actor_id is not a resolvable
+    # local user id -- without the email, re-export could name an author but
+    # never let a later import match that identity to a real account.
+    source_actor_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    source_actor_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
 
 
 class ExceptionRecord(Base):

@@ -206,6 +206,57 @@ def test_full_evidence_revision_history_survives_import(client):
     assert reimported_item["id"] != s1_item_id, "the LIVE id in tenant_b must be freshly generated, never reuse tenant_a's"
 
 
+def test_unmatched_revision_author_and_timestamp_survive_reexport(client):
+    """BGP-F04 follow-up (BGP_Follow_Up_Review_Findings_v1.0.pdf) verification
+    point 1: import a revision whose author has no local match, then
+    re-export. Both the ORIGINAL author identity and the ORIGINAL created_at
+    must come back unchanged -- neither may silently become the importer's
+    identity or the import's own timestamp."""
+    tenant_a = _create_org_as_admin(client, "admin@tenant-a.example")
+    version_id, _ = _publish_standard_template(client, tenant_a)
+    created = _create_project(client, tenant_a, version_id, "Standard-High").json()
+    s1_item_id = next(e["id"] for e in created["evidence_items"] if e["gate_id"] == "S1")
+    original_author_id = client.get("/auth/me").json()["id"]
+
+    client.post(
+        f"/orgs/{tenant_a}/evidence/{s1_item_id}/revisions",
+        json={"base_revision": 1, "status": "Complete", "reference": "doc-1", "source_hash": "sha256:v1"},
+    )
+    archive = client.post(f"/orgs/{tenant_a}/exports").json()["archive"]
+    original_item = next(
+        i for p in archive["projects"] for o in p["occurrences"] for i in o["evidence_items"] if i["source_id"] == s1_item_id
+    )
+    original_revision = original_item["revisions"][-1]
+    assert original_revision["actor_actor_id"] == original_author_id
+    original_created_at = original_revision["created_at"]
+
+    # A completely different person, no email overlap -- nothing in the
+    # archive's actor list can match, so the importer becomes the live
+    # actor_user_id on the imported row (existing, unchanged behaviour).
+    tenant_b = _create_org_as_admin(client, "someone-else@tenant-b.example")
+    job_id = client.post(f"/orgs/{tenant_b}/imports/validate", json={"archive": archive}).json()["id"]
+    client.post(f"/orgs/{tenant_b}/imports/{job_id}/commit")
+
+    reexported = client.post(f"/orgs/{tenant_b}/exports").json()["archive"]
+    reexported_item = next(
+        i for p in reexported["projects"] for o in p["occurrences"] for i in o["evidence_items"] if i["source_id"] == s1_item_id
+    )
+    reexported_revision = reexported_item["revisions"][-1]
+    assert reexported_revision["actor_actor_id"] == original_author_id, (
+        "an unmatched author's ORIGINAL identity must survive re-export, not silently become the importer"
+    )
+    assert reexported_revision["created_at"] == original_created_at, (
+        "the ORIGINAL creation time must survive re-export, not silently become the import time"
+    )
+
+    # The preserved identity is still resolvable by email for a future
+    # import, and is never turned into a live local account by this export.
+    preserved_actor = next(a for a in reexported["actors"] if a["id"] == original_author_id)
+    assert preserved_actor["email"] == "admin@tenant-a.example"
+    b_admin_id = client.get("/auth/me").json()["id"]
+    assert original_author_id != b_admin_id
+
+
 def test_decision_exception_and_compensating_review_preserved_through_second_export(client):
     """BGP-F04 verification points 2/3: a conditional decision, a
     compensating-review override, an exception and a superseding decision

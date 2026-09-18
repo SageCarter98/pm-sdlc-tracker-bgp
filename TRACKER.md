@@ -569,6 +569,124 @@ relevant check goes red (same gap named after the earlier CI-green
 milestone). `#124` stays Not started — none of this was reviewed by
 Milton.
 
+## Milton given repository access; BGP follow-up review remediation (2026-09-18)
+
+Milton (`MiltonBello15`) was added as a GitHub collaborator on
+`SageCarter98/pm-sdlc-tracker-bgp` with **read** access, and named in a new
+`.github/CODEOWNERS` (PR #1) so PRs can require his review once branch
+protection turns that on (not done here — a separate repo-settings action).
+This gives him the means to actually review; it is still not itself a
+review, and `#124` is unaffected until he does one. **Evidence honesty
+note**: a chat claim that "Milton locally reviewed the codebase and
+accepted" was NOT recorded here without something checkable (a PR approval,
+signed note, dated comment) — see this session's own conversation. If/when
+that record exists, cite it here and re-open the `#124` status.
+
+A NEW review landed the same day: `BGP_Follow_Up_Review_Findings_v1.0.pdf`
+(18 September, also AI-authored — "a source review, not an independent
+human sign-off", same as the 17 September one) re-inspected the BGP-F01–F05
+fixes from `b1fb402` and found all four High findings **partially
+resolved**, plus F05 "substantially addressed, verification pending". Fixed
+the four remaining gaps:
+
+- **BGP-F01 follow-up (factor-replacement window)**: `POST /auth/mfa/enroll`
+  used to overwrite the LIVE `mfa_secret` and set `mfa_enabled=False`
+  immediately, so an already-enrolled account had zero second-factor
+  protection for the entire window between starting and completing a
+  replacement — a password-only session could get a full session AND
+  replace the pending secret during that window. New `users.pending_mfa_secret`
+  / `pending_mfa_created_at` (migration `0013_bgp_followup_f01_f04`) stage
+  the proposed secret without touching the active factor at all; only a
+  successful `POST /auth/mfa/verify` atomically promotes it (and bumps
+  `token_version` as before). An abandoned or expired (10 minutes,
+  `PENDING_MFA_MAX_AGE_SECONDS`) replacement is rejected and cleared,
+  leaving the original factor completely untouched — never silently
+  extended or accepted late. `POST /auth/mfa/recover` also clears any
+  pending secret, so a stale in-flight replacement can't outlive a recovery.
+- **BGP-F02 follow-up (preparation from attribution, not the owner field)**:
+  `_check_separation_of_duties` used to derive "who prepared this evidence"
+  from the live, reassignable `EvidenceItem.owner_user_id` — clearing it or
+  handing it to a colleague who never touched the evidence let the real
+  preparer approve alone. Now derived from `EvidenceRevision.actor_user_id`
+  (immutable, set once to whoever actually called the endpoint) for the
+  revision each item is currently at. New test
+  `test_clearing_or_reassigning_ownership_cannot_defeat_separation_of_duties`
+  proves both the cleared-ownership and reassigned-ownership bypasses are
+  closed. This changed what several EXISTING test fixtures needed to do:
+  `_record_one_approval` (`test_integrity.py`) and two tests in
+  `test_decisions.py` were setting `owner_user_id` to approver2 while admin
+  was the one actually calling the revision endpoint — exactly the loophole
+  just closed — so those fixtures now have approver2 genuinely log in and
+  submit the revision themselves.
+- **BGP-F03 follow-up (remaining unlocked reads; flush outside the conflict
+  handler)**: `_exception_is_currently_valid` and `_compute_readiness` now
+  lock the approver's `Membership` row and the `ExceptionRecord` rows (same
+  fixed lock order: evidence, then exceptions, then approver membership)
+  when called from the decision-commit path; `_check_separation_of_duties`
+  unconditionally locks the compensating reviewer's `Membership` and
+  `ProjectMembership` rows (it only ever runs from that path). Separately,
+  `_record_decision`'s `db.flush()` — which is what can actually hit
+  migration `0011`'s partial unique indexes — used to run BEFORE the
+  `try/except IntegrityError` block, so a losing concurrent decision could
+  surface as a bare unhandled 500 instead of the deterministic conflict
+  response every other path gives; it's inside the try block now. Also
+  fixed: `db.rollback()` inside that handler ends the transaction
+  `get_active_membership`'s `SET LOCAL app.tenant_id` applied to, so the
+  winner-lookup queries that follow were running with NO tenant context —
+  under `FORCE ROW LEVEL SECURITY` that hides every row, silently falling
+  through to the "unrecognised conflict" re-raise instead of the correct
+  conflict response. Tenant context is now reapplied immediately after
+  rollback. **Honestly still open, per the follow-up review's own
+  suggestion**: no NEW application-level (through the real HTTP endpoints,
+  two genuinely overlapping requests) Postgres test was written to prove
+  this specific fix end-to-end — the existing `test_bgp_f03_decision_concurrency.py`
+  proves the underlying locks/constraints work via raw SQL and direct table
+  access, which the follow-up review correctly noted doesn't exercise the
+  application's transaction/HTTP-error paths themselves. Not claimed as
+  closed.
+- **BGP-F04 follow-up (author identity and timestamp lost on re-export)**:
+  `commit_import`'s `EvidenceRevision` construction now restores the
+  original `created_at` instead of defaulting to import time, and new
+  `evidence_revisions.source_actor_id`/`source_actor_email` (same migration)
+  preserve the archive's original author identity as historical provenance,
+  independent of the live `actor_user_id` FK (which still falls back to the
+  importer for an unmatched author, same as before — that FK is for
+  referential integrity only now, never read back as "who really did
+  this"). Re-export prefers `source_actor_id`/email over the live FK, and
+  the exported `actors` section carries these preserved identities
+  alongside real local users — never turned into a live account, matched by
+  email on a future import exactly like `ImportedActorProvenance` already
+  does elsewhere. New test
+  `test_unmatched_revision_author_and_timestamp_survive_reexport` proves an
+  unmatched author's identity and original creation time both survive an
+  export → import → re-export round trip instead of silently becoming the
+  importer / the import time.
+- **BGP-F05 follow-up (clean-setup verification)**: `alembic upgrade head`
+  (0012 → 0013) applied cleanly against the real `bgp_dev` Postgres
+  instance, and the full test suite passed against it (131 passed, 0
+  skipped/failed — see below). **Not claimed as the full verification the
+  follow-up review actually asked for**: this reused the existing dev
+  checkout/venv/database rather than a genuinely fresh clone with a brand
+  new empty database, which is what "follow the README from a clean
+  checkout" means. Honestly still open.
+
+131 backend tests passing (was 116 SQLite + 31 Postgres = 147 counted
+separately before; this count is the full combined `pytest -q` run against
+real `bgp_dev`, 0 skipped) — +2 new tests in `test_hardening.py` for the
+factor-replacement window (expiry, and old-factor-still-works), +1 in
+`test_decisions.py` for the ownership-bypass closure, +1 in
+`test_export_import.py` for the author/timestamp round trip, plus the one
+pre-existing `test_hardening.py` MFA-encryption test updated for the new
+`pending_mfa_secret` staging field. `pip-audit -r requirements.txt`: no
+known vulnerabilities. Live-Postgres RLS suites (`test_tenant_isolation_rls.py`
+and the WP06–WP10 variants) and `test_bgp_f03_decision_concurrency.py` all
+still pass unchanged against real `bgp_dev` with migration `0013` applied.
+
+**Honestly still open**: the two items named above (an application-level
+Postgres concurrency test for the F03 fix; a genuinely clean-checkout setup
+verification for F05), no CI run for this commit yet (the workflow runs on
+push), and `#124` — none of this was reviewed by Milton either.
+
 ## Rules for updating this tracker as work proceeds
 
 1. Draft candidate evidence matches, then **verify each one against the actual

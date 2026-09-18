@@ -121,6 +121,13 @@ def _build_archive(db: Session, tenant_id: str, requesting_user_id: str) -> dict
     verbatim, so it survives an export -> import -> export chain instead
     of silently disappearing after one hop."""
     actor_ids: set[str] = {requesting_user_id}
+    # BGP-F04 follow-up: revisions carrying preserved historical provenance
+    # (EvidenceRevision.source_actor_id -- an author that either couldn't be
+    # matched at import, or was, but whose original identity is still owed
+    # to future re-exports either way) are NOT real local users and cannot
+    # go through the `actors_out` User query below. Collected separately and
+    # merged into that section afterwards.
+    historical_actors: dict[str, str | None] = {}
 
     templates_out = []
     for t in db.query(Template).filter(Template.tenant_id == tenant_id).all():
@@ -160,7 +167,20 @@ def _build_archive(db: Session, tenant_id: str, requesting_user_id: str) -> dict
                     .all()
                 )
                 for r in revisions:
-                    actor_ids.add(r.actor_user_id)
+                    # BGP-F04 follow-up: only add the live actor_user_id to
+                    # the actors section when it is a REAL attribution (no
+                    # source_actor_id recorded -- this revision was created
+                    # directly in this instance, never imported). An
+                    # imported, unmatched revision's actor_user_id is the
+                    # importer, whose own real actor row is already present
+                    # from their own activity; re-declaring it here would
+                    # not be wrong, but source_actor_id below is what
+                    # subsequent readers must treat as this revision's
+                    # actual author.
+                    if r.source_actor_id is None:
+                        actor_ids.add(r.actor_user_id)
+                    else:
+                        historical_actors[r.source_actor_id] = r.source_actor_email
                     if r.owner_user_id:
                         actor_ids.add(r.owner_user_id)
                 items_out.append({
@@ -177,7 +197,15 @@ def _build_archive(db: Session, tenant_id: str, requesting_user_id: str) -> dict
                             "owner_actor_id": r.owner_user_id, "due_date": _jsonable(r.due_date),
                             "completed_date": _jsonable(r.completed_date), "reference": r.reference,
                             "source_version": r.source_version, "source_hash": r.source_hash,
-                            "actor_actor_id": r.actor_user_id, "created_at": _jsonable(r.created_at),
+                            # BGP-F04 follow-up: prefer the preserved
+                            # original identity over the live FK -- see
+                            # EvidenceRevision.source_actor_id's docstring
+                            # and the actor_ids loop above. created_at is
+                            # now always the true original time too, since
+                            # commit_import restores it instead of letting
+                            # it default to import time.
+                            "actor_actor_id": r.source_actor_id if r.source_actor_id is not None else r.actor_user_id,
+                            "created_at": _jsonable(r.created_at),
                         }
                         for r in revisions
                     ],
@@ -270,6 +298,13 @@ def _build_archive(db: Session, tenant_id: str, requesting_user_id: str) -> dict
                     actor_ids.add(value)
 
     actors_out = [{"id": a.id, "email": a.email} for a in db.query(User).filter(User.id.in_(actor_ids)).all()]
+    # BGP-F04 follow-up: append preserved historical identities alongside
+    # real local users -- these ids are NEVER local User rows (never
+    # matched, or matched-but-superseded-by-a-later-import identity), so a
+    # future import's email-based matching is the only way they could ever
+    # resolve to a live account, exactly as REQ-030 requires ("do not
+    # confer login or approval rights").
+    actors_out.extend({"id": source_id, "email": email} for source_id, email in historical_actors.items())
     sections["actors"] = actors_out
 
     manifest = {
@@ -439,11 +474,16 @@ def commit_import(
 
     archive = job.archive_json
     actor_map: dict[str, str | None] = {}
+    # BGP-F04 follow-up: id -> email from the archive's own actors section,
+    # so EvidenceRevision.source_actor_email can be set from the SAME
+    # source used for matching, not re-derived some other way.
+    archive_actor_emails: dict[str, str | None] = {}
 
     try:
         for a in archive.get("actors", []):
             local = _match_actor(db, tenant_id, a.get("email"))
             actor_map[a["id"]] = local.id if local else None
+            archive_actor_emails[a["id"]] = a.get("email")
             db.add(ImportedActorProvenance(
                 tenant_id=tenant_id, import_job_id=job.id, source_actor_id=a["id"],
                 source_email=a.get("email"), matched_local_user_id=local.id if local else None,
@@ -550,6 +590,7 @@ def commit_import(
                     counts["evidence_items"] += 1
 
                     for r in sorted(revisions_in, key=lambda rev: rev["revision_number"]):
+                        source_created_at = _parse_dt(r.get("created_at"))
                         db.add(EvidenceRevision(
                             tenant_id=tenant_id, evidence_item_id=new_iid, revision_number=r["revision_number"],
                             status=r["status"], owner_user_id=resolve(r.get("owner_actor_id"), required=False),
@@ -558,7 +599,27 @@ def commit_import(
                             # A revision's own recorded actor -- unmatched
                             # falls back to the importer, same discipline as
                             # every other required actor here, never invented.
+                            # This FK is for referential integrity only; it
+                            # is never read back as "who really did this"
+                            # once source_actor_id (below) is set.
                             actor_user_id=resolve(r.get("actor_actor_id"), required=True),
+                            # BGP-F04 follow-up: the archive's own actor id,
+                            # preserved as historical provenance independent
+                            # of the live FK above -- see EvidenceRevision.
+                            # source_actor_id's docstring. Set even when the
+                            # actor WAS matched, so re-export always has a
+                            # stable identity to report regardless of
+                            # whether a later re-import's matching differs.
+                            source_actor_id=r.get("actor_actor_id"),
+                            source_actor_email=archive_actor_emails.get(r.get("actor_actor_id")),
+                            # BGP-F04 follow-up: restore the ORIGINAL
+                            # creation time instead of letting the column
+                            # default to "now" (import time) -- an archive
+                            # with no created_at (pre-follow-up export, or
+                            # the single synthetic revision-1 fallback
+                            # above) still falls back to now, which is the
+                            # honest answer when no original time exists.
+                            created_at=source_created_at if source_created_at is not None else _now(),
                         ))
                         counts["evidence_revisions"] += 1
 
