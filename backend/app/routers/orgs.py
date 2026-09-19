@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -63,10 +64,20 @@ def _as_utc(dt: datetime) -> datetime:
 def create_org(payload: CreateOrgRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> Tenant:
     """REQ-001: explicit organisation membership before project access --
     the creator becomes tenant_administrator of their own new tenant, not of
-    any tenant they didn't create or weren't invited to."""
+    any tenant they didn't create or weren't invited to.
+
+    Org bootstrap fix: `memberships` is RLS-protected, fail-closed with no
+    `app.tenant_id` set -- there is no existing membership dependency to set
+    it here (this IS the request that creates the first one), so this
+    endpoint sets it itself, from the just-generated tenant.id, before the
+    INSERT. Without this the INSERT was rejected outright
+    (`new row violates row-level security policy`) against real Postgres --
+    nobody could ever create an organisation there at all."""
     tenant = Tenant(name=payload.name)
     db.add(tenant)
     db.flush()
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": tenant.id})
     db.add(Membership(tenant_id=tenant.id, user_id=user.id, role=Role.TENANT_ADMINISTRATOR.value))
     db.commit()
     db.refresh(tenant)
@@ -102,14 +113,40 @@ def create_invitation(
 def accept_invitation(
     payload: AcceptInvitationRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> Membership:
-    """REQ-038: invited user reaches the intended project after sign-in."""
-    invitation = db.query(Invitation).filter(Invitation.token_hash == _hash_token(payload.token)).one_or_none()
+    """REQ-038: invited user reaches the intended project after sign-in.
+
+    Org bootstrap fix, two parts. First: the initial `Invitation` lookup is
+    BY TOKEN, deliberately without knowing the tenant yet -- that is the
+    whole point of a self-contained invitation link. But `invitations` is
+    RLS-protected the same way `memberships` is, and there is no tenant
+    context to set beforehand here (unlike get_active_membership, the
+    tenant isn't known until AFTER this exact query finds it). Migration
+    0014 adds a second, narrowly-scoped permissive SELECT policy on
+    `invitations` keyed on `app.invitation_lookup_token_hash` -- Postgres
+    combines multiple permissive policies for the same command with OR, so
+    a caller who sets this to the token hash they're presenting can find
+    that ONE row regardless of tenant context, without weakening the
+    tenant-isolation policy for anything else (INSERT/UPDATE/DELETE, or a
+    SELECT that doesn't set this). Knowing the unguessable, high-entropy
+    token IS the authorization to read that row -- the same trust
+    assumption an emailed invitation link already relies on. Second: once
+    the invitation's real tenant_id is known, context is set from it before
+    the `existing`-membership check and the INSERT below -- the same
+    ordering bug create_org had, for the same reason (no prior
+    get_active_membership dependency to have set it already)."""
+    token_hash = _hash_token(payload.token)
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(text("SET LOCAL app.invitation_lookup_token_hash = :h"), {"h": token_hash})
+    invitation = db.query(Invitation).filter(Invitation.token_hash == token_hash).one_or_none()
     if invitation is None or invitation.accepted_at is not None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Invitation not found or already used")
     if _as_utc(invitation.expires_at) < datetime.now(timezone.utc):
         raise HTTPException(status.HTTP_410_GONE, "Invitation expired -- request another")
     if invitation.email.lower() != user.email.lower():
         raise HTTPException(status.HTTP_403_FORBIDDEN, "This invitation was issued to a different address")
+
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": invitation.tenant_id})
 
     existing = (
         db.query(Membership)
