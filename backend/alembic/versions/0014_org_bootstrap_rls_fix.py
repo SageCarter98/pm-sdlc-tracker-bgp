@@ -36,6 +36,7 @@ AFTER the query that needed it, or not applied at all):
    any SELECT that doesn't set this. See app/routers/orgs.py's
    accept_invitation docstring for the full reasoning.
 """
+
 from alembic import op
 
 revision = "0014_org_bootstrap_rls_fix"

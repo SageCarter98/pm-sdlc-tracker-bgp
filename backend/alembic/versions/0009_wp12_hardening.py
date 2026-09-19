@@ -14,6 +14,7 @@ since login/register/MFA events are tenant-agnostic. Access control is
 app-layer, self-scoped only (see SecurityLogEvent's docstring in
 app/models.py).
 """
+
 from alembic import op
 import sqlalchemy as sa
 

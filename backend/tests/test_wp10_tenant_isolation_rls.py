@@ -4,6 +4,7 @@ application layer, not RLS (app/models.py's Draft docstring explains why);
 this file proves the layer RLS *does* cover -- cross-tenant isolation --
 same repeated-proof rationale as test_wp06/07/08/09 (threat model finding
 T1.4)."""
+
 import uuid
 
 import pytest
@@ -34,10 +35,14 @@ def two_tenants_with_drafts():
 
     with _owner_engine.begin() as conn:
         for tid, name in [(tenant_a, "Tenant A"), (tenant_b, "Tenant B")]:
-            conn.execute(text("INSERT INTO tenants (id, name, created_at) VALUES (:id, :name, now())"), {"id": tid, "name": name})
+            conn.execute(
+                text("INSERT INTO tenants (id, name, created_at) VALUES (:id, :name, now())"), {"id": tid, "name": name}
+            )
         for uid, email in [(user_a, f"{user_a}@example.com"), (user_b, f"{user_b}@example.com")]:
             conn.execute(
-                text("INSERT INTO users (id, email, password_hash, verified, created_at, mfa_enabled) VALUES (:id, :email, 'x', false, now(), false)"),
+                text(
+                    "INSERT INTO users (id, email, password_hash, verified, created_at, mfa_enabled) VALUES (:id, :email, 'x', false, now(), false)"
+                ),
                 {"id": uid, "email": email},
             )
         for did, tid, uid in [(draft_a, tenant_a, user_a), (draft_b, tenant_b, user_b)]:

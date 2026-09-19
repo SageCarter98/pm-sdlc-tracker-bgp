@@ -2,7 +2,9 @@ from tests.conftest import register_and_login
 
 
 def test_register_then_login(client):
-    resp = client.post("/auth/register", json={"email": "a@tenant-a.example", "password": "correct horse battery staple"})
+    resp = client.post(
+        "/auth/register", json={"email": "a@tenant-a.example", "password": "correct horse battery staple"}
+    )
     assert resp.status_code == 201
     resp = client.post("/auth/login", json={"email": "a@tenant-a.example", "password": "correct horse battery staple"})
     assert resp.status_code == 200
@@ -162,7 +164,9 @@ def test_login_with_mfa_enabled_does_not_grant_a_session_until_second_factor(cli
     client.post("/auth/mfa/verify", json={"code": pyotp.TOTP(secret).now()})
     client.post("/auth/logout")
 
-    login_resp = client.post("/auth/login", json={"email": "approver@tenant-a.example", "password": "correct horse battery staple"})
+    login_resp = client.post(
+        "/auth/login", json={"email": "approver@tenant-a.example", "password": "correct horse battery staple"}
+    )
     assert login_resp.status_code == 200
     assert login_resp.json() == {"mfa_required": True}
     assert "bgp_session" not in login_resp.cookies
@@ -233,7 +237,9 @@ def test_mfa_recovery_disables_mfa_and_requires_reenrolment(client):
     verify = client.post("/auth/mfa/verify", json={"code": pyotp.TOTP(secret).now()})
     recovery_code = verify.json()["recovery_codes"][0]
 
-    recover = client.post("/auth/mfa/recover", json={"email": "approver@tenant-a.example", "recovery_code": recovery_code})
+    recover = client.post(
+        "/auth/mfa/recover", json={"email": "approver@tenant-a.example", "recovery_code": recovery_code}
+    )
     assert recover.status_code == 200
     assert recover.json()["mfa_enabled"] is False
 
@@ -243,12 +249,16 @@ def test_mfa_recovery_disables_mfa_and_requires_reenrolment(client):
     stale_session = client.get(f"/orgs/{tenant_id}/approval-gate-check")
     assert stale_session.status_code == 401
 
-    reuse = client.post("/auth/mfa/recover", json={"email": "approver@tenant-a.example", "recovery_code": recovery_code})
+    reuse = client.post(
+        "/auth/mfa/recover", json={"email": "approver@tenant-a.example", "recovery_code": recovery_code}
+    )
     assert reuse.status_code == 401
 
     # A fresh, password-only login (MFA is disabled again after recovery)
     # still cannot pass the MFA gate.
-    relogin = client.post("/auth/login", json={"email": "approver@tenant-a.example", "password": "correct horse battery staple"})
+    relogin = client.post(
+        "/auth/login", json={"email": "approver@tenant-a.example", "password": "correct horse battery staple"}
+    )
     assert relogin.status_code == 200
     assert relogin.json()["mfa_required"] is False
     resp = client.get(f"/orgs/{tenant_id}/approval-gate-check")

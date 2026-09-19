@@ -10,6 +10,7 @@ why this repetition matters -- threat model finding T1.4).
 BGP-F02 (migration 0010_bgp_f01_f02_fixes) adds compensating_reviews with
 the identical SELECT+INSERT-only shape as decision_records -- proven the
 same way below, not assumed from the shared migration loop either."""
+
 import uuid
 
 import pytest
@@ -44,11 +45,16 @@ def seeded_decision_and_exception():
     with _owner_engine.begin() as conn:
         conn.execute(text("INSERT INTO tenants (id, name, created_at) VALUES (:id, 'T', now())"), {"id": tenant_id})
         conn.execute(
-            text("INSERT INTO users (id, email, password_hash, verified, created_at, mfa_enabled) VALUES (:id, :email, 'x', false, now(), false)"),
+            text(
+                "INSERT INTO users (id, email, password_hash, verified, created_at, mfa_enabled) VALUES (:id, :email, 'x', false, now(), false)"
+            ),
             {"id": user_id, "email": f"{user_id}@example.com"},
         )
         conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": tenant_id})
-        conn.execute(text("INSERT INTO templates (id, tenant_id, name, created_at) VALUES (:id, :tid, 'T', now())"), {"id": template_id, "tid": tenant_id})
+        conn.execute(
+            text("INSERT INTO templates (id, tenant_id, name, created_at) VALUES (:id, :tid, 'T', now())"),
+            {"id": template_id, "tid": tenant_id},
+        )
         conn.execute(
             text(
                 "INSERT INTO template_versions (id, template_id, version_number, schema_json, status, created_by_user_id, created_at, published_at) "
@@ -57,11 +63,15 @@ def seeded_decision_and_exception():
             {"id": version_id, "tpl": template_id, "schema": minimal_schema, "uid": user_id},
         )
         conn.execute(
-            text("INSERT INTO projects (id, tenant_id, name, template_version_id, class_id, owner_user_id, created_at) VALUES (:id, :tid, 'P', :ver, 'A', :uid, now())"),
+            text(
+                "INSERT INTO projects (id, tenant_id, name, template_version_id, class_id, owner_user_id, created_at) VALUES (:id, :tid, 'P', :ver, 'A', :uid, now())"
+            ),
             {"id": project_id, "tid": tenant_id, "ver": version_id, "uid": user_id},
         )
         conn.execute(
-            text("INSERT INTO gate_occurrences (id, tenant_id, project_id, gate_id, sequence, trigger, created_at) VALUES (:id, :tid, :pid, 'G1', 1, 'routine', now())"),
+            text(
+                "INSERT INTO gate_occurrences (id, tenant_id, project_id, gate_id, sequence, trigger, created_at) VALUES (:id, :tid, :pid, 'G1', 1, 'routine', now())"
+            ),
             {"id": occurrence_id, "tid": tenant_id, "pid": project_id},
         )
         conn.execute(

@@ -8,6 +8,7 @@ DEC07 (exact vocabulary and limits, third framework choice) is still open --
 this is a working prototype of the schema shape Sec.5.5 already approved,
 not a claim that DEC07 is resolved.
 """
+
 from __future__ import annotations
 
 from typing import Any, Literal
@@ -150,7 +151,9 @@ class TemplateSchema(BaseModel):
 
                 unknown_rule_classes = set(rule.class_ids) - class_set
                 if unknown_rule_classes:
-                    errors.append(f"rule '{rule.rule_id}' references undeclared class(es) {sorted(unknown_rule_classes)}")
+                    errors.append(
+                        f"rule '{rule.rule_id}' references undeclared class(es) {sorted(unknown_rule_classes)}"
+                    )
 
         if errors:
             raise ValueError("; ".join(errors))

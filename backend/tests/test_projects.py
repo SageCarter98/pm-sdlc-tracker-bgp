@@ -1,5 +1,6 @@
 """WP06: REQ-015 (atomic project seeding), REQ-016 (separate occurrences),
 REQ-017/018/019 (immutable, attributed, validated evidence revisions)."""
+
 import json
 from pathlib import Path
 
@@ -18,7 +19,9 @@ def _create_org_as_admin(client, email="admin@tenant-a.example"):
 def _publish_standard_template(client, tenant_id):
     schema = json.loads((FIXTURES_DIR / "standard.json").read_text(encoding="utf-8"))
     schema.pop("_meta", None)
-    created = client.post(f"/orgs/{tenant_id}/templates/import", json={"name": "Standard", "schema_json": schema}).json()
+    created = client.post(
+        f"/orgs/{tenant_id}/templates/import", json={"name": "Standard", "schema_json": schema}
+    ).json()
     publish = client.post(f"/orgs/{tenant_id}/templates/{created['template_id']}/versions/{created['id']}/publish")
     assert publish.status_code == 200, publish.text
     return created["id"], schema
@@ -118,7 +121,9 @@ def test_two_routine_and_one_triggered_occurrence_keep_separate_evidence(client)
     assert second_routine.status_code == 201, second_routine.text
     assert second_routine.json()["occurrence"]["sequence"] == 2
     second_s1_item_id = second_routine.json()["evidence_items"][0]["id"]
-    assert second_s1_item_id != first_s1_item_id, "the second occurrence must get its own evidence item, not reuse the first"
+    assert second_s1_item_id != first_s1_item_id, (
+        "the second occurrence must get its own evidence item, not reuse the first"
+    )
 
     triggered = client.post(
         f"/orgs/{tenant_id}/projects/{project_id}/occurrences", json={"gate_id": "S4", "trigger": "triggered"}
@@ -199,7 +204,6 @@ def test_only_explicit_project_members_can_submit_evidence(client):
     created = _create_project(
         client, tenant_id, version_id, "Standard-High", members=[{"user_id": member_id, "role": "contributor"}]
     ).json()
-    project_id = created["project"]["id"]
     s1_item_id = next(e["id"] for e in created["evidence_items"] if e["gate_id"] == "S1")
 
     register_and_login(client, "member@tenant-a.example")
@@ -243,7 +247,9 @@ def test_my_work_reports_reason_deadline_state_and_direct_action(client):
     version_id, _ = _publish_standard_template(client, tenant_id)
     created = _create_project(client, tenant_id, version_id, "Standard-High").json()
     s1_item_id = next(e["id"] for e in created["evidence_items"] if e["gate_id"] == "S1")
-    admin_login = client.post("/auth/login", json={"email": "admin@tenant-a.example", "password": "correct horse battery staple"})
+    admin_login = client.post(
+        "/auth/login", json={"email": "admin@tenant-a.example", "password": "correct horse battery staple"}
+    )
     admin_id = admin_login.json()["id"]
 
     # S1.R1's permitted_role_ids is ["approver"] (fixtures/synthetic/frameworks/standard.json)

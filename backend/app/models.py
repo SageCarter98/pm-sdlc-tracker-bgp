@@ -346,9 +346,7 @@ class EvidenceRevision(Base):
     shape, e.g. sniffing for a URL, which would be an unreliable signal)."""
 
     __tablename__ = "evidence_revisions"
-    __table_args__ = (
-        UniqueConstraint("evidence_item_id", "revision_number", name="uq_evidence_revision_item_number"),
-    )
+    __table_args__ = (UniqueConstraint("evidence_item_id", "revision_number", name="uq_evidence_revision_item_number"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
@@ -449,7 +447,9 @@ class DecisionRecord(Base):
     reviewed_manifest_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     conditions_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
-    supersedes_decision_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("decision_records.id"), nullable=True)
+    supersedes_decision_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("decision_records.id"), nullable=True
+    )
     reason: Mapped[str | None] = mapped_column(String(1000), nullable=True)  # required by the API when superseding
 
     # BGP-F02: reviewer_id/note are a denormalised snapshot of the
@@ -458,8 +458,12 @@ class DecisionRecord(Base):
     # (occurrence, manifest, reviewer independence and authority) every time
     # in app/routers/decisions.py's _check_separation_of_duties. Neither
     # field is ever populated from a client-supplied reviewer name again.
-    separation_override_review_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("compensating_reviews.id"), nullable=True)
-    separation_override_reviewer_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
+    separation_override_review_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("compensating_reviews.id"), nullable=True
+    )
+    separation_override_reviewer_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id"), nullable=True
+    )
     separation_override_note: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
@@ -512,7 +516,9 @@ class IdempotencyRecord(Base):
     request_digest: Mapped[str] = mapped_column(String(64), nullable=False)
 
     outcome_status: Mapped[str] = mapped_column(String(20), nullable=False)  # created | denied
-    outcome_decision_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("decision_records.id"), nullable=True)
+    outcome_decision_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("decision_records.id"), nullable=True
+    )
     denial_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

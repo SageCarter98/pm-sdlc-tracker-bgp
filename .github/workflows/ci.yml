@@ -32,6 +32,15 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
+      - name: Lint and format check (ruff)
+        # Closes SDLC G3.06's "formatting, linting" leg -- config lives in
+        # backend/pyproject.toml (line-length=120, matched to this codebase's
+        # existing comment/call-site style; default pyflakes+pycodestyle
+        # rules only, no import-sorting or other reordering rule sets).
+        run: |
+          pip install ruff==0.9.6
+          ruff check .
+          ruff format --check .
       - name: Create bgp_dev roles and database (REQ-007 two-role setup)
         env:
           PGPASSWORD: ci-superuser-password

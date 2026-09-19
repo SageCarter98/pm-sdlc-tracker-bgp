@@ -1,0 +1,13 @@
+[tool.ruff]
+# 120, not ruff's 88 default: the codebase's existing style already runs long
+# explanatory comments and call sites out to ~100-110 chars deliberately (911
+# lines over 88 vs. 181 over 120, checked before picking this) -- 120 lints
+# and formats real problems without forcing a total rewrap of prose comments
+# a formatter never touches anyway.
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+# Default selection (pyflakes + a slice of pycodestyle) only -- deliberately
+# not adding import-sorting or other opinionated rule sets that would force
+# an unrelated reordering diff across the whole tree just to turn linting on.

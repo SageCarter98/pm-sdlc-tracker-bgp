@@ -33,6 +33,7 @@ uq_idempotency_scope) actually fired, answering with the same deterministic
 409 the up-front check would have given had it run second instead of
 concurrently -- never a bare 500.
 """
+
 from alembic import op
 
 revision = "0011_bgp_f03_concurrency"
