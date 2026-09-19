@@ -50,7 +50,29 @@ def get_active_membership(
     """REQ-003: resolve/verify membership from the authenticated session,
     never from a client-supplied tenant claim alone -- callers pass tenant_id
     from the URL path, and this always re-checks it against real membership
-    rows, so a forged or stale claim cannot substitute for one."""
+    rows, so a forged or stale claim cannot substitute for one.
+
+    Tenant context is set from the CLAIMED tenant_id (the URL path) BEFORE
+    the membership row is even looked up -- not after. `memberships` itself
+    is RLS-protected (`tenant_id = current_setting('app.tenant_id', true)`,
+    fail-closed with no context set), so querying it before setting context
+    always returned zero rows against real Postgres, rejecting every
+    legitimate member with "No active membership" -- a request could never
+    succeed at all. This is safe: setting context to an arbitrary claimed
+    tenant_id grants no access by itself, it only scopes what the FOLLOWING
+    query can see; the actual authorization is still the membership check
+    below, which correctly finds nothing (403) for a tenant the caller isn't
+    really in."""
+    if db.get_bind().dialect.name == "postgresql":
+        # REQ-008: reset tenant context per transaction, not per pooled
+        # connection. SET LOCAL only lasts until the transaction ends
+        # (commit, rollback, or this request's session.close()), so the next
+        # request to reuse this physical connection -- for any tenant --
+        # starts clean; it never inherits this request's setting. No-op
+        # outside Postgres (SQLite in tests has no RLS to protect, and no
+        # SET LOCAL syntax).
+        db.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": tenant_id})
+
     membership = (
         db.query(Membership)
         .filter(Membership.tenant_id == tenant_id, Membership.user_id == user.id, Membership.active.is_(True))
@@ -58,15 +80,6 @@ def get_active_membership(
     )
     if membership is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "No active membership in this organisation")
-
-    # REQ-008: reset tenant context per transaction, not per pooled
-    # connection. SET LOCAL only lasts until the transaction ends (commit,
-    # rollback, or this request's session.close()), so the next request to
-    # reuse this physical connection -- for any tenant -- starts clean; it
-    # never inherits this request's setting. No-op outside Postgres (SQLite
-    # in tests has no RLS to protect, and no SET LOCAL syntax).
-    if db.get_bind().dialect.name == "postgresql":
-        db.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": tenant_id})
 
     return membership
 

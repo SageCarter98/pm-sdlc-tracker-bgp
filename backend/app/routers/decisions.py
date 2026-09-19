@@ -692,7 +692,6 @@ def _record_decision(
                 )
 
         raise  # an unrecognised integrity conflict -- surface it rather than guessing
-    db.refresh(decision)
     return DecisionOut.model_validate(decision)
 
 
@@ -876,7 +875,10 @@ def create_exception(
         )
     )
     db.commit()
-    db.refresh(exc)
+    # No db.refresh() -- see app/db.py's SessionLocal docstring (expire_on_commit=False):
+    # every field here was already set in Python before commit, and a
+    # post-commit refresh would run with no tenant context left, hidden by
+    # RLS.
     return ExceptionOut.model_validate(exc)
 
 
@@ -912,7 +914,6 @@ def revoke_exception(
         )
     )
     db.commit()
-    db.refresh(exc)
     return ExceptionOut.model_validate(exc)
 
 
@@ -980,5 +981,4 @@ def create_compensating_review(
         )
     )
     db.commit()
-    db.refresh(review)
     return CompensatingReviewOut.model_validate(review)
