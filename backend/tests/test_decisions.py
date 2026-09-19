@@ -157,6 +157,57 @@ def test_full_approval_flow_with_separation_of_duties_override(client):
     assert approved.json()["outcome"] == "Approve"
 
 
+def test_clearing_or_reassigning_ownership_cannot_defeat_separation_of_duties(client):
+    """BGP-F02 follow-up (BGP_Follow_Up_Review_Findings_v1.0.pdf) verification
+    points 1/2: preparation is established from EvidenceRevision.actor_user_id
+    (who actually called the endpoint, immutable) -- never from the live,
+    reassignable EvidenceItem.owner_user_id. Clearing ownership, or handing
+    it to a colleague who never touched the evidence, must not let the real
+    preparer approve alone."""
+    tenant_id, created, admin_id, approver_id = _setup_project_with_second_approver(client)
+    project_id = created["project"]["id"]
+    s1_occurrence_id = next(o["id"] for o in created["occurrences"] if o["gate_id"] == "S1")
+    s1_item_id = next(e["id"] for e in created["evidence_items"] if e["gate_id"] == "S1")
+
+    # Admin completes the item as themselves, WITHOUT ever naming an owner --
+    # EvidenceItem.owner_user_id stays None the whole time.
+    _complete_item(client, tenant_id, s1_item_id)
+
+    preview = client.post(f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={})
+    digest = preview.json()["manifest_digest"]
+    assert preview.json()["hard_blockers"] == []
+
+    cleared_owner = client.post(
+        f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/decisions",
+        json={"outcome": "Approve", "manifest_digest": digest},
+        headers={"Idempotency-Key": "no-owner-key"},
+    )
+    assert cleared_owner.status_code == 403, (
+        "a never-named owner (owner_user_id=None) must not let the real preparer bypass separation of duties"
+    )
+
+    # Admin now reassigns ownership to approver2, who never actually
+    # prepared this evidence -- admin is still the one making the API call
+    # (still the attributed actor on this new revision).
+    reassign = client.post(
+        f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
+        json={"base_revision": 2, "status": "Complete", "owner_user_id": approver_id, "reference": "doc-1", "source_hash": "x"},
+    )
+    assert reassign.status_code == 201, reassign.text
+
+    preview2 = client.post(f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={})
+    digest2 = preview2.json()["manifest_digest"]
+
+    reassigned_owner = client.post(
+        f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/decisions",
+        json={"outcome": "Approve", "manifest_digest": digest2},
+        headers={"Idempotency-Key": "reassigned-owner-key"},
+    )
+    assert reassigned_owner.status_code == 403, (
+        "reassigning ownership to a colleague who never touched the evidence must not satisfy separation of duties"
+    )
+
+
 def test_compensating_review_cannot_be_created_by_the_would_be_self_approver(client):
     """BGP-F02: the review endpoint records the CALLER as reviewer_user_id --
     there is no field to submit someone else's identity, so admin cannot
@@ -220,10 +271,16 @@ def test_idempotent_retry_returns_same_decision_not_a_conflict(client):
     s1_occurrence_id = next(o["id"] for o in created["occurrences"] if o["gate_id"] == "S1")
     s1_item_id = next(e["id"] for e in created["evidence_items"] if e["gate_id"] == "S1")
 
+    # BGP-F02 follow-up: approver2 must actually be the one calling this
+    # endpoint (EvidenceRevision.actor_user_id) for admin's later decision to
+    # be a genuine non-self-only approval -- naming approver_id as
+    # owner_user_id alone no longer establishes preparation.
+    login(client, "approver2@tenant-a.example")
     client.post(
         f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
         json={"base_revision": 1, "status": "Complete", "owner_user_id": approver_id, "reference": "doc-1"},
     )
+    login(client, "admin@tenant-a.example")
     preview = client.post(f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={})
     digest = preview.json()["manifest_digest"]
 
@@ -255,10 +312,13 @@ def test_second_decision_on_same_occurrence_requires_superseding(client):
     s1_occurrence_id = next(o["id"] for o in created["occurrences"] if o["gate_id"] == "S1")
     s1_item_id = next(e["id"] for e in created["evidence_items"] if e["gate_id"] == "S1")
 
+    # BGP-F02 follow-up: same reasoning as test_idempotent_retry_... above.
+    login(client, "approver2@tenant-a.example")
     client.post(
         f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
         json={"base_revision": 1, "status": "Complete", "owner_user_id": approver_id, "reference": "doc-1"},
     )
+    login(client, "admin@tenant-a.example")
     preview = client.post(f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={})
     digest = preview.json()["manifest_digest"]
 

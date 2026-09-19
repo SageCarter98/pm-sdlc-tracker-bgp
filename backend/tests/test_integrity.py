@@ -6,6 +6,7 @@ Postgres-only and lives in test_wp08_tenant_isolation_rls.py instead."""
 from app.db import get_db
 from app.main import app
 from app.models import AuditEvent
+from tests.conftest import login
 from tests.test_decisions import _setup_project_with_second_approver
 
 
@@ -18,10 +19,18 @@ def _record_one_approval(client, tenant_id, created, approver_id, key="k1"):
     s1_occurrence_id = next(o["id"] for o in created["occurrences"] if o["gate_id"] == "S1")
     s1_item_id = next(e["id"] for e in created["evidence_items"] if e["gate_id"] == "S1")
 
+    # BGP-F02 follow-up: preparation is attributed to whoever actually calls
+    # this endpoint (EvidenceRevision.actor_user_id), not to the named
+    # owner_user_id field -- approver2 has to genuinely be the one who
+    # completes this item so admin (the decider below) is a real, different
+    # preparer, not just a different name written into a field admin itself
+    # submitted.
+    login(client, "approver2@tenant-a.example")
     client.post(
         f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
         json={"base_revision": 1, "status": "Complete", "owner_user_id": approver_id, "reference": "doc-1"},
     )
+    login(client, "admin@tenant-a.example")
     preview = client.post(f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={})
     digest = preview.json()["manifest_digest"]
     decide = client.post(

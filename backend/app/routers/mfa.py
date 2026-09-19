@@ -8,6 +8,7 @@ from app.db import get_db
 from app.deps import PREAUTH_SESSION_COOKIE, SESSION_COOKIE, get_current_user, get_session_mfa_verified
 from app.models import MfaRecoveryCode, User
 from app.security import (
+    PENDING_MFA_MAX_AGE_SECONDS,
     create_session_token,
     decrypt_mfa_secret,
     encrypt_mfa_secret,
@@ -67,15 +68,23 @@ def enroll(
     requires THIS session to have already passed a second-factor check
     (`mfa_verified`) -- a password-only session can no longer overwrite an
     existing enrolled factor. First-time enrolment (nothing to replace yet)
-    still only needs an authenticated, password-verified session."""
+    still only needs an authenticated, password-verified session.
+
+    BGP-F01 follow-up fix: the proposed secret is staged in
+    `pending_mfa_secret`/`pending_mfa_created_at`, NOT written into
+    `mfa_secret`/`mfa_enabled` -- so an already-enrolled account keeps its
+    working factor (and stays `mfa_enabled=True`) for the entire replacement
+    window. Calling this again before verifying just overwrites the pending
+    secret (fine -- it hasn't taken effect yet); it can never touch the
+    active factor. Only verify() promotes a pending secret to active."""
     if user.mfa_enabled and not mfa_verified:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "Re-verify your current second factor (or use account recovery) before replacing it",
         )
     plaintext_secret = new_totp_secret()
-    user.mfa_secret = encrypt_mfa_secret(plaintext_secret)
-    user.mfa_enabled = False
+    user.pending_mfa_secret = encrypt_mfa_secret(plaintext_secret)
+    user.pending_mfa_created_at = datetime.now(timezone.utc)
     db.commit()
     return EnrollOut(provisioning_uri=totp_provisioning_uri(plaintext_secret, user.email))
 
@@ -90,12 +99,35 @@ def verify(
     keep being treated as MFA-satisfying). The CALLING session is kept
     usable by reissuing its cookie here with the new token_version and
     `mfa_verified=True` -- completing a second-factor check is exactly the
-    action that should leave a session MFA-satisfying."""
-    if not user.mfa_secret or not verify_totp(decrypt_mfa_secret(user.mfa_secret), payload.code):
+    action that should leave a session MFA-satisfying.
+
+    BGP-F01 follow-up fix: verifies against `pending_mfa_secret` (the
+    proposed replacement from enroll()), never the still-active
+    `mfa_secret` -- so success is exactly what atomically promotes the
+    pending secret to active. An expired pending secret (older than
+    PENDING_MFA_MAX_AGE_SECONDS) is cleared and rejected here rather than
+    silently accepted, so an abandoned replacement cannot be redeemed long
+    after the fact; the active factor was never touched by enroll() in
+    either case."""
+    if user.pending_mfa_secret is None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "No MFA enrolment in progress -- call /auth/mfa/enroll first")
+    pending_created_at = user.pending_mfa_created_at
+    if pending_created_at is not None and pending_created_at.tzinfo is None:
+        pending_created_at = pending_created_at.replace(tzinfo=timezone.utc)
+    if pending_created_at is None or (datetime.now(timezone.utc) - pending_created_at).total_seconds() > PENDING_MFA_MAX_AGE_SECONDS:
+        user.pending_mfa_secret = None
+        user.pending_mfa_created_at = None
+        log_security_event(db, "mfa_enrolment_expired", user_id=user.id)
+        db.commit()
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "MFA enrolment expired -- call /auth/mfa/enroll again")
+    if not verify_totp(decrypt_mfa_secret(user.pending_mfa_secret), payload.code):
         log_security_event(db, "mfa_verify_failed", user_id=user.id)
         db.commit()
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid MFA code")
+    user.mfa_secret = user.pending_mfa_secret
     user.mfa_enabled = True
+    user.pending_mfa_secret = None
+    user.pending_mfa_created_at = None
     user.token_version += 1
     db.query(MfaRecoveryCode).filter(MfaRecoveryCode.user_id == user.id).delete()
     codes = generate_recovery_codes()
@@ -166,6 +198,11 @@ def recover(payload: RecoverRequest, db: Session = Depends(get_db)) -> dict:
     record.used_at = datetime.now(timezone.utc)
     user.mfa_enabled = False
     user.mfa_secret = None
+    # BGP-F01 follow-up: a recovery clears any in-flight replacement too --
+    # a pending secret from before this recovery must not remain redeemable
+    # against an account that just had its factor reset out from under it.
+    user.pending_mfa_secret = None
+    user.pending_mfa_created_at = None
     user.token_version += 1
     log_security_event(db, "mfa_recovery_used", user_id=user.id)
     db.commit()

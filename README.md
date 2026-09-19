@@ -4,7 +4,7 @@ Multi-tenant SaaS for running the KenAddme PM and SDLC gate frameworks (and othe
 governance frameworks) inside a tenant's own projects: templates, evidence,
 exceptions, decisions, export/import.
 
-**Status (2026-09-17): backend work packages WP01, WP03–WP10 and WP12 are built**
+**Status (2026-09-18): backend work packages WP01, WP03–WP10 and WP12 are built**
 -- identity/MFA/invitations, PostgreSQL RLS tenant isolation, versioned templates
 with a declarative rule interpreter, projects/evidence with append-only revision
 history, exceptions/decisions (idempotent, separation-of-duties enforced via an
@@ -39,11 +39,12 @@ Section 7 before treating anything gated on them as settled.
 Twelve decisions (DEC01–DEC12) are only partly resolved — see
 `docs/blueprint/Blueprint_Working_Source.md` Section 7. **DEC01 (named delivery
 lead and independent reviewer) is resolved** (delivery lead: Freston Kenny
-Adedeme; independent reviewer: Milton) — but naming the reviewer is not the
-same as a completed review: no code in this repository has actually been
-reviewed by Milton yet (tracker item #124 stays "Not started" until that
-happens; see `TRACKER.md`'s "Named roles" section). DEC02–DEC12 remain
-otherwise as the Blueprint records them.
+Adedeme; independent reviewer: Milton, who now also holds read access to this
+repository and is named in `.github/CODEOWNERS`) — but naming the reviewer,
+and giving him access, is not the same as a completed review: no code in this
+repository has actually been reviewed by Milton yet (tracker item #124 stays
+"Not started" until that happens; see `TRACKER.md`'s "Named roles" section).
+DEC02–DEC12 remain otherwise as the Blueprint records them.
 
 ## Repository layout
 

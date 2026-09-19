@@ -30,6 +30,14 @@ _PREAUTH_SERIALIZER = URLSafeTimedSerializer(secret_key=settings.session_secret_
 # usable to attempt MFA long after the password step.
 PREAUTH_MAX_AGE_SECONDS = 60 * 5
 
+# BGP-F01 follow-up: how long users.pending_mfa_secret stays redeemable
+# before app/routers/mfa.py:verify() treats it as abandoned and requires a
+# fresh /enroll call. An abandoned or expired replacement never touches the
+# active mfa_secret, so this bound only limits how long a stale QR code /
+# provisioning URI stays usable -- it does not affect the currently-enrolled
+# factor at all.
+PENDING_MFA_MAX_AGE_SECONDS = 60 * 10
+
 # WP12/REQ-045: encrypts users.mfa_secret at rest. Fernet is authenticated
 # (tampering is detected, not just confidentiality) and self-describes its
 # own key version, which matters if/when key rotation is designed later

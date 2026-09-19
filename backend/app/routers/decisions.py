@@ -5,7 +5,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -17,6 +17,7 @@ from app.models import (
     CompensatingReview,
     DecisionRecord,
     EvidenceItem,
+    EvidenceRevision,
     ExceptionRecord,
     GateOccurrence,
     IdempotencyRecord,
@@ -66,21 +67,29 @@ def _get_occurrence_or_404(db: Session, project_id: str, occurrence_id: str) -> 
     return occurrence
 
 
-def _exception_is_currently_valid(db: Session, exc: ExceptionRecord) -> bool:
+def _exception_is_currently_valid(db: Session, exc: ExceptionRecord, *, lock: bool = False) -> bool:
     """REQ-020: never trust `status` alone. Re-check expiry against server
     time and re-check the approving actor still holds an active,
     authorising membership -- a role change or deactivation after the
-    exception was granted silently invalidates it, exactly as intended."""
+    exception was granted silently invalidates it, exactly as intended.
+
+    BGP-F03 follow-up: `lock=True` (decision-commit callers only, via
+    _compute_readiness) locks the approver's Membership row FOR UPDATE, so a
+    concurrent revocation of the authority this exception relies on can no
+    longer race between this check and the decision commit -- the same
+    'read every mutable input inside the protection' gap the original F03
+    fix left open for exception validity specifically."""
     if exc.status != "active":
         return False
     now = _now()
     if not (_as_utc(exc.starts_at) <= now <= _as_utc(exc.expires_at)):
         return False
-    approver_membership = (
-        db.query(Membership)
-        .filter(Membership.tenant_id == exc.tenant_id, Membership.user_id == exc.approving_user_id, Membership.active.is_(True))
-        .one_or_none()
+    query = db.query(Membership).filter(
+        Membership.tenant_id == exc.tenant_id, Membership.user_id == exc.approving_user_id, Membership.active.is_(True)
     )
+    if lock:
+        query = query.with_for_update()
+    approver_membership = query.one_or_none()
     return approver_membership is not None and approver_membership.role in DECISION_AUTHORITY_ROLES
 
 
@@ -119,10 +128,17 @@ def _compute_readiness(db: Session, project: Project, occurrence: GateOccurrence
         if item.blocker_level == "advisory":
             advisory_unsatisfied.append(item.id)
             continue
-        excepted = any(
-            _exception_is_currently_valid(db, exc)
-            for exc in db.query(ExceptionRecord).filter(ExceptionRecord.evidence_item_id == item.id).all()
+        exception_query = (
+            db.query(ExceptionRecord).filter(ExceptionRecord.evidence_item_id == item.id).order_by(ExceptionRecord.id)
         )
+        if lock:
+            # BGP-F03 follow-up: locked in the same fixed order as evidence
+            # rows above (evidence, then exceptions, then the approver
+            # membership inside _exception_is_currently_valid) so concurrent
+            # decision-committing transactions can still only ever wait on
+            # each other, never deadlock.
+            exception_query = exception_query.with_for_update()
+        excepted = any(_exception_is_currently_valid(db, exc, lock=lock) for exc in exception_query.all())
         if excepted:
             continue
         (hard_blockers if item.blocker_level == "hard" else conditional_blockers).append(item.id)
@@ -308,7 +324,31 @@ def _check_separation_of_duties(
         .filter(EvidenceItem.occurrence_id == occurrence.id, EvidenceItem.blocker_level != "advisory")
         .all()
     )
-    preparers = {i.owner_user_id for i in required_items if i.owner_user_id is not None}
+    # BGP-F02 follow-up: preparation is established from the ATTRIBUTED
+    # revision each item is currently at (EvidenceRevision.actor_user_id --
+    # immutable, set once at insert to the real caller, see
+    # app/routers/projects.py:create_evidence_revision), never from the
+    # live, reassignable EvidenceItem.owner_user_id. Reassigning or clearing
+    # ownership no longer lets a preparer dodge this check, because it
+    # doesn't change who actually authored the revision the manifest
+    # reflects. "Included in the reviewed manifest" is the explicit rule for
+    # which contribution counts: exactly the revision_number this item is
+    # currently at, i.e. the one the caller's manifest_digest was computed
+    # against (readiness's staleness check above already guarantees that).
+    items_with_revisions = [i for i in required_items if i.latest_revision_number > 0]
+    preparers: set[str] = set()
+    if items_with_revisions:
+        revision_rows = (
+            db.query(EvidenceRevision)
+            .filter(EvidenceRevision.evidence_item_id.in_([i.id for i in items_with_revisions]))
+            .all()
+        )
+        latest_revision_by_item = {i.id: i.latest_revision_number for i in items_with_revisions}
+        preparers = {
+            r.actor_user_id
+            for r in revision_rows
+            if r.revision_number == latest_revision_by_item.get(r.evidence_item_id)
+        }
     if not preparers or preparers != {actor_user_id}:
         return None  # not a self-only-approval situation
 
@@ -336,9 +376,16 @@ def _check_separation_of_duties(
     if review.reviewer_user_id == actor_user_id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "The compensating reviewer must be independent of the deciding actor")
 
+    # BGP-F03 follow-up: this function only ever runs from the decision-
+    # commit path (_record_decision), never preview -- so, unlike
+    # _compute_readiness, it can unconditionally lock the reviewer's
+    # authority rows FOR UPDATE rather than needing a lock=True switch. A
+    # concurrent revocation of either row can now only serialise against
+    # this transaction, not race it.
     reviewer_membership = (
         db.query(Membership)
         .filter(Membership.tenant_id == tenant_id, Membership.user_id == review.reviewer_user_id, Membership.active.is_(True))
+        .with_for_update()
         .one_or_none()
     )
     if reviewer_membership is None or reviewer_membership.role not in DECISION_AUTHORITY_ROLES:
@@ -346,6 +393,7 @@ def _check_separation_of_duties(
     reviewer_pm = (
         db.query(ProjectMembership)
         .filter(ProjectMembership.project_id == project_id, ProjectMembership.user_id == review.reviewer_user_id)
+        .with_for_update()
         .one_or_none()
     )
     if reviewer_pm is None or reviewer_pm.role not in DECISION_AUTHORITY_ROLES:
@@ -550,31 +598,38 @@ def _record_decision(
         separation_override_note=compensating_review.note if compensating_review else None,
     )
     db.add(decision)
-    db.flush()
-    db.add(
-        AuditEvent(
-            tenant_id=tenant_id,
-            project_id=project.id,
-            occurrence_id=occurrence.id,
-            decision_id=decision.id,
-            actor_user_id=membership.user_id,
-            event_type="decision_recorded",
-            detail={"outcome": payload.outcome, "supersedes": supersedes_decision_id},
-            sequence=_next_audit_sequence(db, project.id),
-        )
-    )
-    db.add(
-        IdempotencyRecord(
-            tenant_id=tenant_id,
-            actor_user_id=membership.user_id,
-            operation=operation,
-            idempotency_key=idempotency_key,
-            request_digest=request_digest,
-            outcome_status="created",
-            outcome_decision_id=decision.id,
-        )
-    )
     try:
+        # BGP-F03 follow-up: the flush is now INSIDE this try block, not
+        # before it. flush() (not just commit()) is what can hit migration
+        # 0011's partial unique indexes -- a concurrent root/superseding
+        # decision winning the race could raise IntegrityError right here,
+        # and it used to bypass the conflict handler below entirely,
+        # surfacing as a bare unhandled 500 instead of the deterministic
+        # response every other conflict path in this function gives.
+        db.flush()
+        db.add(
+            AuditEvent(
+                tenant_id=tenant_id,
+                project_id=project.id,
+                occurrence_id=occurrence.id,
+                decision_id=decision.id,
+                actor_user_id=membership.user_id,
+                event_type="decision_recorded",
+                detail={"outcome": payload.outcome, "supersedes": supersedes_decision_id},
+                sequence=_next_audit_sequence(db, project.id),
+            )
+        )
+        db.add(
+            IdempotencyRecord(
+                tenant_id=tenant_id,
+                actor_user_id=membership.user_id,
+                operation=operation,
+                idempotency_key=idempotency_key,
+                request_digest=request_digest,
+                outcome_status="created",
+                outcome_decision_id=decision.id,
+            )
+        )
         db.commit()
     except IntegrityError:
         # BGP-F03: a concurrent request for the SAME occurrence/decision won
@@ -588,6 +643,18 @@ def _record_decision(
         # migration 0011_bgp_f03_concurrency) and answer exactly
         # as if that check had caught it originally.
         db.rollback()
+
+        # BGP-F03 follow-up: db.rollback() ends the transaction that
+        # get_active_membership's SET LOCAL app.tenant_id applied to (SET
+        # LOCAL only lasts until commit/rollback/session close -- see that
+        # function's docstring). Every query below runs under RLS and MUST
+        # see this tenant's rows, so tenant context has to be reapplied to
+        # the new transaction before any of them run -- otherwise
+        # current_setting('app.tenant_id', true) is NULL, FORCE ROW LEVEL
+        # SECURITY hides every row, and this whole conflict-resolution path
+        # silently falls through to the "unrecognised conflict" re-raise.
+        if db.get_bind().dialect.name == "postgresql":
+            db.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": tenant_id})
 
         winner = (
             db.query(IdempotencyRecord)
