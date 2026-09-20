@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Decide: {{ occurrence.gate_id }}{% endblock %}
+{% block content %}
+<h1>Decide: {{ occurrence.gate_id }} (occurrence #{{ occurrence.sequence }})</h1>
+
+{% if preview.hard_blockers or preview.conditional_blockers %}
+<div class="blocker-list">
+  <h2>Outstanding blockers</h2>
+  <ul>
+    {% for b in preview.blocker_explanations %}
+    <li>
+      <strong>{{ b.blocker_level | capitalize }} blocker</strong> — {{ b.explanation }}
+      <br><span class="hint">What to do: {{ b.corrective_action }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% else %}
+<p class="flash" role="status">No outstanding blockers — this occurrence is ready for a decision.</p>
+{% endif %}
+
+{% if preview.advisory_unsatisfied %}
+<p class="hint">{{ preview.advisory_unsatisfied | length }} advisory item(s) are unsatisfied but do not block a decision.</p>
+{% endif %}
+
+<h2>Record a decision</h2>
+{% if preview.permitted_outcomes %}
+<form method="post" action="/ui/orgs/{{ tenant_id }}/projects/{{ project_id }}/occurrences/{{ occurrence.id }}/decide" novalidate>
+  <input type="hidden" name="manifest_digest" value="{{ preview.manifest_digest }}">
+
+  <fieldset>
+    <legend>Outcome</legend>
+    {% for outcome in preview.permitted_outcomes %}
+    <div>
+      <input type="radio" id="outcome-{{ loop.index }}" name="outcome" value="{{ outcome }}" required {% if loop.first %}checked{% endif %}>
+      <label for="outcome-{{ loop.index }}">{{ outcome }}</label>
+    </div>
+    {% endfor %}
+  </fieldset>
+
+  {% if "Approve with conditions" in preview.permitted_outcomes %}
+  <fieldset>
+    <legend>Conditions (only used if you choose "Approve with conditions" above)</legend>
+    <div class="field">
+      <label for="condition_items">Conditions (one per line, or comma-separated)</label>
+      <textarea id="condition_items" name="condition_items" rows="3"></textarea>
+    </div>
+    <div class="field">
+      <label for="condition_owner_user_id">Condition owner (user id)</label>
+      <input type="text" id="condition_owner_user_id" name="condition_owner_user_id">
+    </div>
+    <div class="field">
+      <label for="condition_deadline">Deadline</label>
+      <input type="datetime-local" id="condition_deadline" name="condition_deadline">
+    </div>
+  </fieldset>
+  {% endif %}
+
+  <button type="submit">Record decision</button>
+</form>
+{% else %}
+<p>No outcome is currently permitted for this occurrence — resolve the blockers above first.</p>
+{% endif %}
+
+<p><a href="/ui/orgs/{{ tenant_id }}/my-work">Back to My work</a></p>
+{% endblock %}

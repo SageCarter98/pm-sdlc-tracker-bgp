@@ -49,6 +49,12 @@ class MembershipOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class MyOrgOut(BaseModel):
+    tenant_id: str
+    tenant_name: str
+    role: str
+
+
 def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
@@ -80,7 +86,10 @@ def create_org(payload: CreateOrgRequest, user: User = Depends(get_current_user)
         db.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": tenant.id})
     db.add(Membership(tenant_id=tenant.id, user_id=user.id, role=Role.TENANT_ADMINISTRATOR.value))
     db.commit()
-    db.refresh(tenant)
+    # No db.refresh() -- expire_on_commit=False (app/db.py) already keeps
+    # every field set in Python before commit; tenants carries no RLS
+    # (it isn't tenant-owned data) so this one was merely unnecessary, not
+    # broken, but the same reasoning applies everywhere in this codebase.
     return tenant
 
 
@@ -161,7 +170,12 @@ def accept_invitation(
     db.add(membership)
     log_security_event(db, "invitation_accepted", user_id=user.id, tenant_id=invitation.tenant_id, detail={"role": invitation.role})
     db.commit()
-    db.refresh(membership)
+    # No db.refresh() -- see app/db.py's SessionLocal docstring
+    # (expire_on_commit=False): every field here was already set in Python
+    # before commit, and memberships is RLS-protected, so a post-commit
+    # refresh would run with no tenant context left and raise -- this was
+    # STILL broken after migration 0014's ordering fix (which only fixed
+    # the INSERT itself), found 2026-09-20 while building WP11.
     return membership
 
 
@@ -170,6 +184,22 @@ def my_membership(membership: Membership = Depends(get_active_membership)) -> Me
     """REQ-003: active tenant resolved from session and re-verified here,
     never trusted from a client-supplied claim."""
     return membership
+
+
+@router.get("/me/orgs", response_model=list[MyOrgOut])
+def my_orgs(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> list[MyOrgOut]:
+    """WP11 frontend entry point: which organisations can this user act in,
+    before any tenant_id is known to put in a URL -- get_active_membership
+    can't help here, it requires a tenant_id already claimed. Uses migration
+    0015's narrow self-lookup policy (see there for why the ordinary
+    per-tenant RLS policy structurally can't answer this in one query).
+    `tenants` itself carries no RLS (it isn't tenant-owned data, see WP04
+    migration's TENANT_OWNED_TABLES), so the name lookup needs no context."""
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(text("SET LOCAL app.member_user_id = :uid"), {"uid": user.id})
+    rows = db.query(Membership).filter(Membership.user_id == user.id, Membership.active.is_(True)).all()
+    tenant_names = {t.id: t.name for t in db.query(Tenant).filter(Tenant.id.in_([m.tenant_id for m in rows])).all()}
+    return [MyOrgOut(tenant_id=m.tenant_id, tenant_name=tenant_names.get(m.tenant_id, ""), role=m.role) for m in rows]
 
 
 @router.get("/orgs/{tenant_id}/approval-gate-check")

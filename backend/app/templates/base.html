@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Build Governance Platform{% endblock %} · Build Governance Platform</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to main content</a>
+  <header class="site-header">
+    <div class="site-header__inner">
+      <a class="brand" href="{{ '/ui/orgs/' ~ tenant_id ~ '/my-work' if tenant_id else '/ui/orgs' }}">
+        <span class="brand__mark" aria-hidden="true">BG</span>
+        <span class="brand__name">Build Governance Platform</span>
+      </a>
+      <span class="prototype-tag">Local prototype — synthetic data only</span>
+      {% if current_user %}
+      <nav aria-label="Primary" class="primary-nav">
+        <ul>
+          {% if tenant_id %}<li><a href="/ui/orgs/{{ tenant_id }}/my-work">My work</a></li>{% endif %}
+          <li><a href="/ui/orgs">Switch organisation</a></li>
+        </ul>
+        <form method="post" action="/ui/logout" class="inline-form">
+          <button type="submit" class="button--ghost">Log out <span class="user-email">({{ current_user.email }})</span></button>
+        </form>
+      </nav>
+      {% endif %}
+    </div>
+  </header>
+  <main id="main">
+    <div class="page">
+      {% if flash %}
+      <p class="flash" role="status" aria-live="polite">{{ flash }}</p>
+      {% endif %}
+      {% if errors %}
+      <div class="error-summary" role="alert" tabindex="-1" id="error-summary">
+        <h2>There is a problem</h2>
+        <ul>
+          {% for e in errors %}<li>{{ e }}</li>{% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+      {% block content %}{% endblock %}
+    </div>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

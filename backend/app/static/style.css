@@ -1,0 +1,320 @@
+/* WP11 design system. Accessible-first (WCAG 2.2 AA per Blueprint Sec.4.3):
+   real color contrast, visible keyboard focus, status is always text-plus-
+   color, never color alone. Server-rendered HTML, no framework (DEC04) --
+   this file IS the visual system, not a stand-in for one. */
+
+:root {
+  /* Brand: a single indigo hue, stepped for depth rather than flat fills. */
+  --brand-50: #eef2ff;
+  --brand-100: #e0e7ff;
+  --brand-500: #4338ca;
+  --brand-600: #3730a3;
+  --brand-700: #2e2a85;
+
+  --ink-900: #14161a;
+  --ink-700: #383d47;
+  --ink-500: #666d78;
+  --ink-300: #c6cbd3;
+  --ink-200: #dde1e6;
+  --ink-100: #eef0f3;
+  --paper: #ffffff;
+  --canvas: #f4f5f8;
+
+  --success-600: #15803d;
+  --success-100: #dcfce7;
+  --error-600: #b91c1c;
+  --error-100: #fee2e2;
+  --warning-600: #a15c00;
+  --warning-100: #fef3c7;
+  --neutral-600: #52606d;
+  --neutral-100: #e6e9ee;
+
+  --focus-ring: #f5a623;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+
+  --shadow-card: 0 1px 2px rgba(20, 22, 26, 0.04), 0 8px 24px -8px rgba(20, 22, 26, 0.10);
+  --shadow-sm: 0 1px 2px rgba(20, 22, 26, 0.06);
+
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+* { box-sizing: border-box; }
+html { color-scheme: light; }
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--ink-900);
+  background: var(--canvas);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------------------------------------------------------------- Skip link */
+.skip-link {
+  position: absolute;
+  left: -999px;
+  top: 0;
+  background: var(--brand-500);
+  color: #fff;
+  padding: 0.6rem 1.1rem;
+  z-index: 10;
+  border-radius: 0 0 var(--radius-sm) 0;
+  font-weight: 600;
+}
+.skip-link:focus { left: 0; }
+
+/* ------------------------------------------------------------- Focus states
+   Every interactive element gets the same strong, high-contrast ring --
+   never removed, never replaced by a subtler "design-y" alternative. */
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible,
+textarea:focus-visible, [tabindex]:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+a { color: var(--brand-500); text-decoration-thickness: 1px; transition: color 120ms var(--ease-out); }
+a:hover { color: var(--brand-600); }
+a:visited { color: #5b3a91; }
+
+/* --------------------------------------------------------------- Page shell */
+.site-header {
+  background: var(--paper);
+  border-bottom: 1px solid var(--ink-200);
+}
+.site-header__inner {
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: 0.9rem 1.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 1.25rem;
+}
+
+.brand { display: flex; align-items: center; gap: 0.6rem; text-decoration: none; }
+.brand__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(155deg, var(--brand-500), var(--brand-700));
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.8rem;
+  letter-spacing: 0.02em;
+}
+.brand__name { font-weight: 700; color: var(--ink-900); font-size: 1rem; }
+.prototype-tag {
+  font-size: 0.75rem;
+  color: var(--warning-600);
+  background: var(--warning-100);
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+.primary-nav { margin-left: auto; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.primary-nav ul { list-style: none; display: flex; gap: 0.35rem; margin: 0; padding: 0; }
+.primary-nav a {
+  display: inline-block;
+  padding: 0.4rem 0.75rem;
+  border-radius: var(--radius-sm);
+  color: var(--ink-700);
+  text-decoration: none;
+  font-weight: 500;
+  font-size: 0.9rem;
+  transition: background-color 120ms var(--ease-out), color 120ms var(--ease-out);
+}
+.primary-nav a:hover { background: var(--ink-100); color: var(--ink-900); }
+.user-email { color: inherit; opacity: 0.75; font-weight: 400; }
+
+main { padding: 2.5rem 1.5rem 4rem; }
+.page {
+  max-width: 64rem;
+  margin: 0 auto;
+  background: var(--paper);
+  border: 1px solid var(--ink-200);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: 2.25rem 2.5rem;
+}
+
+h1 {
+  margin: 0 0 1.5rem;
+  font-size: 1.6rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--ink-900);
+}
+h2 { font-size: 1.05rem; font-weight: 600; margin: 2rem 0 0.75rem; color: var(--ink-900); }
+
+/* ------------------------------------------------------------------ Forms */
+.field { margin-bottom: 1.25rem; display: flex; flex-direction: column; gap: 0.35rem; max-width: 26rem; }
+.field label { font-weight: 600; font-size: 0.9rem; color: var(--ink-700); }
+.field input, .field select, .field textarea,
+input[type="text"], input[type="email"], input[type="password"], input[type="datetime-local"], select, textarea {
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--ink-300);
+  border-radius: var(--radius-sm);
+  font-size: 0.95rem;
+  font-family: inherit;
+  background: var(--paper);
+  color: var(--ink-900);
+  transition: border-color 140ms var(--ease-out), box-shadow 140ms var(--ease-out);
+}
+input:hover, select:hover, textarea:hover { border-color: var(--ink-500); }
+input:focus-visible, select:focus-visible, textarea:focus-visible {
+  border-color: var(--brand-500);
+}
+.hint { color: var(--ink-500); font-size: 0.85rem; }
+
+.filter-form { display: flex; flex-direction: row; align-items: flex-end; gap: 0.75rem; flex-wrap: wrap; }
+.field--tight { margin-bottom: 0; }
+
+fieldset { border: 1px solid var(--ink-200); border-radius: var(--radius-md); margin: 0 0 1.25rem; padding: 1rem 1.25rem 1.25rem; }
+legend { font-weight: 600; padding: 0 0.35rem; font-size: 0.9rem; }
+fieldset .field { margin-bottom: 0.6rem; }
+fieldset > div { margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem; }
+
+/* ----------------------------------------------------------------- Buttons
+   Transform-only transitions (GPU, interruptible); press feedback via
+   scale(0.97) rather than color alone. */
+button, .button {
+  appearance: none;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  padding: 0.65rem 1.3rem;
+  border-radius: var(--radius-sm);
+  background: var(--brand-500);
+  color: #fff;
+  box-shadow: var(--shadow-sm);
+  transition: transform 160ms var(--ease-out), background-color 140ms var(--ease-out);
+}
+button:hover { background: var(--brand-600); }
+button:active { transform: scale(0.97); }
+
+button.secondary, button[class~="secondary"] {
+  background: var(--paper);
+  color: var(--brand-500);
+  border: 1px solid var(--brand-500);
+  box-shadow: none;
+}
+button.secondary:hover { background: var(--brand-50); }
+
+.button--ghost {
+  background: transparent;
+  color: var(--ink-700);
+  box-shadow: none;
+  padding: 0.5rem 0.85rem;
+  font-weight: 500;
+}
+.button--ghost:hover { background: var(--ink-100); color: var(--ink-900); }
+
+.inline-form { display: inline; }
+.button-row { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.5rem; }
+
+/* --------------------------------------------------------------- Messages */
+.error-summary {
+  border: 1px solid var(--error-600);
+  background: var(--error-100);
+  color: var(--error-600);
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.5rem;
+  border-radius: var(--radius-md);
+}
+.error-summary h2 { margin: 0 0 0.4rem; font-size: 1rem; color: var(--error-600); }
+.error-summary ul { margin: 0; padding-left: 1.2rem; }
+
+.flash {
+  border: 1px solid var(--success-600);
+  background: var(--success-100);
+  color: var(--success-600);
+  padding: 0.75rem 1.1rem;
+  margin-bottom: 1.5rem;
+  border-radius: var(--radius-md);
+  font-weight: 500;
+}
+
+/* ----------------------------------------------------------------- Tables */
+table { width: 100%; border-collapse: collapse; margin-bottom: 1.5rem; font-size: 0.92rem; }
+caption { text-align: left; color: var(--ink-500); font-size: 0.85rem; margin-bottom: 0.5rem; }
+th, td { text-align: left; padding: 0.7rem 0.6rem; border-bottom: 1px solid var(--ink-100); vertical-align: top; }
+th { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-500); font-weight: 600; border-bottom: 2px solid var(--ink-200); }
+tbody tr { transition: background-color 120ms var(--ease-out); }
+tbody tr:hover { background: var(--canvas); }
+
+/* Status is always text; color is reinforcement only (never color alone). */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  background: var(--neutral-100);
+  color: var(--neutral-600);
+  border: 1px solid transparent;
+}
+.status-badge::before { content: "●"; font-size: 0.6rem; }
+.status-badge[data-status="Complete"] { background: var(--success-100); color: var(--success-600); }
+.status-badge[data-status="In progress"] { background: var(--brand-100); color: var(--brand-600); }
+.status-badge[data-status="Not started"] { background: var(--neutral-100); color: var(--neutral-600); }
+.status-badge[data-status="Approve"] { background: var(--success-100); color: var(--success-600); }
+.status-badge[data-status="Approve with conditions"] { background: var(--warning-100); color: var(--warning-600); }
+.status-badge[data-status="Hold"], .status-badge[data-status="Redirect"] { background: var(--warning-100); color: var(--warning-600); }
+.status-badge[data-status="Terminate"] { background: var(--error-100); color: var(--error-600); }
+
+.blocker-list ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.75rem; }
+.blocker-list li {
+  border: 1px solid var(--error-100);
+  background: var(--error-100);
+  border-radius: var(--radius-md);
+  padding: 0.85rem 1rem;
+}
+
+.secret-code {
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  letter-spacing: 0.06em;
+  padding: 0.6rem 0.85rem;
+  background: var(--ink-100);
+  border-radius: var(--radius-sm);
+  display: inline-block;
+}
+
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.5rem 1.5rem; margin: 1rem 0; }
+dt { font-weight: 600; color: var(--ink-500); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.03em; }
+dd { margin: 0; }
+
+/* ------------------------------------------------------------- Responsive */
+@media (max-width: 40rem) {
+  main { padding: 1rem 0.75rem 3rem; }
+  .page { padding: 1.5rem; border-radius: var(--radius-md); }
+  .site-header__inner { padding: 0.75rem 1rem; }
+  .primary-nav { margin-left: 0; width: 100%; justify-content: space-between; }
+  table, thead, tbody, th, td, tr { display: block; }
+  thead { display: none; }
+  tbody tr { border-bottom: 2px solid var(--ink-200); padding: 0.75rem 0; }
+  td { border-bottom: none; padding: 0.3rem 0; }
+  td::before { content: attr(data-label); display: block; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--ink-500); font-weight: 600; }
+}
+
+/* ------------------------------------------------------- Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  button, input, select, textarea { transition: none; }
+}

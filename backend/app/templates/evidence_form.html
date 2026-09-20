@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}{{ item.gate_id }} / {{ item.rule_id }}{% endblock %}
+{% block content %}
+<h1>{{ item.gate_id }} / {{ item.rule_id }}</h1>
+<p>Current status: <span class="status-badge" data-status="{{ item.status }}">{{ item.status }}</span>
+  {% if item.required %}— <strong>required</strong> ({{ item.blocker_level }} blocker){% endif %}
+</p>
+
+{% if draft %}
+<p class="hint">You have an unsubmitted draft saved for this item. The form below is pre-filled with it.</p>
+{% endif %}
+
+<form method="post" action="/ui/orgs/{{ tenant_id }}/evidence/{{ item.id }}/submit" novalidate>
+  <div class="field">
+    <label for="status">New status</label>
+    <select id="status" name="status" required>
+      {% for s in statuses %}
+      <option value="{{ s }}" {% if (draft and draft.form_data.status == s) or (not draft and item.status == s) %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label for="reference">Reference (link, document id, or note)</label>
+    <input type="text" id="reference" name="reference" value="{{ (draft.form_data.reference if draft else item.reference) or '' }}">
+    <span class="hint">Required if you set this to "Complete" and it is a required item.</span>
+  </div>
+  <div class="button-row">
+    <button type="submit">Submit revision</button>
+    <button type="submit" form="save-draft-form" class="secondary">Save as draft</button>
+  </div>
+</form>
+
+<form id="save-draft-form" method="post" action="/ui/orgs/{{ tenant_id }}/evidence/{{ item.id }}/draft" novalidate>
+  <input type="hidden" name="status" value="" form="save-draft-form">
+</form>
+<script>
+  // Progressive enhancement only: keeps the one visible form's current
+  // field values in sync with the hidden save-draft form, so "Save as
+  // draft" (a second submit button, form="save-draft-form") posts what's
+  // actually on screen. Both buttons work with JS disabled -- without it,
+  // "Save as draft" still submits, just with whatever the hidden form's
+  // last-set values were (none, on a fresh page load) -- an honest,
+  // reduced fallback rather than a broken one.
+  (function () {
+    var statusEl = document.getElementById("status");
+    var referenceEl = document.getElementById("reference");
+    var draftForm = document.getElementById("save-draft-form");
+    function sync() {
+      draftForm.querySelector('[name="status"]').value = statusEl.value;
+      var refInput = draftForm.querySelector('[name="reference"]');
+      if (!refInput) {
+        refInput = document.createElement("input");
+        refInput.type = "hidden";
+        refInput.name = "reference";
+        draftForm.appendChild(refInput);
+      }
+      refInput.value = referenceEl.value;
+    }
+    statusEl.addEventListener("change", sync);
+    referenceEl.addEventListener("input", sync);
+    sync();
+  })();
+</script>
+
+<h2>Revision history</h2>
+{% if revisions %}
+<table>
+  <thead>
+    <tr><th scope="col">#</th><th scope="col">Status</th><th scope="col">Reference</th><th scope="col">By</th><th scope="col">When</th></tr>
+  </thead>
+  <tbody>
+    {% for r in revisions %}
+    <tr>
+      <td data-label="#">{{ r.revision_number }}</td>
+      <td data-label="Status"><span class="status-badge" data-status="{{ r.status }}">{{ r.status }}</span></td>
+      <td data-label="Reference">{{ r.reference or "—" }}</td>
+      <td data-label="By">{{ r.actor_user_id }}</td>
+      <td data-label="When">{{ r.created_at.strftime("%Y-%m-%d %H:%M") }} UTC</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No revisions yet.</p>
+{% endif %}
+
+<p><a href="/ui/orgs/{{ tenant_id }}/my-work">Back to My work</a></p>
+{% endblock %}

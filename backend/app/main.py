@@ -3,9 +3,11 @@ import time
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, Request
+from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.routers import auth, decisions, drafts, exports, integrity, mfa, orgs, projects, templates
+from app.webapp.router import router as webapp_router
 
 _telemetry_logger = logging.getLogger("bgp.telemetry")
 _started_at = datetime.now(timezone.utc)
@@ -28,17 +30,20 @@ app = FastAPI(
         "essential-journey backend support "
         "(WP10 -- My work with reason/direct-action, save/resume drafts, "
         "plain-language blocker explanations and a permitted-outcomes "
-        "confirmation summary). No frontend exists yet (DEC04 unresolved) "
-        "-- REQ-033's guided-form navigation and REQ-039's timezone "
-        "display/translation are frontend-only concerns this backend "
-        "cannot satisfy alone. DEC05 (decision durability mechanism) is "
+        "confirmation summary), and a first real frontend (WP11, 2026-09-20 "
+        "-- DEC04 resolved: server-rendered HTML via app/webapp/, same-"
+        "origin, reusing this same session cookie; login/MFA, an org "
+        "picker, and the five essential journeys are real pages now -- "
+        "REQ-039's timezone display/translation remains a frontend gap "
+        "this first increment does not close). DEC05 (decision durability mechanism) is "
         "still unresolved -- decisions here commit atomically to a single "
         "local Postgres instance only, and the integrity checkpoint's "
         "custody is enforced by this same instance's RLS, not by a "
         "genuinely separate system (see IntegrityCheckpoint's docstring). "
         "See docs/blueprint/ Section 6 for the delivery sequence. Session "
-        "mechanism is a prototype signed cookie, not the DEC04-approved "
-        "design. WP12: secrets moved off hardcoded literals and MFA "
+        "mechanism is the same signed cookie used since WP03 -- DEC04 "
+        "(2026-09-20) kept it as-is rather than introducing a new one. "
+        "WP12: secrets moved off hardcoded literals and MFA "
         "secrets are now encrypted at rest, security logging covers "
         "auth/MFA/invitation events, and CI now runs dependency and "
         "secret scans (REQ-045/046/047) -- REQ-043's numeric performance "
@@ -70,6 +75,8 @@ app.include_router(decisions.router)
 app.include_router(integrity.router)
 app.include_router(exports.router)
 app.include_router(drafts.router)
+app.include_router(webapp_router)
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 
 @app.middleware("http")
