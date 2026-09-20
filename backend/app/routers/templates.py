@@ -117,7 +117,10 @@ def create_template(
     )
     db.add(version)
     db.commit()
-    db.refresh(version)
+    # No db.refresh() -- see app/db.py's SessionLocal docstring
+    # (expire_on_commit=False): every field here was already set in Python
+    # before commit, and template_versions is RLS-protected, so a
+    # post-commit refresh would run with no tenant context left and raise.
     return version
 
 
@@ -147,7 +150,7 @@ def import_template(
     )
     db.add(version)
     db.commit()
-    db.refresh(version)
+    # No db.refresh() -- see create_template above, same reasoning.
     return version
 
 
@@ -189,7 +192,7 @@ def fork_template(
     )
     db.add(new_version)
     db.commit()
-    db.refresh(new_version)
+    # No db.refresh() -- see create_template above, same reasoning.
     return new_version
 
 
@@ -240,7 +243,7 @@ def update_draft(
 
     version.schema_json = payload.schema_json
     db.commit()
-    db.refresh(version)
+    # No db.refresh() -- see create_template above, same reasoning.
     return version
 
 
@@ -274,5 +277,5 @@ def publish_version(
     version.status = "published"
     version.published_at = datetime.now(timezone.utc)
     db.commit()
-    db.refresh(version)
+    # No db.refresh() -- see create_template above, same reasoning.
     return version

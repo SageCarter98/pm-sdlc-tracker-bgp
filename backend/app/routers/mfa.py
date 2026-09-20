@@ -135,7 +135,9 @@ def verify(
         db.add(MfaRecoveryCode(user_id=user.id, code_hash=hash_recovery_code(code)))
     log_security_event(db, "mfa_enabled", user_id=user.id)
     db.commit()
-    db.refresh(user)
+    # No db.refresh() -- expire_on_commit=False (app/db.py) already keeps
+    # user.token_version (incremented in Python above) correct; users
+    # carries no RLS, so this was merely unnecessary, not broken.
     token = create_session_token(user.id, user.token_version, mfa_verified=True)
     response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax")
     return VerifyOut(enabled=True, recovery_codes=codes)

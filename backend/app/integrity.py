@@ -68,7 +68,11 @@ def take_checkpoint(db: Session, tenant_id: str, project_id: str) -> IntegrityCh
     )
     db.add(checkpoint)
     db.commit()
-    db.refresh(checkpoint)
+    # No db.refresh() -- see app/db.py's SessionLocal docstring
+    # (expire_on_commit=False): every field here was already set in Python
+    # before commit, and integrity_checkpoints is RLS-protected, so a
+    # post-commit refresh would run with no tenant context left and raise
+    # (found 2026-09-20 building WP11's first real end-to-end usage).
     return checkpoint
 
 
@@ -107,8 +111,7 @@ def verify_integrity(db: Session, tenant_id: str, project_id: str) -> dict:
                 },
             )
             db.add(incident)
-            db.commit()
-            db.refresh(incident)
+            db.commit()  # No db.refresh() -- see checkpoint creation above, same reasoning.
             return {"ok": False, "incident": incident, "checked_checkpoints": len(checkpoints)}
         prev_digest = cp.chain_digest
 
