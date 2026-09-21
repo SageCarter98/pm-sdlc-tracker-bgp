@@ -782,6 +782,274 @@ desktop and a simulated 375px width). WP11's own tracker items (#128-148
 under G4, and the PM-track equivalents) are not touched by this entry —
 this is implementation, not a gate decision.
 
+## WP13: design-system reskin + 4 more real pages (2026-09-20)
+
+**Trigger**: `stitch_buildgovernanceplatform_webapp.zip` arrived (a Stitch
+UI-mockup package: 10 screens x desktop+mobile, a design-tokens/component-
+library spec, and a genuinely new, owner-approved requirements document —
+`FE-APR-001` v1.1, "Okay, approve all draft in it, just finished personal
+review"). That document is now filed at
+`docs/blueprint/BGP_Frontend_Requirements_v1.1_FE-APR-001.md`; its own
+provenance note there records what it does and doesn't change relative to
+the existing `docs/blueprint/frontend_requirements.md` extract and this
+project's real DEC state. The mockup HTML/CSS itself was **not** imported —
+it's a static Tailwind-CDN package with Google-hosted placeholder images,
+fabricated crypto hashes/org names and internal codes (`FE-APR-001`,
+`GOV-SEC-BNDRY`) rendered to end users, none of it appropriate to ship
+as-is into a same-origin, no-build-step, no-external-CDN frontend (DEC04).
+
+**What this WP actually did**:
+
+1. **Reconciled one design-token set** into `app/static/style.css`'s
+   existing `:root` custom properties (kept WP11's architecture; updated
+   values) — the Slate/Emerald/Amber/Rose governance-state palette from the
+   Stitch package's `DESIGN.md` prose (cited WCAG contrast ratios), cross-
+   checked against its `complete_frontend_specification_token_bundle.md`
+   CSS bundle where they overlap (the two disagreed in places; this file's
+   own header records which one won). Sharper radii (4/6/8px), a Cobalt-600
+   focus ring per the WP13 component contract, monochrome slate-900 primary
+   buttons (an institutional/audit-tool choice, not a marketing brand
+   color), tabular-figure numeric styling, and three new honest components:
+   a three-slot blocker banner (rule/violation id, root cause, remediation —
+   using the real `BlockerExplanation` fields already returned by
+   `decisions.py`'s `preview_decision`, not the mockup's fabricated
+   "POL-SDLC-SEC-09"-style codes), an SoD callout box, and an immutable-
+   manifest-summary treatment. Applied to `decide.html`/`decision_summary.html`
+   (the two pages with real blocker/manifest/outcome data to show); the
+   other 8 existing templates inherit the new tokens without markup changes.
+   `decide.html` also now shows the manifest digest to the user before
+   confirmation (FE-048) — it was previously only a hidden form field.
+2. **Four new real pages**, following `app/webapp/router.py`'s existing
+   pattern exactly (`_require_page_membership` guard, call the same
+   functions the JSON routers use, `_reset_tenant_context` after any caught
+   `HTTPException`):
+   - **UI02 First project creation** (`/ui/orgs/{tenant_id}/projects/new`) —
+     lists published starters via a new `GET /orgs/{tenant_id}/templates/published`
+     endpoint, creates via the existing `projects_router.create_project`.
+   - **UI05 Gate readiness dashboard** (`/ui/orgs/{tenant_id}/projects/{project_id}/gates`) —
+     needed a new `GET /orgs/{tenant_id}/projects/{project_id}/occurrences`
+     list endpoint (read-only, membership-gated, same shape as
+     `integrity.py`'s `list_checkpoints`/`list_incidents`; nothing like it
+     existed before — every prior occurrence read was single-occurrence).
+     Reuses `decisions_router.preview_decision` per occurrence, same call
+     `decide_page` already made one at a time. Deliberately does **not**
+     compute or display a completion percentage (FE-043/044).
+   - **UI07 Audit history & supersession tracker** (`/ui/orgs/{tenant_id}/projects/{project_id}/history`) —
+     needed a new `GET /orgs/{tenant_id}/projects/{project_id}/decisions`
+     list endpoint (`decisions.py` only had single-decision lookup by id
+     before). Combined with the existing checkpoint/incident lists for one
+     project timeline; supersession chains drawn from each decision's own
+     `supersedes_decision_id`, no new field.
+   - **UI10 Account, membership & separation settings**
+     (`/ui/orgs/{tenant_id}/settings`) — own profile/MFA status for anyone;
+     tenant administrators additionally see `orgs_router.access_review`'s
+     full roster and a form posting to the existing `create_invitation`.
+     **Real, honestly-flagged gap**: there is no revoke-membership or
+     change-role endpoint anywhere in `orgs.py` yet, so no such control was
+     added to the page — the template says so directly rather than faking
+     one. FE-017 ("removed membership invalidates stale actions") is
+     therefore still only partially covered by this project.
+   - Every direct call into a role-gated router function
+     (`Depends(require_role(...))`) had its role check explicitly
+     re-invoked in the webapp layer (e.g.
+     `require_role(Role.TENANT_ADMINISTRATOR, Role.APPROVER)(membership=membership)`
+     before `create_project`) — calling a FastAPI route function directly
+     bypasses its own `Depends()` defaults entirely, so skipping this step
+     would have let any active member create a project or send an
+     invitation regardless of role. Caught before merge, not after.
+3. **Deliberately not built**: UI08 (template authoring/rule builder) stays
+   API-only — blocked on **DEC07** (rule vocabulary), still open. UI09
+   (export/import) stays API-only — touches **DEC06**/**DEC12** (retention/
+   disposal, import provenance), both still open. This matches WP11's own
+   stated scope boundary; FE-APR-001 lists all ten screens as "approved"
+   but explicitly disclaims inventing decisions FE-APR-001 itself didn't
+   resolve.
+
+**Tests**: `test_wp13_webapp_new_pages.py`, same live-Postgres-only pattern
+as `test_wp11_webapp_rls.py` — project creation happy path and a rejected-
+class path that leaves no partial project, the gate dashboard rendering a
+real unresolved hard blocker and linking into the existing decide route, a
+recorded decision showing up in project history, and the settings page
+proven to hide admin-only controls from a non-admin member (and show them
+to the admin) via two independent sessions against real RLS. Full suite:
+142 passing (was 137) — all against real Postgres, not the SQLite fixture
+(`assert app.dependency_overrides == {}` guards this the same way WP11's
+tests do).
+
+**Not touched by this entry**: no gate decision was recorded by this work —
+per this project's standing rule (see below), that stays a named authority's
+manual `tracker_cli.py gate` action regardless of how much evidence this WP
+adds.
+
+**Real defect found and fixed via an actual browser walkthrough, same
+discipline as WP11's own two RLS-context bugs**: `mfa_enroll_verify_submit`
+(`app/webapp/router.py`) called `mfa_router.verify()` with a `RedirectResponse`
+to carry the reissued, `token_version`-bumped session cookie (BGP-F01's own
+mechanism), but then returned a *different* Response object
+(`_render(..., "mfa_enrolled.html", ...)`, needed to actually show the
+recovery codes instead of redirecting) — so the Set-Cookie header was built
+and then silently discarded. The browser kept its stale pre-enrolment
+cookie; the very next request was silently logged out by
+`page_current_user`'s `token_version` check. Every *other* cookie-mutating
+handler in this file correctly returns the same response object it set
+cookies on (`login_submit`, `mfa_login_verify_submit`, `register_submit`,
+`logout_submit`) — this was the one handler that needed to render different
+content on success and missed carrying the cookie across. Fixed by copying
+`resp.headers.getlist("set-cookie")` onto the rendered response. New
+regression test `test_mfa_enrolment_keeps_the_session_usable_afterward`
+(live Postgres) — confirmed it fails without the fix (reverted the router
+change, test failed) and passes with it. This bug predates WP13 (it's part
+of WP11's original enrol/verify flow) but was only found now because this
+was the first time anyone actually drove MFA enrolment through a real
+browser session end-to-end rather than through the JSON API or a test
+client that doesn't notice a discarded cookie the same way a real browser
+does. Full suite: 143 passing (was 142).
+
+## WP14: in-product requirement guidance on tenant-authored gates/rules (2026-09-21)
+
+User asked for the "what to do / evidence to provide" guidance pattern built
+into the external KenAddme tracker (same day, see `~/.claude/skills/pm-sdlc-tracker/`)
+brought into BGP's own product UI -- explicitly for BGP's actual customers
+using their own configurable gates, not the fixed KenAddme institutional
+catalogue. The two are unrelated: a tenant's gates/rules come from their own
+authored template (`app/rule_engine.py`), never from KenAddme's Gate 1-7/G0-G6
+numbering.
+
+**Schema (`app/rule_engine.py`)**: two new optional fields, purely additive,
+no cross-reference validation, never evaluated by `evaluate_condition` --
+`GateDefinition.description` (gate purpose) and `Rule.guidance` /
+`Rule.evidence_example` (per-rule "what to do" / "evidence to provide").
+Absent on any template authored before this existed; those render with no
+guidance block, not a broken one (proven by
+`test_evidence_form_omits_guidance_block_when_template_has_none`).
+
+**Rendering**: `evidence_form.html` (the rule's own guidance, next to the
+exact item a contributor is completing) and `gate_dashboard.html` (the
+gate's purpose, next to each occurrence row) via a new collapsed-by-default
+`<details class="guidance">` component in `app/static/style.css`, matching
+this project's existing accessible-disclosure conventions. Wired in
+`app/webapp/router.py`'s `evidence_form_page`/`gate_dashboard_page` via two
+new small helpers, `_find_rule`/`_find_gate`, that look the definition up
+from the project's own bound template schema (`_load_bound_schema`, already
+loaded on both pages) -- no new endpoint, no new DB column, no change to
+readiness/blocker logic.
+
+Updated the `lightweight.json` synthetic framework fixture with real example
+guidance text so the feature has visible, testable data (`regulated.json`/
+`standard.json` left untouched -- authoring guidance for every fixture
+wasn't asked for).
+
+New `test_wp14_requirement_guidance.py` (live Postgres): guidance renders
+when the template supplies it (both pages), and renders nothing when it
+doesn't. Also verified live in a real browser end-to-end (register -> org ->
+template with guidance -> project -> evidence item and gate dashboard both
+showing the real text). Full suite: 146 passing (was 143).
+
+## WP15 Phase 1: evidence attachments (2026-09-21)
+
+FE-097/098 (conditional capability, REQ-053) -- user asked for uploaded
+files as evidence, then explicitly agreed to a staged plan before any code:
+Phase 1 (schema, local storage, upload/download with scanning stubbed
+`unavailable`), Phase 2 (a real scanner, still an open choice -- ClamAV vs.
+a cloud API, not decided here), Phase 3 was already covered by Phase 1's
+own frontend wiring.
+
+**Built**: `evidence_attachments` (migration `0016_wp15_evidence_attachments`,
+applied to live `bgp_dev`) -- same tenant-owned RLS shape as every evidence
+table since WP06. `app/attachment_storage.py`'s `AttachmentStore` interface
+with one implementation, local disk under `backend/var/` (gitignored,
+`BGP_ATTACHMENT_STORAGE_ROOT` overridable) -- deliberately not object
+storage; nothing else in this stack uses it, and the app is still
+local-prototype/synthetic-data stage. `storage_key` is always server-
+generated (tenant_id + uuid4), never the client's filename -- no path-
+traversal surface. `app/routers/attachments.py`: upload/list/download,
+same authorisation model as evidence revisions (any current project
+member, via the existing `_require_project_member`). Immutable and
+versioned like `EvidenceRevision` -- a new upload marks the prior `active`
+row `superseded`, never overwrites. A conservative, explicitly-flagged
+placeholder size limit (20MB, `BGP_ATTACHMENT_MAX_SIZE_BYTES`) since no DEC
+has actually set one -- same honesty as DEC08's numeric gaps.
+
+**The one property that matters most**: `download_attachment` refuses
+anything whose `scan_status != "clean"`. No scanner is wired up yet, so
+`scan_status` defaults to `"unavailable"` and **every attachment uploaded
+this phase is permanently undownloadable** -- that is FE-097's own
+acceptance check ("unscanned/malicious files cannot be downloaded")
+enforced from the first line of code that can serve a file, not a gap
+deferred to Phase 2. Phase 2 only has to make `scan_status` reach
+`"clean"`; the refusal logic doesn't change.
+
+**Frontend**: `evidence_form.html` gets an "Attachments" table (filename,
+size, active/superseded status, scan status, uploader/date) and a plain
+upload form, using the same `.pill` components the rest of the app already
+uses. The section's own hint text says outright that downloads don't work
+yet, rather than shipping a dead link.
+
+**Tests**: `test_wp15_evidence_attachments.py` (live Postgres) -- upload
+succeeds then download 423s, a second upload supersedes (not overwrites)
+the first, an empty file is rejected, and a same-shape-as-WP04 tenant-
+isolation leak proof (tenant B cannot download tenant A's attachment even
+knowing its real id). Verified live in a real browser end-to-end (the
+extension couldn't access a native file picker without the user sharing a
+folder, so the real multipart form was submitted via the page's own
+same-origin `fetch`, exercising the identical server code path -- flash
+message, attachment row and honest "not yet retrievable" scan-status pill
+all confirmed rendering). Full suite: 150 passing (was 146).
+
+**Explicitly not built** (at the time, Phase 1 only): any scanner
+integration, and no evidence-rule schema change requiring an attachment
+for a given evidence_kind -- uploads stay supplementary to the existing
+reference field, not a replacement for it (still true after Phase 2).
+
+## WP15 Phase 2: Cloudmersive scanner integration (2026-09-21)
+
+User chose a cloud API over self-hosted ClamAV, then asked which vendor to
+recommend. Recommended and used **Cloudmersive** over VirusTotal
+specifically because VirusTotal's standard API shares submitted files with
+a multi-vendor corpus -- a poor fit for a platform whose entire design is
+about not letting tenant data cross boundaries it shouldn't; Cloudmersive's
+scan stays between this app and them. User obtained a key and added it to
+`backend/.env` as `BGP_CLOUDMERSIVE_API_KEY` (gitignored, never committed;
+verified present by checking for the line, never by printing its value).
+
+**Built**: `app/attachment_scanner.py` -- `Scanner` interface, one
+implementation (`CloudmersiveScanner`) calling `POST
+https://api.cloudmersive.com/virus/scan/file` (`Apikey` header, multipart
+field `inputFile`, JSON `{"CleanResult": bool, "FoundViruses": [...]}` --
+confirmed against Cloudmersive's own docs before writing the client, not
+assumed from memory). Returns `"clean"`/`"infected"`/`"error"`/`"unavailable"`
+-- a failed or unparseable call is `"error"`, never silently `"clean"`.
+
+**`app/routers/attachments.py` reworked**: scanning now happens before
+version-lineage decisions, not after. `"clean"`/`"unavailable"`/`"error"`
+all promote the new upload to `active` and supersede the prior one, same
+as Phase 1. A confirmed `"infected"` result does the opposite: the row is
+still committed (quarantined, visible in the attachment list -- nothing
+this project does silently discards a record of what happened) but gets
+`status="rejected"`, never becomes `active`, and never touches whatever
+was active before it. The upload call itself then returns 422 so the
+immediate caller sees a clear rejection, not a false success.
+
+**Frontend**: `evidence_form.html`'s attachment table now shows a real
+"Download" link when `scan_status == "clean"`, and "Not downloadable"
+otherwise; the `rejected`/`infected` states get the danger pill instead of
+the neutral/warning ones Phase 1 used for everything non-clean.
+
+**Tests**: `test_wp15_evidence_attachments.py` now force-monkeypatches the
+scanner to `"unavailable"` (an autouse fixture) so it keeps deterministically
+testing that real, still-current pathway regardless of whether a key happens
+to be configured locally; added a hermetic fake-scanner test proving an
+infected upload quarantines without touching the active version. New
+`test_wp15_cloudmersive_scanner.py` (skipped without a configured key) hits
+the **real** Cloudmersive API: a harmless file scans clean and downloads
+byte-for-byte correctly; the industry-standard EICAR test string (not real
+malware -- the standard payload every AV engine is built to flag) is
+correctly detected, quarantined, and blocked from download. Also verified
+live in a real browser: a real-scanned clean file got a working Download
+link with correct byte content; the earlier Phase-1-era upload (scanned
+before this key existed) correctly stayed `unavailable` rather than being
+retroactively rescanned. Full suite: 153 passing (was 150).
+
 ## Rules for updating this tracker as work proceeds
 
 1. Draft candidate evidence matches, then **verify each one against the actual

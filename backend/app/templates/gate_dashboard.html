@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Gate readiness — {{ project.name }}{% endblock %}
+{% block content %}
+<h1>Gate readiness — {{ project.name }}</h1>
+<p><a href="/ui/orgs/{{ tenant_id }}/projects/{{ project_id }}/history">View audit history for this project</a></p>
+
+{% if rows %}
+<table>
+  <thead>
+    <tr>
+      <th scope="col">Gate</th>
+      <th scope="col">Occurrence</th>
+      <th scope="col">Trigger</th>
+      <th scope="col">Readiness</th>
+      <th scope="col">Action</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    {% set occ = row.occurrence %}
+    {% set preview = row.preview %}
+    <tr>
+      <td data-label="Gate">
+        <span class="mono">{{ occ.gate_id }}</span>
+        {% if row.gate and row.gate.description %}
+        <details class="guidance">
+          <summary>What this gate is for</summary>
+          <p>{{ row.gate.description }}</p>
+        </details>
+        {% endif %}
+      </td>
+      <td data-label="Occurrence" class="num">#{{ occ.sequence }}</td>
+      <td data-label="Trigger">{{ occ.trigger }}</td>
+      <td data-label="Readiness">
+        {% if preview.hard_blockers or preview.conditional_blockers %}
+        <span class="status-badge" data-status="Hold">
+          {{ preview.hard_blockers | length }} hard, {{ preview.conditional_blockers | length }} conditional blocker(s)
+        </span>
+        {% else %}
+        <span class="status-badge" data-status="Complete">Ready for review</span>
+        {% endif %}
+        {% if preview.advisory_unsatisfied %}
+        <br><span class="hint">{{ preview.advisory_unsatisfied | length }} advisory item(s) unsatisfied (non-blocking)</span>
+        {% endif %}
+      </td>
+      <td data-label="Action">
+        <a href="/ui/orgs/{{ tenant_id }}/projects/{{ project_id }}/occurrences/{{ occ.id }}/decide">Review / decide</a>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>This project has no gate occurrences yet.</p>
+{% endif %}
+
+<p><a href="/ui/orgs/{{ tenant_id }}/my-work">Back to My work</a></p>
+{% endblock %}

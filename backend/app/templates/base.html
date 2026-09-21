@@ -21,7 +21,11 @@
       {% if current_user %}
       <nav aria-label="Primary" class="primary-nav">
         <ul>
-          {% if tenant_id %}<li><a href="/ui/orgs/{{ tenant_id }}/my-work">My work</a></li>{% endif %}
+          {% if tenant_id %}
+          <li><a href="/ui/orgs/{{ tenant_id }}/my-work">My work</a></li>
+          <li><a href="/ui/orgs/{{ tenant_id }}/projects/new">New project</a></li>
+          <li><a href="/ui/orgs/{{ tenant_id }}/settings">Settings</a></li>
+          {% endif %}
           <li><a href="/ui/orgs">Switch organisation</a></li>
         </ul>
         <form method="post" action="/ui/logout" class="inline-form">

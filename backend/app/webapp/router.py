@@ -4,20 +4,24 @@ see that module's docstring for why."""
 
 import uuid
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, Request, UploadFile
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.deps import get_session_mfa_verified, require_mfa
+from app.deps import get_session_mfa_verified, require_mfa, require_role
+from app.models import Role
+from app.routers import attachments as attachments_router
 from app.routers import auth as auth_router
 from app.routers import decisions as decisions_router
 from app.routers import drafts as drafts_router
+from app.routers import integrity as integrity_router
 from app.routers import mfa as mfa_router
 from app.routers import orgs as orgs_router
 from app.routers import projects as projects_router
+from app.routers import templates as templates_router
 from app.webapp.auth import page_current_user, page_membership
 
 
@@ -35,6 +39,26 @@ def _reset_tenant_context(db: Session, tenant_id: str) -> None:
     first place obligated to re-establish context before doing so."""
     if db.get_bind().dialect.name == "postgresql":
         db.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": tenant_id})
+
+
+def _find_rule(schema, gate_id: str, rule_id: str):
+    """Look up one rule's own definition (guidance/evidence_example, both
+    optional) from the project's bound template schema -- the only place
+    that text lives, since a rule is tenant-authored, not a KenAddme fixed
+    catalogue entry. Returns None if not found (e.g. a rule removed from a
+    later template version); pages must treat that as "no guidance", not
+    an error."""
+    for gate in schema.gates:
+        if gate.gate_id != gate_id:
+            continue
+        for rule in gate.rules:
+            if rule.rule_id == rule_id:
+                return rule
+    return None
+
+
+def _find_gate(schema, gate_id: str):
+    return next((g for g in schema.gates if g.gate_id == gate_id), None)
 
 
 router = APIRouter(prefix="/ui", tags=["webapp"])
@@ -167,12 +191,24 @@ def mfa_enroll_verify_submit(request: Request, code: str = Form(...), db: Sessio
         out = mfa_router.verify(mfa_router.VerifyRequest(code=code), resp, user=user, db=db)
     except HTTPException as exc:
         return _render(request, "mfa_enroll.html", current_user=user, errors=[exc.detail])
-    return _render(
+    rendered = _render(
         request,
         "mfa_enrolled.html",
         current_user=user,
         recovery_codes=out.recovery_codes,
     )
+    # mfa_router.verify() bumps token_version (BGP-F01) and reissues the
+    # session cookie with mfa_verified=True on `resp` -- but this handler
+    # renders mfa_enrolled.html directly (to show recovery codes) rather
+    # than returning `resp` itself, unlike every other cookie-mutating
+    # handler in this file. Without copying the cookie across, the browser
+    # keeps its now-stale pre-enrolment session (old token_version), and
+    # the very next request gets silently logged out by page_current_user's
+    # token_version check -- found 2026-09-20 driving this through a real
+    # browser (the same class of bug WP11's own docstring warns about).
+    for cookie_header in resp.headers.getlist("set-cookie"):
+        rendered.headers.append("set-cookie", cookie_header)
+    return rendered
 
 
 # --------------------------------------------------------------- Org picker
@@ -273,6 +309,7 @@ def evidence_form_page(
 
     project = projects_router._get_owned_project_or_404(db, tenant_id, detail.item.project_id)
     schema = projects_router._load_bound_schema(db, tenant_id, project.template_version_id)
+    rule = _find_rule(schema, detail.item.gate_id, detail.item.rule_id)
 
     draft = None
     try:
@@ -281,7 +318,8 @@ def evidence_form_page(
         draft = None
 
     saved = request.query_params.get("saved")
-    flash = {"draft": "Draft saved.", "submitted": "Revision submitted."}.get(saved)
+    flash = {"draft": "Draft saved.", "submitted": "Revision submitted.", "uploaded": "File uploaded."}.get(saved)
+    attachments = attachments_router.list_attachments(tenant_id, evidence_item_id, db=db, membership=membership)
 
     return _render(
         request,
@@ -293,6 +331,8 @@ def evidence_form_page(
         statuses=schema.statuses,
         draft=draft,
         flash=flash,
+        rule=rule,
+        attachments=attachments,
     )
 
 
@@ -384,6 +424,50 @@ def evidence_submit_revision(
 
     return RedirectResponse(
         f"/ui/orgs/{tenant_id}/evidence/{evidence_item_id}?saved=submitted",
+        status_code=303,
+    )
+
+
+@router.post("/orgs/{tenant_id}/evidence/{evidence_item_id}/attachments")
+async def evidence_upload_attachment(
+    request: Request,
+    tenant_id: str,
+    evidence_item_id: str,
+    file: UploadFile,
+    db: Session = Depends(get_db),
+):
+    from fastapi import HTTPException
+
+    guard = _require_page_membership(request, db, tenant_id)
+    if isinstance(guard, RedirectResponse):
+        return guard
+    user, membership = guard
+
+    try:
+        detail = projects_router.get_evidence_item(tenant_id, evidence_item_id, db=db, membership=membership)
+        await attachments_router.upload_attachment(tenant_id, evidence_item_id, file, db=db, membership=membership)
+    except HTTPException as exc:
+        _reset_tenant_context(db, tenant_id)
+        detail = projects_router.get_evidence_item(tenant_id, evidence_item_id, db=db, membership=membership)
+        project = projects_router._get_owned_project_or_404(db, tenant_id, detail.item.project_id)
+        schema = projects_router._load_bound_schema(db, tenant_id, project.template_version_id)
+        attachments = attachments_router.list_attachments(tenant_id, evidence_item_id, db=db, membership=membership)
+        return _render(
+            request,
+            "evidence_form.html",
+            current_user=user,
+            tenant_id=tenant_id,
+            item=detail.item,
+            revisions=detail.revisions,
+            statuses=schema.statuses,
+            draft=None,
+            rule=_find_rule(schema, detail.item.gate_id, detail.item.rule_id),
+            attachments=attachments,
+            errors=[exc.detail if isinstance(exc.detail, str) else str(exc.detail)],
+        )
+
+    return RedirectResponse(
+        f"/ui/orgs/{tenant_id}/evidence/{evidence_item_id}?saved=uploaded",
         status_code=303,
     )
 
@@ -502,4 +586,242 @@ def decide_submit(
         current_user=user,
         tenant_id=tenant_id,
         decision=decision,
+    )
+
+
+# ------------------------------------------------------------- New project
+
+
+def _admin_members(db: Session, tenant_id: str, membership, exclude_user_id: str | None = None):
+    """Only fetched for a tenant_administrator -- access_review is gated on
+    that role (orgs.py's own require_role(TENANT_ADMINISTRATOR) dependency,
+    replicated explicitly here since a direct function call bypasses
+    FastAPI's DI and its Depends()-expressed role check)."""
+    if Role(membership.role) is not Role.TENANT_ADMINISTRATOR:
+        return []
+    rows = orgs_router.access_review(tenant_id, db=db, _membership=membership)
+    return [m for m in rows if m.active and m.user_id != exclude_user_id]
+
+
+@router.get("/orgs/{tenant_id}/projects/new")
+def project_new_form(request: Request, tenant_id: str, db: Session = Depends(get_db)):
+    guard = _require_page_membership(request, db, tenant_id)
+    if isinstance(guard, RedirectResponse):
+        return guard
+    user, membership = guard
+    starters = templates_router.list_published_versions(tenant_id, db=db, _membership=membership)
+    return _render(
+        request,
+        "project_new.html",
+        current_user=user,
+        tenant_id=tenant_id,
+        starters=starters,
+        members=_admin_members(db, tenant_id, membership, user.id),
+        can_create=Role(membership.role) in (Role.TENANT_ADMINISTRATOR, Role.APPROVER),
+    )
+
+
+@router.post("/orgs/{tenant_id}/projects/new")
+def project_new_submit(
+    request: Request,
+    tenant_id: str,
+    name: str = Form(...),
+    template_version_id: str = Form(...),
+    class_id: str = Form(...),
+    member_user_id: str = Form(""),
+    member_role: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    from fastapi import HTTPException
+
+    guard = _require_page_membership(request, db, tenant_id)
+    if isinstance(guard, RedirectResponse):
+        return guard
+    user, membership = guard
+
+    def _render_form_error(detail: str):
+        _reset_tenant_context(db, tenant_id)
+        return _render(
+            request,
+            "project_new.html",
+            current_user=user,
+            tenant_id=tenant_id,
+            starters=templates_router.list_published_versions(tenant_id, db=db, _membership=membership),
+            members=_admin_members(db, tenant_id, membership, user.id),
+            can_create=Role(membership.role) in (Role.TENANT_ADMINISTRATOR, Role.APPROVER),
+            errors=[detail],
+        )
+
+    try:
+        require_role(Role.TENANT_ADMINISTRATOR, Role.APPROVER)(membership=membership)
+    except HTTPException as exc:
+        return _render_form_error(exc.detail)
+
+    members: list = []
+    if member_user_id.strip():
+        if not member_role.strip():
+            return _render_form_error("Choose a role for the additional member.")
+        try:
+            members.append(projects_router.ProjectMemberIn(user_id=member_user_id, role=Role(member_role)))
+        except ValueError:
+            return _render_form_error("Unrecognised role for the additional member.")
+
+    payload = projects_router.CreateProjectRequest(
+        name=name, template_version_id=template_version_id, class_id=class_id, members=members
+    )
+    try:
+        projects_router.create_project(tenant_id, payload, db=db, membership=membership)
+    except HTTPException as exc:
+        return _render_form_error(exc.detail if isinstance(exc.detail, str) else str(exc.detail))
+
+    # FE-024: after creation, one clear next action -- My work, not an
+    # intermediate confirmation screen.
+    return RedirectResponse(f"/ui/orgs/{tenant_id}/my-work", status_code=303)
+
+
+# --------------------------------------------------- Gate readiness dashboard
+
+
+@router.get("/orgs/{tenant_id}/projects/{project_id}/gates")
+def gate_dashboard_page(request: Request, tenant_id: str, project_id: str, db: Session = Depends(get_db)):
+    guard = _require_page_membership(request, db, tenant_id)
+    if isinstance(guard, RedirectResponse):
+        return guard
+    user, membership = guard
+
+    project = projects_router._get_owned_project_or_404(db, tenant_id, project_id)
+    schema = projects_router._load_bound_schema(db, tenant_id, project.template_version_id)
+    occurrences = projects_router.list_occurrences(tenant_id, project_id, db=db, membership=membership)
+
+    rows = []
+    for occ in occurrences:
+        preview = decisions_router.preview_decision(
+            tenant_id,
+            project_id,
+            occ.id,
+            decisions_router.PreviewRequest(outcome=None),
+            db=db,
+            membership=membership,
+        )
+        rows.append({"occurrence": occ, "preview": preview, "gate": _find_gate(schema, occ.gate_id)})
+
+    return _render(
+        request,
+        "gate_dashboard.html",
+        current_user=user,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        project=project,
+        rows=rows,
+    )
+
+
+# ------------------------------------------------ Audit history & supersession
+
+
+@router.get("/orgs/{tenant_id}/projects/{project_id}/history")
+def project_history_page(request: Request, tenant_id: str, project_id: str, db: Session = Depends(get_db)):
+    guard = _require_page_membership(request, db, tenant_id)
+    if isinstance(guard, RedirectResponse):
+        return guard
+    user, membership = guard
+
+    project = projects_router._get_owned_project_or_404(db, tenant_id, project_id)
+    decisions = decisions_router.list_decisions(tenant_id, project_id, db=db, membership=membership)
+    checkpoints = integrity_router.list_checkpoints(tenant_id, project_id, db=db, _membership=membership)
+    incidents = integrity_router.list_incidents(tenant_id, project_id, db=db, _membership=membership)
+
+    decisions_by_id = {d.id: d for d in decisions}
+    superseded_by = {d.supersedes_decision_id: d.id for d in decisions if d.supersedes_decision_id}
+
+    return _render(
+        request,
+        "project_history.html",
+        current_user=user,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        project=project,
+        decisions=decisions,
+        decisions_by_id=decisions_by_id,
+        superseded_by=superseded_by,
+        checkpoints=checkpoints,
+        incidents=incidents,
+    )
+
+
+# --------------------------------------------------------------- Org settings
+
+
+@router.get("/orgs/{tenant_id}/settings")
+def settings_page(request: Request, tenant_id: str, db: Session = Depends(get_db)):
+    guard = _require_page_membership(request, db, tenant_id)
+    if isinstance(guard, RedirectResponse):
+        return guard
+    user, membership = guard
+
+    return _render(
+        request,
+        "settings.html",
+        current_user=user,
+        tenant_id=tenant_id,
+        membership=membership,
+        members=_admin_members(db, tenant_id, membership),
+        is_admin=Role(membership.role) is Role.TENANT_ADMINISTRATOR,
+    )
+
+
+@router.post("/orgs/{tenant_id}/settings/invitations")
+def settings_invite_submit(
+    request: Request,
+    tenant_id: str,
+    email: str = Form(...),
+    role: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    from fastapi import HTTPException
+
+    guard = _require_page_membership(request, db, tenant_id)
+    if isinstance(guard, RedirectResponse):
+        return guard
+    user, membership = guard
+
+    def _render_settings_error(detail: str):
+        _reset_tenant_context(db, tenant_id)
+        return _render(
+            request,
+            "settings.html",
+            current_user=user,
+            tenant_id=tenant_id,
+            membership=membership,
+            members=_admin_members(db, tenant_id, membership),
+            is_admin=Role(membership.role) is Role.TENANT_ADMINISTRATOR,
+            errors=[detail],
+        )
+
+    try:
+        require_role(Role.TENANT_ADMINISTRATOR)(membership=membership)
+    except HTTPException as exc:
+        return _render_settings_error(exc.detail)
+
+    try:
+        role_enum = Role(role)
+    except ValueError:
+        return _render_settings_error("Unrecognised role.")
+
+    try:
+        invite = orgs_router.create_invitation(
+            tenant_id, orgs_router.InviteRequest(email=email, role=role_enum), db=db, membership=membership
+        )
+    except HTTPException as exc:
+        return _render_settings_error(exc.detail)
+
+    return _render(
+        request,
+        "settings.html",
+        current_user=user,
+        tenant_id=tenant_id,
+        membership=membership,
+        members=_admin_members(db, tenant_id, membership),
+        is_admin=True,
+        flash=f"Invitation created for {email}. Token (share out-of-band, no mail infra in this prototype): {invite.token}",
     )

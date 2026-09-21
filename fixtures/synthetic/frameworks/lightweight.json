@@ -15,6 +15,7 @@
       "name": "Intake",
       "sequence": 1,
       "class_ids": ["Light"],
+      "description": "Confirm this small piece of work has a named owner and a clear enough purpose before anyone spends real time on it.",
       "rules": [
         {
           "version": 1,
@@ -24,7 +25,9 @@
           "evidence_kind": "note",
           "required_fields": ["owner", "purpose"],
           "permitted_role_ids": ["approver"],
-          "blocker_level": "hard"
+          "blocker_level": "hard",
+          "guidance": "Write a short note naming who owns this item and why it's being done. One or two sentences is enough for lightweight work.",
+          "evidence_example": "A short intake note or a linked ticket stating the owner and purpose."
         }
       ]
     },
@@ -33,6 +36,7 @@
       "name": "Release",
       "sequence": 2,
       "class_ids": ["Light"],
+      "description": "Check the work is finished and that there's a plan for when this record itself can eventually be disposed of.",
       "rules": [
         {
           "version": 1,
@@ -42,7 +46,9 @@
           "evidence_kind": "checklist",
           "required_fields": ["disposal_date"],
           "permitted_role_ids": ["approver"],
-          "blocker_level": "advisory"
+          "blocker_level": "advisory",
+          "guidance": "Record a disposal date for this evidence so it isn't kept indefinitely once it's no longer needed.",
+          "evidence_example": "A checklist entry naming the agreed disposal date."
         }
       ]
     }

@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}History — {{ project.name }}{% endblock %}
+{% block content %}
+<h1>Audit history — {{ project.name }}</h1>
+<p><a href="/ui/orgs/{{ tenant_id }}/projects/{{ project_id }}/gates">Back to gate readiness</a></p>
+
+<h2>Decisions</h2>
+{% if decisions %}
+<table>
+  <thead>
+    <tr>
+      <th scope="col">When</th>
+      <th scope="col">Outcome</th>
+      <th scope="col">Recorded by</th>
+      <th scope="col">Manifest digest</th>
+      <th scope="col">Supersession</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for d in decisions %}
+    <tr>
+      <td data-label="When" class="mono">{{ d.created_at.strftime("%Y-%m-%d %H:%M") }} UTC</td>
+      <td data-label="Outcome"><span class="status-badge" data-status="{{ d.outcome }}">{{ d.outcome }}</span></td>
+      <td data-label="Recorded by">{{ d.actor_user_id }} ({{ d.actor_role }})</td>
+      <td data-label="Manifest digest" class="mono">{{ d.reviewed_manifest_digest }}</td>
+      <td data-label="Supersession">
+        {% if d.supersedes_decision_id %}
+        <span class="pill">Supersedes {{ d.supersedes_decision_id }}</span>{% if d.reason %} — {{ d.reason }}{% endif %}
+        {% elif d.id in superseded_by %}
+        <span class="pill pill--warning">Superseded by {{ superseded_by[d.id] }}</span>
+        {% else %}
+        <span class="pill pill--success">Current</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No decisions have been recorded for this project yet.</p>
+{% endif %}
+
+<h2>Integrity checkpoints</h2>
+{% if checkpoints %}
+<table>
+  <thead>
+    <tr><th scope="col">Sequence range</th><th scope="col">Events</th><th scope="col">Chain digest</th><th scope="col">Created</th></tr>
+  </thead>
+  <tbody>
+    {% for c in checkpoints %}
+    <tr>
+      <td data-label="Sequence range" class="num">{{ c.from_sequence if c.from_sequence is not none else 0 }}–{{ c.to_sequence }}</td>
+      <td data-label="Events" class="num">{{ c.event_count }}</td>
+      <td data-label="Chain digest" class="mono">{{ c.chain_digest }}</td>
+      <td data-label="Created" class="mono">{{ c.created_at.strftime("%Y-%m-%d %H:%M") }} UTC</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No integrity checkpoints have been taken for this project yet.</p>
+{% endif %}
+
+<h2>Integrity incidents</h2>
+{% if incidents %}
+<table>
+  <thead>
+    <tr><th scope="col">Detected</th><th scope="col">Status</th><th scope="col">Resolution</th></tr>
+  </thead>
+  <tbody>
+    {% for i in incidents %}
+    <tr>
+      <td data-label="Detected" class="mono">{{ i.detected_at.strftime("%Y-%m-%d %H:%M") }} UTC</td>
+      <td data-label="Status"><span class="status-badge" data-status="{{ 'Complete' if i.status == 'resolved' else 'Terminate' }}">{{ i.status }}</span></td>
+      <td data-label="Resolution">{{ i.resolution_note or "—" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No integrity incidents have been detected for this project.</p>
+{% endif %}
+
+<p><a href="/ui/orgs/{{ tenant_id }}/my-work">Back to My work</a></p>
+{% endblock %}

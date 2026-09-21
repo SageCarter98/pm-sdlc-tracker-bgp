@@ -1,10 +1,18 @@
 {% extends "base.html" %}
 {% block title %}{{ item.gate_id }} / {{ item.rule_id }}{% endblock %}
 {% block content %}
-<h1>{{ item.gate_id }} / {{ item.rule_id }}</h1>
+<h1><span class="mono">{{ item.gate_id }} / {{ item.rule_id }}</span></h1>
 <p>Current status: <span class="status-badge" data-status="{{ item.status }}">{{ item.status }}</span>
   {% if item.required %}— <strong>required</strong> ({{ item.blocker_level }} blocker){% endif %}
 </p>
+
+{% if rule and (rule.guidance or rule.evidence_example) %}
+<details class="guidance">
+  <summary>What to do / evidence to provide</summary>
+  {% if rule.guidance %}<p><strong>What to do.</strong> {{ rule.guidance }}</p>{% endif %}
+  {% if rule.evidence_example %}<p><strong>Evidence to provide.</strong> {{ rule.evidence_example }}</p>{% endif %}
+</details>
+{% endif %}
 
 {% if draft %}
 <p class="hint">You have an unsubmitted draft saved for this item. The form below is pre-filled with it.</p>
@@ -66,16 +74,16 @@
 {% if revisions %}
 <table>
   <thead>
-    <tr><th scope="col">#</th><th scope="col">Status</th><th scope="col">Reference</th><th scope="col">By</th><th scope="col">When</th></tr>
+    <tr><th scope="col" class="num">#</th><th scope="col">Status</th><th scope="col">Reference</th><th scope="col">By</th><th scope="col">When</th></tr>
   </thead>
   <tbody>
     {% for r in revisions %}
     <tr>
-      <td data-label="#">{{ r.revision_number }}</td>
+      <td data-label="#" class="num">{{ r.revision_number }}</td>
       <td data-label="Status"><span class="status-badge" data-status="{{ r.status }}">{{ r.status }}</span></td>
       <td data-label="Reference">{{ r.reference or "—" }}</td>
       <td data-label="By">{{ r.actor_user_id }}</td>
-      <td data-label="When">{{ r.created_at.strftime("%Y-%m-%d %H:%M") }} UTC</td>
+      <td data-label="When" class="mono">{{ r.created_at.strftime("%Y-%m-%d %H:%M") }} UTC</td>
     </tr>
     {% endfor %}
   </tbody>
@@ -83,6 +91,48 @@
 {% else %}
 <p>No revisions yet.</p>
 {% endif %}
+
+<h2>Attachments</h2>
+<p class="hint">Optional, supplementary to the reference above. Uploading a new file supersedes the last one — it is never overwritten. A file only becomes downloadable once it scans clean (FE-097); anything unscanned, erroring, or infected stays blocked.</p>
+{% if attachments %}
+<table>
+  <thead>
+    <tr><th scope="col">Filename</th><th scope="col" class="num">Size</th><th scope="col">Status</th><th scope="col">Scan</th><th scope="col">Uploaded</th><th scope="col">Action</th></tr>
+  </thead>
+  <tbody>
+    {% for a in attachments %}
+    <tr>
+      <td data-label="Filename">{{ a.filename }}</td>
+      <td data-label="Size" class="num">{{ (a.size_bytes / 1024) | round(1) }} KB</td>
+      <td data-label="Status">
+        <span class="pill {{ 'pill--success' if a.status == 'active' else ('pill--danger' if a.status == 'rejected' else '') }}">{{ a.status }}</span>
+      </td>
+      <td data-label="Scan">
+        <span class="pill {{ 'pill--success' if a.scan_status == 'clean' else ('pill--danger' if a.scan_status == 'infected' else 'pill--warning') }}">{{ a.scan_status }}</span>
+      </td>
+      <td data-label="Uploaded" class="mono">{{ a.created_at.strftime("%Y-%m-%d %H:%M") }} UTC</td>
+      <td data-label="Action">
+        {% if a.scan_status == "clean" %}
+        <a href="/orgs/{{ tenant_id }}/attachments/{{ a.id }}/download">Download</a>
+        {% else %}
+        <span class="hint">Not downloadable</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No attachments uploaded yet.</p>
+{% endif %}
+
+<form method="post" action="/ui/orgs/{{ tenant_id }}/evidence/{{ item.id }}/attachments" enctype="multipart/form-data" novalidate>
+  <div class="field">
+    <label for="attachment_file">Upload a file</label>
+    <input type="file" id="attachment_file" name="file" required>
+  </div>
+  <button type="submit" class="secondary">Upload</button>
+</form>
 
 <p><a href="/ui/orgs/{{ tenant_id }}/my-work">Back to My work</a></p>
 {% endblock %}

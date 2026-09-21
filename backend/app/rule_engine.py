@@ -83,7 +83,14 @@ Condition.model_rebuild()
 
 
 class Rule(BaseModel):
-    """Sec.5.5 approved rule schema fields, exactly."""
+    """Sec.5.5 approved rule schema fields, exactly, plus two optional
+    plain-language fields (guidance, evidence_example) a template author
+    may fill in so a contributor sees "what to do" / "evidence to provide"
+    help next to the requirement itself -- purely descriptive, never
+    evaluated, never affecting readiness/blocker logic. Absent on any
+    template authored before this existed; the frontend simply shows
+    nothing for those, same graceful-absence handling as everywhere else
+    guidance text is optional in this project."""
 
     version: int
     rule_id: str
@@ -95,6 +102,8 @@ class Rule(BaseModel):
     permitted_role_ids: list[str] = Field(min_length=1)
     blocker_level: Literal["hard", "conditional", "advisory"]
     conditions: Condition | None = None
+    guidance: str | None = None
+    evidence_example: str | None = None
 
     @model_validator(mode="after")
     def _bounded_depth(self) -> "Rule":
@@ -110,6 +119,7 @@ class GateDefinition(BaseModel):
     sequence: int
     class_ids: list[str] = Field(min_length=1)
     rules: list[Rule] = Field(default_factory=list)
+    description: str | None = None  # optional plain-language gate purpose; see Rule.guidance
 
 
 class TemplateSchema(BaseModel):

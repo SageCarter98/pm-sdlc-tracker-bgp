@@ -2,9 +2,9 @@
 {% block title %}Decision recorded{% endblock %}
 {% block content %}
 <h1>Decision recorded</h1>
-<p class="flash" role="status">Your decision has been recorded and cannot be edited — a correction requires a new, superseding decision.</p>
+<p><span class="pill pill--success">Recorded</span> This decision cannot be edited — a correction requires a new, superseding decision.</p>
 
-<dl>
+<dl class="manifest-summary">
   <dt>Outcome</dt>
   <dd><span class="status-badge" data-status="{{ decision.outcome }}">{{ decision.outcome }}</span></dd>
   <dt>Decision id</dt>

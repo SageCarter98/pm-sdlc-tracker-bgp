@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
-from app.routers import auth, decisions, drafts, exports, integrity, mfa, orgs, projects, templates
+from app.routers import attachments, auth, decisions, drafts, exports, integrity, mfa, orgs, projects, templates
 from app.webapp.router import router as webapp_router
 
 _telemetry_logger = logging.getLogger("bgp.telemetry")
@@ -75,6 +75,7 @@ app.include_router(decisions.router)
 app.include_router(integrity.router)
 app.include_router(exports.router)
 app.include_router(drafts.router)
+app.include_router(attachments.router)
 app.include_router(webapp_router)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
