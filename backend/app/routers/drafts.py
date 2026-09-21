@@ -5,7 +5,6 @@ gives that a plain "Save as draft" button plus a re-load confirmation
 rather than a live Saving/Saved indicator -- an honest, simpler first
 increment, not the richer state DEC04 left open the door to)."""
 
-master
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
