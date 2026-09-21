@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}My work{% endblock %}
+{% block content %}
+<h1>My work</h1>
+
+<form method="get" action="/ui/orgs/{{ tenant_id }}/my-work" class="filter-form">
+  <div class="field field--tight">
+    <label for="status_filter">Filter by status</label>
+    <select id="status_filter" name="status_filter">
+      <option value="" {% if not status_filter %}selected{% endif %}>All</option>
+      <option value="Not started" {% if status_filter == "Not started" %}selected{% endif %}>Not started</option>
+      <option value="In progress" {% if status_filter == "In progress" %}selected{% endif %}>In progress</option>
+      <option value="Complete" {% if status_filter == "Complete" %}selected{% endif %}>Complete</option>
+    </select>
+  </div>
+  <button type="submit" class="secondary">Apply</button>
+</form>
+
+{% if items %}
+<table>
+  <thead>
+    <tr>
+      <th scope="col">Project</th>
+      <th scope="col">Item</th>
+      <th scope="col">Status</th>
+      <th scope="col">Why it's yours</th>
+      <th scope="col">Due</th>
+      <th scope="col">Action</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in items %}
+    <tr>
+      <td data-label="Project">{{ row.project_name }}</td>
+      <td data-label="Item">{{ row.item.gate_id }} / {{ row.item.rule_id }}</td>
+      <td data-label="Status"><span class="status-badge" data-status="{{ row.status }}">{{ row.status }}</span></td>
+      <td data-label="Why it's yours">{{ row.reason }}</td>
+      <td data-label="Due">{{ row.due_date.strftime("%Y-%m-%d") if row.due_date else "No due date set" }}</td>
+      <td data-label="Action">
+        {% if row.status != "Complete" %}
+        <a href="/ui/orgs/{{ tenant_id }}/evidence/{{ row.item.id }}">Work on this item</a>
+        {% else %}
+        <a href="/ui/orgs/{{ tenant_id }}/projects/{{ row.project_id }}/occurrences/{{ row.item.occurrence_id }}/decide">View readiness / decide</a>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>Nothing is assigned to you right now for this filter.</p>
+{% endif %}
+{% endblock %}

@@ -318,7 +318,10 @@ def create_project(
         db.rollback()
         raise
 
-    db.refresh(project)
+    # No db.refresh() -- see app/db.py's SessionLocal docstring
+    # (expire_on_commit=False): every field here was already set in Python
+    # before commit, and projects is RLS-protected, so a post-commit
+    # refresh would run with no tenant context left and raise.
     return CreateProjectResponse(
         project=ProjectOut.model_validate(project),
         occurrences=[OccurrenceOut.model_validate(o) for o in occurrences],
@@ -420,7 +423,8 @@ def create_occurrence(
         db.rollback()
         raise
 
-    db.refresh(occurrence)
+    # No db.refresh() -- see create_project above, same reasoning
+    # (gate_occurrences is RLS-protected too).
     return CreateOccurrenceResponse(
         occurrence=OccurrenceOut.model_validate(occurrence),
         evidence_items=[EvidenceItemOut.model_validate(e) for e in evidence_items],
@@ -633,7 +637,7 @@ def create_evidence_revision(
     item.reference = payload.reference
     item.latest_revision_number = next_revision
     try:
-        db.commit()
+        db.flush()
     except IntegrityError:
         # BGP-F03 defense-in-depth: with the lock above this should already
         # be unreachable in practice (the second writer's base_revision
@@ -648,4 +652,41 @@ def create_evidence_revision(
             f"base_revision {payload.base_revision} is stale -- current is {item.latest_revision_number}",
         )
 
-    return get_evidence_item(tenant_id, evidence_item_id, db, membership)
+    # Built from a query issued BEFORE db.commit() below, not
+    # get_evidence_item's usual post-request re-query: SET LOCAL
+    # app.tenant_id only lasts for this transaction, so a query issued
+    # after commit would run under RLS with no context and silently see
+    # nothing -- exactly what get_evidence_item's own trailing call used to
+    # do here (found 2026-09-20, WP11: the first thing that ever drove this
+    # endpoint through a real browser instead of raw JSON/SQLite hit it).
+    # db.flush() above already made the new revision visible to this same-
+    # transaction query without needing a commit first.
+    revisions = (
+        db.query(EvidenceRevision)
+        .filter(EvidenceRevision.evidence_item_id == item.id)
+        .order_by(EvidenceRevision.revision_number)
+        .all()
+    )
+    result = EvidenceItemDetailOut(
+        item=EvidenceItemOut.model_validate(item),
+        revisions=[
+            EvidenceRevisionOut(
+                revision_number=r.revision_number,
+                status=r.status,
+                owner_user_id=r.owner_user_id,
+                due_date=r.due_date,
+                completed_date=r.completed_date,
+                reference=r.reference,
+                source_version=r.source_version,
+                source_hash=r.source_hash,
+                reference_is_mutable=(
+                    None if r.reference is None else (r.source_version is None and r.source_hash is None)
+                ),
+                actor_user_id=r.actor_user_id,
+                created_at=r.created_at,
+            )
+            for r in revisions
+        ],
+    )
+    db.commit()
+    return result

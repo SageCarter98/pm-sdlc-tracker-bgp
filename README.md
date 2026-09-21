@@ -4,22 +4,31 @@ Multi-tenant SaaS for running the KenAddme PM and SDLC gate frameworks (and othe
 governance frameworks) inside a tenant's own projects: templates, evidence,
 exceptions, decisions, export/import.
 
-**Status (2026-09-18): backend work packages WP01, WP03–WP10 and WP12 are built**
--- identity/MFA/invitations, PostgreSQL RLS tenant isolation, versioned templates
-with a declarative rule interpreter, projects/evidence with append-only revision
-history, exceptions/decisions (idempotent, separation-of-duties enforced via an
+**Status (2026-09-20): backend work packages WP01, WP03–WP10 and WP12 are built**,
+**and WP11's first frontend increment now exists** -- identity/MFA/invitations,
+PostgreSQL RLS tenant isolation, versioned templates with a declarative rule
+interpreter, projects/evidence with append-only revision history,
+exceptions/decisions (idempotent, separation-of-duties enforced via an
 authenticated compensating review, concurrency-safe), hash-chain integrity
 checkpoints, open-format export/import (full revision and decision history
 preserved across re-export), essential-journey backend support, and operational
 hardening (secrets off hardcoded literals, MFA secrets encrypted at rest,
-security logging, CI dependency/secret scanning). **No frontend exists yet**
-(DEC04, the frontend stack decision, is unresolved) -- there is no UI, only the
-FastAPI backend and its OpenAPI schema (`GET /docs` once the app is running).
+security logging, CI dependency/secret scanning). **DEC04 (frontend stack) is
+resolved**: server-rendered HTML via FastAPI + Jinja2, same-origin, reusing the
+existing signed-cookie session as-is -- login/MFA, an org picker, and the five
+essential journeys (My work, guided evidence form + save-as-draft, blockers,
+decision recording, decision summary) are real pages now, at `/ui/...`; see
+`app/webapp/__init__.py` and `TRACKER.md`'s WP11 entry for scope and for two
+real defects that first real end-to-end browser testing found and fixed
+(both were "silently broken against real Postgres since the RLS-context fix
+that predated this," never caught by the SQLite-only or raw-SQL-seeded test
+suites). Template-authoring, invitation-management and export/import remain
+API-only; no usability study or formal accessibility audit has been done yet.
 See `app/main.py`'s own module docstring for the fullest up-to-date summary of
 what each work package added, and `TRACKER.md` for how this maps to gate
 evidence. Do not treat this as production-ready: it runs against synthetic
 fixtures only (Directive Section 18) and several architectural decisions
-(DEC04 frontend, DEC05 decision durability, DEC07 rule vocabulary, DEC08
+(DEC05 decision durability, DEC07 rule vocabulary, DEC08
 performance budgets, DEC11 key custody) remain open -- see each one's mention
 in `app/`'s docstrings and `docs/blueprint/Blueprint_Working_Source.md`
 Section 7 before treating anything gated on them as settled.
@@ -65,7 +74,12 @@ docs/DEFECT_REGISTER.md    Structured register of found-and-fixed defects, one r
 backend/             FastAPI + PostgreSQL + SQLAlchemy/Alembic service.
                      Identity/MFA, tenancy (RLS), templates, projects,
                      evidence, decisions, integrity, export/import, drafts.
-                     No frontend (DEC04) -- see backend/app/main.py.
+                     See backend/app/main.py.
+backend/app/webapp/  WP11 frontend page routes (server-rendered, at /ui/...).
+                     Every handler calls the same functions the JSON API
+                     uses -- see its __init__.py docstring.
+backend/app/templates/, backend/app/static/  Jinja2 templates and the CSS/JS
+                     the pages above render (DEC04 resolved -- no framework).
 fixtures/synthetic/  Synthetic-only tenant/user/framework fixtures for local
                      development and tests (Directive Section 18, Blueprint
                      Section 6.1). Never point this at a real database with

@@ -453,7 +453,10 @@ def create_export(
     )
     db.add(job)
     db.commit()
-    db.refresh(job)
+    # No db.refresh() -- see app/db.py's SessionLocal docstring
+    # (expire_on_commit=False): every field here was already set in Python
+    # before commit, and export_jobs is RLS-protected, so a post-commit
+    # refresh would run with no tenant context left and raise.
     return ExportJobOut.from_job(job)
 
 
@@ -559,7 +562,8 @@ def validate_import(
     )
     db.add(job)
     db.commit()
-    db.refresh(job)
+    # No db.refresh() -- see the export job creation above, same reasoning
+    # (import_jobs is RLS-protected too).
     return ImportJobOut.model_validate(job)
 
 
@@ -885,5 +889,6 @@ def commit_import(
         db.rollback()
         raise
 
-    db.refresh(job)
+    # No db.refresh() -- see the export/import job creation above, same
+    # reasoning (import_jobs is RLS-protected too).
     return ImportJobOut.model_validate(job)

@@ -43,7 +43,9 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> User:
     db.flush()
     log_security_event(db, "register", user_id=user.id, detail={"email": user.email})
     db.commit()
-    db.refresh(user)
+    # No db.refresh() -- expire_on_commit=False (app/db.py) already keeps
+    # every field set in Python before commit; users carries no RLS, so
+    # this was merely unnecessary, not broken.
     return user
 
 

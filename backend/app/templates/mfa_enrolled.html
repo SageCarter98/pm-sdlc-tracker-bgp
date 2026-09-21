@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Multi-factor authentication enabled{% endblock %}
+{% block content %}
+<h1>Multi-factor authentication enabled</h1>
+<p class="flash" role="status">Your account now requires a verification code at each login.</p>
+<h2>Recovery codes</h2>
+<p>Save these somewhere safe. Each can be used once, instead of your authenticator app, if you lose access to it.</p>
+<ul>
+  {% for code in recovery_codes %}<li class="secret-code">{{ code }}</li>{% endfor %}
+</ul>
+<p><a href="/ui/orgs">Continue</a></p>
+{% endblock %}

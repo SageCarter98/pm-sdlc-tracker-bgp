@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Set up multi-factor authentication{% endblock %}
+{% block content %}
+<h1>Set up multi-factor authentication</h1>
+<p>Approval authority on this platform requires a second factor (an authenticator app such as Google Authenticator, Authy, or a password manager with TOTP support).</p>
+
+<h2>1. Add this account to your authenticator app</h2>
+<p>If your app can scan a QR code, open <code>{{ provisioning_uri }}</code> directly in it, or choose "enter a setup key manually" and enter this code:</p>
+<p class="secret-code" aria-label="Manual entry setup key">{{ secret }}</p>
+
+<h2>2. Confirm the code your app shows</h2>
+<form method="post" action="/ui/mfa/enroll/verify" novalidate>
+  <div class="field">
+    <label for="code">6-digit code</label>
+    <input type="text" id="code" name="code" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" required>
+  </div>
+  <button type="submit">Confirm and enable</button>
+</form>
+{% endblock %}

@@ -1,7 +1,9 @@
 """WP10/REQ-034: save and resume drafts. See Draft's docstring in
 app/models.py for scope -- this is the storage primitive, not the
-truthful-Saving/Saved/Not-saved UI state itself (frontend concern, DEC04
-unresolved)."""
+truthful-Saving/Saved/Not-saved UI state itself (WP11's evidence_form.html
+gives that a plain "Save as draft" button plus a re-load confirmation
+rather than a live Saving/Saved indicator -- an honest, simpler first
+increment, not the richer state DEC04 left open the door to)."""
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -103,7 +105,10 @@ def save_draft(
         draft = existing
 
     db.commit()
-    db.refresh(draft)
+    # No db.refresh() -- see app/db.py's SessionLocal docstring
+    # (expire_on_commit=False): every field here was already set in Python
+    # before commit, and drafts is RLS-protected, so a post-commit refresh
+    # would run with no tenant context left and raise.
     return draft
 
 

@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Enter your verification code{% endblock %}
+{% block content %}
+<h1>Enter your verification code</h1>
+<p>Open your authenticator app and enter the 6-digit code it shows for this account.</p>
+<form method="post" action="/ui/mfa/login-verify" novalidate>
+  <div class="field">
+    <label for="code">6-digit code</label>
+    <input type="text" id="code" name="code" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" required autofocus>
+  </div>
+  <button type="submit">Verify and continue</button>
+</form>
+{% endblock %}

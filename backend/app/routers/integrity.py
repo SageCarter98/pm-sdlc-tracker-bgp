@@ -149,5 +149,8 @@ def resolve_incident(
     incident.resolution_note = payload.resolution_note
     incident.resolved_at = datetime.now(timezone.utc)
     db.commit()
-    db.refresh(incident)
+    # No db.refresh() -- see app/db.py's SessionLocal docstring
+    # (expire_on_commit=False): every field here was already set in Python
+    # before commit, and integrity_incidents is RLS-protected, so a
+    # post-commit refresh would run with no tenant context left and raise.
     return IncidentOut.model_validate(incident)

@@ -687,6 +687,101 @@ Postgres concurrency test for the F03 fix; a genuinely clean-checkout setup
 verification for F05), no CI run for this commit yet (the workflow runs on
 push), and `#124` — none of this was reviewed by Milton either.
 
+## WP11: DEC04 resolved, first frontend increment (2026-09-20)
+
+**DEC04 (frontend framework, session mechanism) resolved**: server-rendered
+HTML via FastAPI + Jinja2, same-origin, reusing the existing signed-cookie
+session exactly as-is — no new session mechanism, no SPA framework, no
+build step. Resolved at the explicit direction of the project's delivery
+lead (Freston Kenny Adedeme) in this session, not an independent
+technical-lead sign-off at Gate 3/G2 as the Blueprint's own decision log
+describes — same caveat shape as APR-001 and DEC01's "naming is not
+reviewing." New code lives under `app/webapp/` (page routes) and
+`app/templates/`/`app/static/` (Jinja templates, CSS, one small JS file for
+error-summary focus management) — see `app/webapp/__init__.py`'s docstring
+for the reuse pattern (every page calls the SAME functions the JSON API
+uses, passing real values instead of `Depends()` placeholders, so there is
+exactly one implementation of any business rule, never two that could
+drift).
+
+**Scope of this first increment**: login/register/MFA enrol+verify, an org
+picker (new `GET /me/orgs` endpoint + migration `0015`'s narrow
+self-lookup RLS policy — the ordinary per-tenant policy structurally can't
+answer "which tenants am I in" in one query), and the five essential
+journeys — My work, a guided evidence-revision form with save-as-draft,
+blocker explanations, decision recording, and a decision summary. **Not**
+in scope: template-authoring UI, invitation-management UI, export/import
+UI — those remain API-only. No usability study, no manual screen-reader
+walkthrough, no formal WCAG 2.2 AA audit — real gaps, not claimed done.
+
+**What building and actually driving this through a real browser against
+real Postgres found** (nothing before this ever combined "a genuine
+multi-step user session" with "RLS actually enforced" the way a real
+frontend does by construction):
+
+- **15 of 18 `db.refresh()` calls across the codebase were silently broken
+  against real Postgres.** `expire_on_commit=False` (set 2026-09-19 for the
+  org-bootstrap RLS fix) made every one of them both unnecessary AND
+  actively harmful: `SET LOCAL app.tenant_id` ends with the commit that
+  precedes the refresh, so the refresh's re-query runs under RLS with no
+  context and raises `InvalidRequestError`. This affected `create_template`
+  /`import_template`/`fork_template`/`update_draft`/`publish_version`,
+  `create_project`, `create_occurrence`, `save_draft`, both export/import
+  job-creation paths, both integrity checkpoint/incident paths, and
+  `accept_invitation` (still broken after migration 0014's ordering fix,
+  which only fixed the INSERT itself). The other 3 (`users`/`tenants`
+  refreshes) were merely unnecessary, not broken — those tables carry no
+  RLS. All 18 removed; see each file's own "No db.refresh()" comment.
+- **`create_evidence_revision`'s own success path re-queried the DB (via
+  `get_evidence_item`) AFTER its `db.commit()`** — same root cause, one
+  level deeper: not a stale-attribute refresh but a fresh query, still
+  running with no tenant context. Fixed by building the full response from
+  data read *before* the commit.
+- **The webapp's own decide-submission error handler had the identical bug
+  one layer up**: re-querying the occurrence/project after catching an
+  `HTTPException` from `decisions.py`'s `_deny()` helper — which is a
+  *correct* control (it commits an audit trail for a denied decision,
+  e.g. BGP-F02's separation-of-duties check, before raising) that no
+  existing JSON endpoint ever exposed, because none of them have anything
+  left to query once they catch an exception — they just let FastAPI
+  render the error. The webapp layer is the first caller that needs to
+  keep reading the database afterward to re-render a page, so it's the
+  first place obligated to re-establish context first
+  (`_reset_tenant_context` in `app/webapp/router.py`).
+
+None of this was caught by the existing 132-test suite: the SQLite suite
+has no RLS to break against, and every existing live-Postgres suite seeds
+data via raw SQL as `bgp_owner`, bypassing these exact code paths. Two new
+regression tests (`test_wp11_webapp_rls.py`) drive the real `/ui` routes
+against real Postgres through the actual failure conditions (a successful
+revision submission whose response depends on the post-commit read; a
+denied decision whose error page depends on re-established context) —
+closing a verification gap, not just the two bugs it happened to find.
+Full suite: 137 passing (was 132).
+
+Visual design: server-rendered semantic HTML per Blueprint Sec.4.2/4.3
+(skip link, one `<h1>` per page, visible focus rings, status always
+text-plus-color never color alone, accessible error-summary with focus
+management on load), built as a real design system in `app/static/style.css`
+rather than left at browser defaults — informed by the `kad-frontend-
+engineering` and `emil-design-eng` skills (screen states mapped: loading
+implicit in server rendering, empty state on My work, validation failure,
+denied access via redirect-to-login; interactive feedback via
+transform-only transitions and `scale(0.97)` press feedback, never
+`transition: all`). Verified responsive down to a 375px mobile viewport
+(table rows collapse to labelled stacked cards).
+
+**Honestly still open**: template-authoring/invitation/export UI (API-only,
+as before); a real usability study (Blueprint Sec.4.4 protocol); a manual
+screen-reader walkthrough; a formal automated WCAG audit (attempted via
+Playwright + axe-core this session — the sandbox's headless browser could
+not reach localhost reliably, so this was verified by hand in a real
+Chrome session instead: login, MFA, My work, guided form + save/submit,
+blockers, decision recording and recovery from a denied decision, at both
+desktop and a simulated 375px width). WP11's own tracker items (#128-148
+under G4, and the PM-track equivalents) are not touched by this entry —
+this is implementation, not a gate decision.
+
 ## Rules for updating this tracker as work proceeds
 
 1. Draft candidate evidence matches, then **verify each one against the actual
