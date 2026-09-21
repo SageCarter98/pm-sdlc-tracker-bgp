@@ -1,9 +1,14 @@
 """WP10/REQ-034: save and resume drafts. See Draft's docstring in
 app/models.py for scope -- this is the storage primitive, not the
+wp11-frontend-first-increment
 truthful-Saving/Saved/Not-saved UI state itself (WP11's evidence_form.html
 gives that a plain "Save as draft" button plus a re-load confirmation
 rather than a live Saving/Saved indicator -- an honest, simpler first
 increment, not the richer state DEC04 left open the door to)."""
+
+truthful-Saving/Saved/Not-saved UI state itself (frontend concern, DEC04
+unresolved)."""
+master
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -47,12 +52,20 @@ def list_drafts(
     """Own drafts only, regardless of tenant role -- a draft is never
     visible to anyone but the user who saved it (Blueprint Sec.5.2: 'Owner
     scoped'), including tenant administrators."""
-    return db.query(Draft).filter(Draft.tenant_id == tenant_id, Draft.user_id == membership.user_id).order_by(Draft.updated_at.desc()).all()
+    return (
+        db.query(Draft)
+        .filter(Draft.tenant_id == tenant_id, Draft.user_id == membership.user_id)
+        .order_by(Draft.updated_at.desc())
+        .all()
+    )
 
 
 @router.get("/orgs/{tenant_id}/drafts/{draft_key}", response_model=DraftOut)
 def get_draft(
-    tenant_id: str, draft_key: str, db: Session = Depends(get_db), membership: Membership = Depends(get_active_membership)
+    tenant_id: str,
+    draft_key: str,
+    db: Session = Depends(get_db),
+    membership: Membership = Depends(get_active_membership),
 ) -> Draft:
     return _own_draft_or_404(db, tenant_id, membership.user_id, draft_key)
 
@@ -78,7 +91,13 @@ def save_draft(
     if existing is None:
         if payload.base_revision != 0:
             raise HTTPException(status.HTTP_409_CONFLICT, "base_revision 0 required to create a new draft")
-        draft = Draft(tenant_id=tenant_id, user_id=membership.user_id, draft_key=draft_key, form_data=payload.form_data, revision=1)
+        draft = Draft(
+            tenant_id=tenant_id,
+            user_id=membership.user_id,
+            draft_key=draft_key,
+            form_data=payload.form_data,
+            revision=1,
+        )
         db.add(draft)
     else:
         if payload.base_revision != existing.revision:
@@ -100,7 +119,10 @@ def save_draft(
 
 @router.delete("/orgs/{tenant_id}/drafts/{draft_key}", status_code=status.HTTP_204_NO_CONTENT)
 def discard_draft(
-    tenant_id: str, draft_key: str, db: Session = Depends(get_db), membership: Membership = Depends(get_active_membership)
+    tenant_id: str,
+    draft_key: str,
+    db: Session = Depends(get_db),
+    membership: Membership = Depends(get_active_membership),
 ) -> None:
     draft = _own_draft_or_404(db, tenant_id, membership.user_id, draft_key)
     db.delete(draft)

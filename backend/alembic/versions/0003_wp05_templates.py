@@ -17,6 +17,7 @@ bgp_app connection can create a shared starter through the API. Only
 bgp_owner (table owner, exempt from RLS) can seed those, e.g. via
 scripts/seed_starter_frameworks.py.
 """
+
 from alembic import op
 import sqlalchemy as sa
 

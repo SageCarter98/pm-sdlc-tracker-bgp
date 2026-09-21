@@ -1,7 +1,6 @@
 import hashlib
 import json
 from datetime import datetime, timezone
-from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel
@@ -26,7 +25,7 @@ from app.models import (
     ProjectMembership,
     User,
 )
-from app.rule_engine import TemplateSchema, validate_template_schema
+from app.rule_engine import TemplateSchema
 from app.routers.projects import _get_owned_project_or_404, _load_bound_schema, _require_project_member
 
 router = APIRouter(tags=["decisions"])
@@ -142,19 +141,21 @@ def _compute_readiness(db: Session, project: Project, occurrence: GateOccurrence
         if excepted:
             continue
         (hard_blockers if item.blocker_level == "hard" else conditional_blockers).append(item.id)
-        blocker_explanations.append({
-            "item_id": item.id,
-            "gate_id": item.gate_id,
-            "blocker_level": item.blocker_level,
-            # REQ-036: plain language, no restricted information (item id
-            # and gate/kind are already scoped to a project this caller is
-            # a member of by the time this function runs).
-            "explanation": (
-                f"Gate {item.gate_id}: a {item.blocker_level} '{item.evidence_kind}' item "
-                f"(currently '{item.status}') has not been marked Complete."
-            ),
-            "corrective_action": f"POST /orgs/{{tenant_id}}/evidence/{item.id}/revisions with status 'Complete' and a reference",
-        })
+        blocker_explanations.append(
+            {
+                "item_id": item.id,
+                "gate_id": item.gate_id,
+                "blocker_level": item.blocker_level,
+                # REQ-036: plain language, no restricted information (item id
+                # and gate/kind are already scoped to a project this caller is
+                # a member of by the time this function runs).
+                "explanation": (
+                    f"Gate {item.gate_id}: a {item.blocker_level} '{item.evidence_kind}' item "
+                    f"(currently '{item.status}') has not been marked Complete."
+                ),
+                "corrective_action": f"POST /orgs/{{tenant_id}}/evidence/{item.id}/revisions with status 'Complete' and a reference",
+            }
+        )
 
     manifest = {
         "template_version_id": project.template_version_id,
@@ -253,7 +254,9 @@ class DecisionOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
-def _outcome_eligibility(schema: TemplateSchema, outcome: str, readiness: dict, conditions: ConditionsIn | None) -> tuple[bool, str | None]:
+def _outcome_eligibility(
+    schema: TemplateSchema, outcome: str, readiness: dict, conditions: ConditionsIn | None
+) -> tuple[bool, str | None]:
     if outcome not in schema.decision_outcomes:
         return False, f"'{outcome}' is not a decision outcome declared by this template version"
 
@@ -270,7 +273,10 @@ def _outcome_eligibility(schema: TemplateSchema, outcome: str, readiness: dict, 
 
     if outcome == "Approve with conditions":
         if conditions is None:
-            return False, "missing deadline or condition owner"  # TST-022 wording, covers the whole missing-conditions case
+            return (
+                False,
+                "missing deadline or condition owner",
+            )  # TST-022 wording, covers the whole missing-conditions case
         if not conditions.conditions or not conditions.owner_user_id:
             return False, "missing deadline or condition owner"
         if _as_utc(conditions.deadline) <= _now():
@@ -361,20 +367,28 @@ def _check_separation_of_duties(
 
     review = (
         db.query(CompensatingReview)
-        .filter(CompensatingReview.id == override.review_id, CompensatingReview.tenant_id == tenant_id, CompensatingReview.project_id == project_id)
+        .filter(
+            CompensatingReview.id == override.review_id,
+            CompensatingReview.tenant_id == tenant_id,
+            CompensatingReview.project_id == project_id,
+        )
         .one_or_none()
     )
     if review is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Compensating review not found for this project")
     if review.occurrence_id != occurrence.id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "That compensating review was recorded for a different occurrence")
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "That compensating review was recorded for a different occurrence"
+        )
     if review.manifest_digest != manifest_digest:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "That compensating review is stale -- evidence has changed since it was recorded; have the reviewer record a fresh one",
         )
     if review.reviewer_user_id == actor_user_id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "The compensating reviewer must be independent of the deciding actor")
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "The compensating reviewer must be independent of the deciding actor"
+        )
 
     # BGP-F03 follow-up: this function only ever runs from the decision-
     # commit path (_record_decision), never preview -- so, unlike
@@ -384,12 +398,18 @@ def _check_separation_of_duties(
     # this transaction, not race it.
     reviewer_membership = (
         db.query(Membership)
-        .filter(Membership.tenant_id == tenant_id, Membership.user_id == review.reviewer_user_id, Membership.active.is_(True))
+        .filter(
+            Membership.tenant_id == tenant_id,
+            Membership.user_id == review.reviewer_user_id,
+            Membership.active.is_(True),
+        )
         .with_for_update()
         .one_or_none()
     )
     if reviewer_membership is None or reviewer_membership.role not in DECISION_AUTHORITY_ROLES:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "The compensating reviewer no longer holds active approval authority")
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "The compensating reviewer no longer holds active approval authority"
+        )
     reviewer_pm = (
         db.query(ProjectMembership)
         .filter(ProjectMembership.project_id == project_id, ProjectMembership.user_id == review.reviewer_user_id)
@@ -397,7 +417,9 @@ def _check_separation_of_duties(
         .one_or_none()
     )
     if reviewer_pm is None or reviewer_pm.role not in DECISION_AUTHORITY_ROLES:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "The compensating reviewer no longer holds approval authority on this project")
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "The compensating reviewer no longer holds approval authority on this project"
+        )
 
     return review
 
@@ -428,11 +450,15 @@ def _require_decision_authority(db: Session, project_id: str, user: User, mfa_ve
     # user.mfa_enabled alone (an account-level flag) is not evidence this
     # session ever completed a second-factor check.
     if not (mfa_verified and user.mfa_enabled):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "MFA verification is required for this session before deciding (REQ-002)")
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "MFA verification is required for this session before deciding (REQ-002)"
+        )
     return pm
 
 
-@router.post("/orgs/{tenant_id}/projects/{project_id}/occurrences/{occurrence_id}/preview", response_model=PreviewResponse)
+@router.post(
+    "/orgs/{tenant_id}/projects/{project_id}/occurrences/{occurrence_id}/preview", response_model=PreviewResponse
+)
 def preview_decision(
     tenant_id: str,
     project_id: str,
@@ -564,7 +590,10 @@ def _record_decision(
         raise HTTPException(http_status, reason_text)
 
     if payload.manifest_digest != readiness["manifest_digest"]:
-        _deny("Submitted manifest_digest is stale -- evidence changed since preview, fetch a new preview and retry", status.HTTP_409_CONFLICT)
+        _deny(
+            "Submitted manifest_digest is stale -- evidence changed since preview, fetch a new preview and retry",
+            status.HTTP_409_CONFLICT,
+        )
 
     allowed, denial_reason = _outcome_eligibility(schema, payload.outcome, readiness, payload.conditions)
     if not allowed:
@@ -574,7 +603,13 @@ def _record_decision(
     if payload.outcome in ("Approve", "Approve with conditions"):
         try:
             compensating_review = _check_separation_of_duties(
-                db, tenant_id, project.id, occurrence, membership.user_id, readiness["manifest_digest"], payload.separation_override
+                db,
+                tenant_id,
+                project.id,
+                occurrence,
+                membership.user_id,
+                readiness["manifest_digest"],
+                payload.separation_override,
             )
         except HTTPException as exc:
             _deny(str(exc.detail), exc.status_code)
@@ -741,7 +776,11 @@ def get_decision(
 ) -> DecisionOut:
     """Sec.5.4 step 8: 'If the response is lost, the client retrieves the
     outcome rather than creating a second decision.'"""
-    decision = db.query(DecisionRecord).filter(DecisionRecord.id == decision_id, DecisionRecord.tenant_id == tenant_id).one_or_none()
+    decision = (
+        db.query(DecisionRecord)
+        .filter(DecisionRecord.id == decision_id, DecisionRecord.tenant_id == tenant_id)
+        .one_or_none()
+    )
     if decision is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Decision not found")
     _require_project_member(db, decision.project_id, membership.user_id)
@@ -768,7 +807,11 @@ def supersede_decision(
     if not payload.reason.strip():
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "A reason is required to supersede a decision")
 
-    original = db.query(DecisionRecord).filter(DecisionRecord.id == decision_id, DecisionRecord.tenant_id == tenant_id).one_or_none()
+    original = (
+        db.query(DecisionRecord)
+        .filter(DecisionRecord.id == decision_id, DecisionRecord.tenant_id == tenant_id)
+        .one_or_none()
+    )
     if original is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Decision not found")
 
@@ -834,7 +877,11 @@ def create_exception(
 ) -> ExceptionOut:
     """REQ-020: authority, scope and expiry are all validated up front, not
     left to be inferred later from a typed status."""
-    item = db.query(EvidenceItem).filter(EvidenceItem.id == evidence_item_id, EvidenceItem.tenant_id == tenant_id).one_or_none()
+    item = (
+        db.query(EvidenceItem)
+        .filter(EvidenceItem.id == evidence_item_id, EvidenceItem.tenant_id == tenant_id)
+        .one_or_none()
+    )
     if item is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Evidence item not found")
     membership = _require_decision_authority(db, item.project_id, user, mfa_verified)
@@ -892,7 +939,11 @@ def revoke_exception(
 ) -> ExceptionOut:
     """REQ-021: revocation never deletes the row -- the fact that an
     exception existed and was later revoked stays visible."""
-    exc = db.query(ExceptionRecord).filter(ExceptionRecord.id == exception_id, ExceptionRecord.tenant_id == tenant_id).one_or_none()
+    exc = (
+        db.query(ExceptionRecord)
+        .filter(ExceptionRecord.id == exception_id, ExceptionRecord.tenant_id == tenant_id)
+        .one_or_none()
+    )
     if exc is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Exception not found")
     membership = _require_decision_authority(db, exc.project_id, user, mfa_verified)
@@ -924,11 +975,20 @@ def list_exceptions(
     db: Session = Depends(get_db),
     membership: Membership = Depends(get_active_membership),
 ) -> list[ExceptionRecord]:
-    item = db.query(EvidenceItem).filter(EvidenceItem.id == evidence_item_id, EvidenceItem.tenant_id == tenant_id).one_or_none()
+    item = (
+        db.query(EvidenceItem)
+        .filter(EvidenceItem.id == evidence_item_id, EvidenceItem.tenant_id == tenant_id)
+        .one_or_none()
+    )
     if item is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Evidence item not found")
     _require_project_member(db, item.project_id, membership.user_id)
-    return db.query(ExceptionRecord).filter(ExceptionRecord.evidence_item_id == item.id).order_by(ExceptionRecord.created_at).all()
+    return (
+        db.query(ExceptionRecord)
+        .filter(ExceptionRecord.evidence_item_id == item.id)
+        .order_by(ExceptionRecord.created_at)
+        .all()
+    )
 
 
 @router.post(

@@ -23,6 +23,7 @@ independent of the live actor_user_id FK -- never a local account, matched
 by email on a later import exactly like ImportedActorProvenance already
 does elsewhere.
 """
+
 from alembic import op
 import sqlalchemy as sa
 

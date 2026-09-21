@@ -4,6 +4,7 @@ db.add, never db.commit) -- see each call site in app/routers/auth.py,
 app/routers/mfa.py and app/routers/orgs.py for what triggers each event
 and what ends up in `detail` (email only where genuinely useful for a
 self-service security history; never a password or code value)."""
+
 from sqlalchemy.orm import Session
 
 from app.models import SecurityLogEvent

@@ -27,6 +27,7 @@ hoped-for race): the lock blocks B until A has already committed, so B is
 guaranteed to lose. A `threading.Event` marks when A has the lock; a short
 sleep after that gives B's real HTTP request time to reach its own FOR
 UPDATE and genuinely block before A commits and releases it."""
+
 import threading
 import time
 import uuid
@@ -70,7 +71,10 @@ def seeded_decidable_project():
     membership_id = str(uuid.uuid4())
     template_id, version_id = str(uuid.uuid4()), str(uuid.uuid4())
     project_id, occurrence_id, item_id, pm_id = (
-        str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+        str(uuid.uuid4()),
+        str(uuid.uuid4()),
+        str(uuid.uuid4()),
+        str(uuid.uuid4()),
     )
 
     # Unlike the sibling file's identical-looking fixture (which drives
@@ -96,10 +100,15 @@ def seeded_decidable_project():
         )
         conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": tenant_id})
         conn.execute(
-            text("INSERT INTO memberships (id, tenant_id, user_id, role, active, created_at) VALUES (:id, :tid, :uid, 'approver', true, now())"),
+            text(
+                "INSERT INTO memberships (id, tenant_id, user_id, role, active, created_at) VALUES (:id, :tid, :uid, 'approver', true, now())"
+            ),
             {"id": membership_id, "tid": tenant_id, "uid": user_id},
         )
-        conn.execute(text("INSERT INTO templates (id, tenant_id, name, created_at) VALUES (:id, :tid, 'T', now())"), {"id": template_id, "tid": tenant_id})
+        conn.execute(
+            text("INSERT INTO templates (id, tenant_id, name, created_at) VALUES (:id, :tid, 'T', now())"),
+            {"id": template_id, "tid": tenant_id},
+        )
         conn.execute(
             text(
                 "INSERT INTO template_versions (id, template_id, version_number, schema_json, status, created_by_user_id, created_at, published_at) "
@@ -108,15 +117,21 @@ def seeded_decidable_project():
             {"id": version_id, "tpl": template_id, "schema": minimal_schema, "uid": user_id},
         )
         conn.execute(
-            text("INSERT INTO projects (id, tenant_id, name, template_version_id, class_id, owner_user_id, created_at) VALUES (:id, :tid, 'P', :ver, 'A', :uid, now())"),
+            text(
+                "INSERT INTO projects (id, tenant_id, name, template_version_id, class_id, owner_user_id, created_at) VALUES (:id, :tid, 'P', :ver, 'A', :uid, now())"
+            ),
             {"id": project_id, "tid": tenant_id, "ver": version_id, "uid": user_id},
         )
         conn.execute(
-            text("INSERT INTO project_memberships (id, tenant_id, project_id, user_id, role, created_at) VALUES (:id, :tid, :pid, :uid, 'approver', now())"),
+            text(
+                "INSERT INTO project_memberships (id, tenant_id, project_id, user_id, role, created_at) VALUES (:id, :tid, :pid, :uid, 'approver', now())"
+            ),
             {"id": pm_id, "tid": tenant_id, "pid": project_id, "uid": user_id},
         )
         conn.execute(
-            text("INSERT INTO gate_occurrences (id, tenant_id, project_id, gate_id, sequence, trigger, created_at) VALUES (:id, :tid, :pid, 'G1', 1, 'routine', now())"),
+            text(
+                "INSERT INTO gate_occurrences (id, tenant_id, project_id, gate_id, sequence, trigger, created_at) VALUES (:id, :tid, :pid, 'G1', 1, 'routine', now())"
+            ),
             {"id": occurrence_id, "tid": tenant_id, "pid": project_id},
         )
         conn.execute(
@@ -128,8 +143,12 @@ def seeded_decidable_project():
         )
 
     yield {
-        "tenant_id": tenant_id, "user_id": user_id, "project_id": project_id,
-        "occurrence_id": occurrence_id, "item_id": item_id, "pm_id": pm_id,
+        "tenant_id": tenant_id,
+        "user_id": user_id,
+        "project_id": project_id,
+        "occurrence_id": occurrence_id,
+        "item_id": item_id,
+        "pm_id": pm_id,
     }
 
     with _owner_engine.begin() as conn:
@@ -148,12 +167,16 @@ def seeded_decidable_project():
 
 def test_real_endpoint_returns_clean_409_not_500_when_it_loses_the_race(seeded_decidable_project):
     t = seeded_decidable_project
-    assert app.dependency_overrides == {}, "a prior test left a dependency override active -- this test needs the REAL Postgres get_db"
+    assert app.dependency_overrides == {}, (
+        "a prior test left a dependency override active -- this test needs the REAL Postgres get_db"
+    )
 
     client = TestClient(app)
     client.cookies.set(SESSION_COOKIE, create_session_token(t["user_id"], token_version=0, mfa_verified=True))
 
-    preview = client.post(f"/orgs/{t['tenant_id']}/projects/{t['project_id']}/occurrences/{t['occurrence_id']}/preview", json={})
+    preview = client.post(
+        f"/orgs/{t['tenant_id']}/projects/{t['project_id']}/occurrences/{t['occurrence_id']}/preview", json={}
+    )
     assert preview.status_code == 200, preview.text
     digest = preview.json()["manifest_digest"]
     assert preview.json()["hard_blockers"] == []
@@ -167,7 +190,9 @@ def test_real_endpoint_returns_clean_409_not_500_when_it_loses_the_race(seeded_d
         txn = conn.begin()
         try:
             conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_id"]})
-            conn.execute(text("SELECT * FROM evidence_items WHERE occurrence_id = :oid FOR UPDATE"), {"oid": t["occurrence_id"]})
+            conn.execute(
+                text("SELECT * FROM evidence_items WHERE occurrence_id = :oid FOR UPDATE"), {"oid": t["occurrence_id"]}
+            )
             lock_acquired.set()
             # Generous margin for the OTHER thread's real HTTP request to
             # reach its own FOR UPDATE and genuinely block on this lock --
@@ -181,7 +206,14 @@ def test_real_endpoint_returns_clean_409_not_500_when_it_loses_the_race(seeded_d
                     "INSERT INTO decision_records (id, tenant_id, project_id, occurrence_id, actor_user_id, actor_role, outcome, manifest_json, reviewed_manifest_digest, created_at) "
                     "VALUES (:id, :tid, :pid, :oid, :uid, 'approver', 'Approve', CAST('{}' AS JSON), :digest, now())"
                 ),
-                {"id": winning_decision_id, "tid": t["tenant_id"], "pid": t["project_id"], "oid": t["occurrence_id"], "uid": t["user_id"], "digest": digest},
+                {
+                    "id": winning_decision_id,
+                    "tid": t["tenant_id"],
+                    "pid": t["project_id"],
+                    "oid": t["occurrence_id"],
+                    "uid": t["user_id"],
+                    "digest": digest,
+                },
             )
             txn.commit()
         finally:
@@ -202,7 +234,9 @@ def test_real_endpoint_returns_clean_409_not_500_when_it_loses_the_race(seeded_d
     thread_a.join(timeout=10)
     thread_b.join(timeout=10)
 
-    assert not thread_a.is_alive() and not thread_b.is_alive(), "one of the threads did not finish -- the lock likely never blocked as expected"
+    assert not thread_a.is_alive() and not thread_b.is_alive(), (
+        "one of the threads did not finish -- the lock likely never blocked as expected"
+    )
     resp = http_response.get("resp")
     assert resp is not None, "the real HTTP request never completed"
     # This is the actual assertion under test: WITHOUT the flush-inside-try

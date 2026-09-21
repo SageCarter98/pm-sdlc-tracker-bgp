@@ -26,6 +26,7 @@ effectively lost after one hop.
   REQ-025's precedent), keyed by (tenant_id, kind, source_id) so
   re-importing an already-imported archive cannot duplicate entries.
 """
+
 from alembic import op
 import sqlalchemy as sa
 

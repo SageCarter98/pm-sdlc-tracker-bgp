@@ -16,6 +16,7 @@ before the test ends (via `pytest.fail` in a `finally`, not a bare assert --
 if the restore itself silently failed, the database would be left weakened
 for every later test/run, so that failure has to be loud).
 """
+
 import uuid
 
 import pytest
@@ -56,23 +57,31 @@ def two_tenants_with_memberships():
     user_a, user_b = str(uuid.uuid4()), str(uuid.uuid4())
     with _owner_engine.begin() as conn:
         for tid, name in [(tenant_a, "Tenant A"), (tenant_b, "Tenant B")]:
-            conn.execute(text("INSERT INTO tenants (id, name, created_at) VALUES (:id, :name, now())"), {"id": tid, "name": name})
+            conn.execute(
+                text("INSERT INTO tenants (id, name, created_at) VALUES (:id, :name, now())"), {"id": tid, "name": name}
+            )
         for uid, email in [(user_a, f"{user_a}@example.com"), (user_b, f"{user_b}@example.com")]:
             conn.execute(
-                text("INSERT INTO users (id, email, password_hash, verified, created_at, mfa_enabled) "
-                     "VALUES (:id, :email, 'x', false, now(), false)"),
+                text(
+                    "INSERT INTO users (id, email, password_hash, verified, created_at, mfa_enabled) "
+                    "VALUES (:id, :email, 'x', false, now(), false)"
+                ),
                 {"id": uid, "email": email},
             )
         conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": tenant_a})
         conn.execute(
-            text("INSERT INTO memberships (id, tenant_id, user_id, role, active, created_at) "
-                 "VALUES (:id, :tid, :uid, 'contributor', true, now())"),
+            text(
+                "INSERT INTO memberships (id, tenant_id, user_id, role, active, created_at) "
+                "VALUES (:id, :tid, :uid, 'contributor', true, now())"
+            ),
             {"id": str(uuid.uuid4()), "tid": tenant_a, "uid": user_a},
         )
         conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": tenant_b})
         conn.execute(
-            text("INSERT INTO memberships (id, tenant_id, user_id, role, active, created_at) "
-                 "VALUES (:id, :tid, :uid, 'contributor', true, now())"),
+            text(
+                "INSERT INTO memberships (id, tenant_id, user_id, role, active, created_at) "
+                "VALUES (:id, :tid, :uid, 'contributor', true, now())"
+            ),
             {"id": str(uuid.uuid4()), "tid": tenant_b, "uid": user_b},
         )
     yield {"tenant_a": tenant_a, "tenant_b": tenant_b, "user_a": user_a, "user_b": user_b}
@@ -147,9 +156,7 @@ def test_app_role_cannot_alter_or_drop_the_table(two_tenants_with_memberships):
             conn.execute(text("ALTER TABLE memberships ADD COLUMN sneaky text"))
 
 
-_ORIGINAL_POLICY = (
-    "tenant_id = current_setting('app.tenant_id', true)"
-)
+_ORIGINAL_POLICY = "tenant_id = current_setting('app.tenant_id', true)"
 
 
 def test_seeded_leak_in_rls_policy_is_detected(two_tenants_with_memberships):
@@ -161,28 +168,24 @@ def test_seeded_leak_in_rls_policy_is_detected(two_tenants_with_memberships):
     isolation holds again -- so the seeded leak never outlives this test."""
     t = two_tenants_with_memberships
     with _owner_engine.begin() as conn:
-        conn.execute(text(
-            "ALTER POLICY memberships_tenant_isolation ON memberships "
-            "USING (true) WITH CHECK (true)"
-        ))
+        conn.execute(text("ALTER POLICY memberships_tenant_isolation ON memberships USING (true) WITH CHECK (true)"))
 
     try:
         with _app_engine.connect() as conn:
             conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_a"]})
-            leaked_tenants = {
-                r.tenant_id
-                for r in conn.execute(text("SELECT tenant_id FROM memberships")).fetchall()
-            }
+            leaked_tenants = {r.tenant_id for r in conn.execute(text("SELECT tenant_id FROM memberships")).fetchall()}
         assert t["tenant_b"] in leaked_tenants, (
             "seeded leak was not observed -- the weakened policy did not take "
             "effect, so this test cannot claim to demonstrate detection"
         )
     finally:
         with _owner_engine.begin() as conn:
-            conn.execute(text(
-                "ALTER POLICY memberships_tenant_isolation ON memberships "
-                f"USING ({_ORIGINAL_POLICY}) WITH CHECK ({_ORIGINAL_POLICY})"
-            ))
+            conn.execute(
+                text(
+                    "ALTER POLICY memberships_tenant_isolation ON memberships "
+                    f"USING ({_ORIGINAL_POLICY}) WITH CHECK ({_ORIGINAL_POLICY})"
+                )
+            )
 
     with _app_engine.connect() as conn:
         conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_a"]})

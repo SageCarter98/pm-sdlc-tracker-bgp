@@ -1,4 +1,5 @@
 """WP12: REQ-045 (secret storage), REQ-047 (security logs, access review)."""
+
 import pyotp
 
 from tests.conftest import enable_mfa, register_and_login
@@ -18,7 +19,9 @@ def test_mfa_secret_is_encrypted_at_rest_not_plaintext(client):
     # pending_mfa_secret, not mfa_secret -- see app/routers/mfa.py:enroll.
     db = next(app.dependency_overrides[get_db]())
     user = db.query(User).filter(User.email == "user@tenant-a.example").one()
-    assert user.mfa_secret is None, "an unverified replacement must not touch the (here, not-yet-existing) active factor"
+    assert user.mfa_secret is None, (
+        "an unverified replacement must not touch the (here, not-yet-existing) active factor"
+    )
     assert user.pending_mfa_secret != secret, "the plaintext TOTP seed must never be stored as-is"
     assert secret not in user.pending_mfa_secret
 
@@ -58,7 +61,9 @@ def test_factor_replacement_does_not_disable_active_mfa_mid_flight(client):
     # A fresh password-only login still requires the OLD, still-active
     # factor -- it must not be satisfiable by password alone just because a
     # replacement is in flight.
-    login_start = client.post("/auth/login", json={"email": "user@tenant-a.example", "password": "correct horse battery staple"})
+    login_start = client.post(
+        "/auth/login", json={"email": "user@tenant-a.example", "password": "correct horse battery staple"}
+    )
     assert login_start.json()["mfa_required"] is True
     login_finish = client.post("/auth/mfa/login-verify", json={"code": pyotp.TOTP(old_secret).now()})
     assert login_finish.status_code == 200, login_finish.text
@@ -79,7 +84,9 @@ def test_completing_replacement_activates_new_factor_and_invalidates_old_session
 
     # The old factor no longer verifies logins -- it was replaced, not kept
     # active alongside the new one.
-    login_start = client.post("/auth/login", json={"email": "user@tenant-a.example", "password": "correct horse battery staple"})
+    login_start = client.post(
+        "/auth/login", json={"email": "user@tenant-a.example", "password": "correct horse battery staple"}
+    )
     assert login_start.json()["mfa_required"] is True
     stale_code_login = client.post("/auth/mfa/login-verify", json={"code": pyotp.TOTP(old_secret).now()})
     assert stale_code_login.status_code == 422

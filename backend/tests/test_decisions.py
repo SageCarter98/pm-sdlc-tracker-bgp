@@ -1,5 +1,6 @@
 """WP07: REQ-020/021 (exceptions), REQ-022/023/024/025 (decisions), REQ-006
 (separation of duties, BGP-F02)."""
+
 import pytest
 from datetime import datetime, timedelta, timezone
 
@@ -107,7 +108,13 @@ def test_full_approval_flow_with_separation_of_duties_override(client):
     _complete_item(client, tenant_id, s1_item_id)
     client.post(
         f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
-        json={"base_revision": 2, "status": "Complete", "owner_user_id": admin_id, "reference": "doc-1", "source_hash": "x"},
+        json={
+            "base_revision": 2,
+            "status": "Complete",
+            "owner_user_id": admin_id,
+            "reference": "doc-1",
+            "source_hash": "x",
+        },
     )
 
     preview = client.post(f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={})
@@ -191,7 +198,13 @@ def test_clearing_or_reassigning_ownership_cannot_defeat_separation_of_duties(cl
     # (still the attributed actor on this new revision).
     reassign = client.post(
         f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
-        json={"base_revision": 2, "status": "Complete", "owner_user_id": approver_id, "reference": "doc-1", "source_hash": "x"},
+        json={
+            "base_revision": 2,
+            "status": "Complete",
+            "owner_user_id": approver_id,
+            "reference": "doc-1",
+            "source_hash": "x",
+        },
     )
     assert reassign.status_code == 201, reassign.text
 
@@ -237,7 +250,13 @@ def test_stale_compensating_review_rejected_after_evidence_changes(client):
     _complete_item(client, tenant_id, s1_item_id)
     client.post(
         f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
-        json={"base_revision": 2, "status": "Complete", "owner_user_id": admin_id, "reference": "doc-1", "source_hash": "x"},
+        json={
+            "base_revision": 2,
+            "status": "Complete",
+            "owner_user_id": admin_id,
+            "reference": "doc-1",
+            "source_hash": "x",
+        },
     )
 
     login(client, "approver2@tenant-a.example")
@@ -251,14 +270,24 @@ def test_stale_compensating_review_rejected_after_evidence_changes(client):
     # new manifest_digest, the review above no longer matches it.
     client.post(
         f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
-        json={"base_revision": 3, "status": "Complete", "owner_user_id": admin_id, "reference": "doc-2", "source_hash": "y"},
+        json={
+            "base_revision": 3,
+            "status": "Complete",
+            "owner_user_id": admin_id,
+            "reference": "doc-2",
+            "source_hash": "y",
+        },
     )
     preview = client.post(f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={})
     fresh_digest = preview.json()["manifest_digest"]
 
     stale = client.post(
         f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/decisions",
-        json={"outcome": "Approve", "manifest_digest": fresh_digest, "separation_override": {"review_id": review["id"]}},
+        json={
+            "outcome": "Approve",
+            "manifest_digest": fresh_digest,
+            "separation_override": {"review_id": review["id"]},
+        },
         headers={"Idempotency-Key": "stale-review-key"},
     )
     assert stale.status_code == 403, stale.text
@@ -287,21 +316,26 @@ def test_idempotent_retry_returns_same_decision_not_a_conflict(client):
     body = {"outcome": "Approve", "manifest_digest": digest}
     first = client.post(
         f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/decisions",
-        json=body, headers={"Idempotency-Key": "retry-key"},
+        json=body,
+        headers={"Idempotency-Key": "retry-key"},
     )
     assert first.status_code == 201, first.text
 
     second = client.post(
         f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/decisions",
-        json=body, headers={"Idempotency-Key": "retry-key"},
+        json=body,
+        headers={"Idempotency-Key": "retry-key"},
     )
     assert second.status_code == 201, second.text
-    assert second.json()["id"] == first.json()["id"], "same idempotency key must return the same decision, not a new one"
+    assert second.json()["id"] == first.json()["id"], (
+        "same idempotency key must return the same decision, not a new one"
+    )
 
     changed_body = {"outcome": "Hold", "manifest_digest": digest}
     conflict = client.post(
         f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/decisions",
-        json=changed_body, headers={"Idempotency-Key": "retry-key"},
+        json=changed_body,
+        headers={"Idempotency-Key": "retry-key"},
     )
     assert conflict.status_code == 409, conflict.text
 
@@ -324,13 +358,15 @@ def test_second_decision_on_same_occurrence_requires_superseding(client):
 
     first = client.post(
         f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/decisions",
-        json={"outcome": "Approve", "manifest_digest": digest}, headers={"Idempotency-Key": "k1"},
+        json={"outcome": "Approve", "manifest_digest": digest},
+        headers={"Idempotency-Key": "k1"},
     )
     decision_id = first.json()["id"]
 
     again = client.post(
         f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/decisions",
-        json={"outcome": "Hold", "manifest_digest": digest}, headers={"Idempotency-Key": "k2"},
+        json={"outcome": "Hold", "manifest_digest": digest},
+        headers={"Idempotency-Key": "k2"},
     )
     assert again.status_code == 409, again.text
 
@@ -392,8 +428,12 @@ def test_exception_excuses_a_hard_blocker_and_revocation_reinstates_it(client):
     revoke = client.post(f"/orgs/{tenant_id}/exceptions/{exc.json()['id']}/revoke")
     assert revoke.status_code == 200, revoke.text
 
-    preview_after = client.post(f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={})
-    assert s1_item_id in preview_after.json()["hard_blockers"], "revoking the exception must reinstate the blocker (REQ-021)"
+    preview_after = client.post(
+        f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={}
+    )
+    assert s1_item_id in preview_after.json()["hard_blockers"], (
+        "revoking the exception must reinstate the blocker (REQ-021)"
+    )
 
 
 def test_conditional_approval_requires_owner_and_future_deadline(client):
@@ -469,7 +509,12 @@ def test_decision_commit_failure_leaves_no_partial_state(client, monkeypatch):
 
     db = next(app.dependency_overrides[get_db]())
     assert db.query(DecisionRecord).filter(DecisionRecord.project_id == project_id).count() == 0
-    assert db.query(AuditEvent).filter(AuditEvent.project_id == project_id, AuditEvent.event_type == "decision_recorded").count() == 0
+    assert (
+        db.query(AuditEvent)
+        .filter(AuditEvent.project_id == project_id, AuditEvent.event_type == "decision_recorded")
+        .count()
+        == 0
+    )
     assert db.query(IdempotencyRecord).filter(IdempotencyRecord.idempotency_key == "crash-key").count() == 0
 
 
@@ -487,7 +532,9 @@ def test_only_decision_authority_roles_can_record_decisions(client):
     s1_occurrence_id = next(o["id"] for o in created["occurrences"] if o["gate_id"] == "S1")
 
     register_and_login(client, "contributor@tenant-a.example")
-    preview = client.post(f"/orgs/{tenant_id}/projects/{created['project']['id']}/occurrences/{s1_occurrence_id}/preview", json={})
+    preview = client.post(
+        f"/orgs/{tenant_id}/projects/{created['project']['id']}/occurrences/{s1_occurrence_id}/preview", json={}
+    )
     digest = preview.json()["manifest_digest"]
     decide = client.post(
         f"/orgs/{tenant_id}/projects/{created['project']['id']}/occurrences/{s1_occurrence_id}/decisions",

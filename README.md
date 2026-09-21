@@ -48,12 +48,14 @@ Section 7 before treating anything gated on them as settled.
 Twelve decisions (DEC01–DEC12) are only partly resolved — see
 `docs/blueprint/Blueprint_Working_Source.md` Section 7. **DEC01 (named delivery
 lead and independent reviewer) is resolved** (delivery lead: Freston Kenny
-Adedeme; independent reviewer: Milton, who now also holds read access to this
-repository and is named in `.github/CODEOWNERS`) — but naming the reviewer,
-and giving him access, is not the same as a completed review: no code in this
-repository has actually been reviewed by Milton yet (tracker item #124 stays
-"Not started" until that happens; see `TRACKER.md`'s "Named roles" section).
-DEC02–DEC12 remain otherwise as the Blueprint records them.
+Adedeme; independent reviewer: Milton, named in `.github/CODEOWNERS`) —
+**and Milton has now actually reviewed and approved code**: real `APPROVED`
+GitHub reviews on PR #3 and PR #4 (checked via `gh pr view --json reviews`,
+not inferred from the merge), closing tracker item #124 2026-09-19. Branch
+protection requiring code-owner review on `master` is a separate GitHub
+settings toggle, still not confirmed on (tracker item #117) — CODEOWNERS
+alone does not enforce anything by itself. DEC02–DEC12 remain otherwise as
+the Blueprint records them.
 
 ## Repository layout
 
@@ -64,6 +66,11 @@ docs/blueprint/     Approved blueprint pack v0.2 (spec, requirements, interface,
 docs/wp02/           Discovery/assurance documents (threat model, privacy
                      assessment, data retention policy, assurance plan, data
                      inventory) drafted for WP02 -- not independently reviewed.
+docs/api-reference.md      Pointer to the generated OpenAPI spec (docs/openapi.json)
+                            -- the interactive form is `GET /docs` on a running instance.
+docs/dependency_licence_inventory.md  Runtime dependency/licence inventory (SDLC G3.08).
+docs/DEFECT_REGISTER.md    Structured register of found-and-fixed defects, one row
+                            per finding with commit/reviewer/test evidence (SDLC G3.12).
 backend/             FastAPI + PostgreSQL + SQLAlchemy/Alembic service.
                      Identity/MFA, tenancy (RLS), templates, projects,
                      evidence, decisions, integrity, export/import, drafts.

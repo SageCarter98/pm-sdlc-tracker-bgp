@@ -28,6 +28,7 @@ table also now carries a stable `source_id` (models.py's Template.source_id
 docstring) so identity survives id regeneration across export -> import ->
 export hops.
 """
+
 import hashlib
 import json
 import uuid
@@ -76,8 +77,11 @@ router = APIRouter(tags=["export-import"])
 
 FORMAT_VERSION = 1
 SECURITY_EXCLUSIONS = [
-    "users.password_hash", "users.mfa_secret", "mfa_recovery_codes.code_hash",
-    "invitations.token_hash", "session cookies/tokens",
+    "users.password_hash",
+    "users.mfa_secret",
+    "mfa_recovery_codes.code_hash",
+    "invitations.token_hash",
+    "session cookies/tokens",
 ]
 
 
@@ -131,22 +135,34 @@ def _build_archive(db: Session, tenant_id: str, requesting_user_id: str) -> dict
 
     templates_out = []
     for t in db.query(Template).filter(Template.tenant_id == tenant_id).all():
-        versions = db.query(TemplateVersion).filter(TemplateVersion.template_id == t.id).order_by(TemplateVersion.version_number).all()
+        versions = (
+            db.query(TemplateVersion)
+            .filter(TemplateVersion.template_id == t.id)
+            .order_by(TemplateVersion.version_number)
+            .all()
+        )
         for v in versions:
             if v.created_by_user_id:
                 actor_ids.add(v.created_by_user_id)
-        templates_out.append({
-            "id": t.id, "source_id": t.source_id or t.id, "name": t.name,
-            "versions": [
-                {
-                    "id": v.id, "source_id": v.source_id or v.id,
-                    "version_number": v.version_number, "schema_json": v.schema_json,
-                    "status": v.status, "created_by_actor_id": v.created_by_user_id,
-                    "published_at": _jsonable(v.published_at),
-                }
-                for v in versions
-            ],
-        })
+        templates_out.append(
+            {
+                "id": t.id,
+                "source_id": t.source_id or t.id,
+                "name": t.name,
+                "versions": [
+                    {
+                        "id": v.id,
+                        "source_id": v.source_id or v.id,
+                        "version_number": v.version_number,
+                        "schema_json": v.schema_json,
+                        "status": v.status,
+                        "created_by_actor_id": v.created_by_user_id,
+                        "published_at": _jsonable(v.published_at),
+                    }
+                    for v in versions
+                ],
+            }
+        )
 
     projects_out = []
     for p in db.query(Project).filter(Project.tenant_id == tenant_id).all():
@@ -183,116 +199,196 @@ def _build_archive(db: Session, tenant_id: str, requesting_user_id: str) -> dict
                         historical_actors[r.source_actor_id] = r.source_actor_email
                     if r.owner_user_id:
                         actor_ids.add(r.owner_user_id)
-                items_out.append({
-                    "id": i.id, "source_id": i.source_id or i.id,
-                    "gate_id": i.gate_id, "rule_id": i.rule_id, "evidence_kind": i.evidence_kind,
-                    "required": i.required, "blocker_level": i.blocker_level, "permitted_role_ids": i.permitted_role_ids,
-                    "status": i.status, "owner_actor_id": i.owner_user_id,
-                    "due_date": _jsonable(i.due_date), "completed_date": _jsonable(i.completed_date), "reference": i.reference,
-                    # BGP-F04: full history, not just current state -- each
-                    # revision's own source_version/source_hash included.
-                    "revisions": [
-                        {
-                            "revision_number": r.revision_number, "status": r.status,
-                            "owner_actor_id": r.owner_user_id, "due_date": _jsonable(r.due_date),
-                            "completed_date": _jsonable(r.completed_date), "reference": r.reference,
-                            "source_version": r.source_version, "source_hash": r.source_hash,
-                            # BGP-F04 follow-up: prefer the preserved
-                            # original identity over the live FK -- see
-                            # EvidenceRevision.source_actor_id's docstring
-                            # and the actor_ids loop above. created_at is
-                            # now always the true original time too, since
-                            # commit_import restores it instead of letting
-                            # it default to import time.
-                            "actor_actor_id": r.source_actor_id if r.source_actor_id is not None else r.actor_user_id,
-                            "created_at": _jsonable(r.created_at),
-                        }
-                        for r in revisions
-                    ],
-                })
-            occs_out.append({
-                "id": o.id, "source_id": o.source_id or o.id,
-                "gate_id": o.gate_id, "sequence": o.sequence, "trigger": o.trigger,
-                "due_at": _jsonable(o.due_at), "evidence_items": items_out,
-            })
-        projects_out.append({
-            "id": p.id, "source_id": p.source_id or p.id,
-            "name": p.name, "template_version_id": p.template_version_id, "class_id": p.class_id,
-            "owner_actor_id": p.owner_user_id,
-            "members": [{"actor_id": m.user_id, "role": m.role} for m in members],
-            "occurrences": occs_out,
-        })
+                items_out.append(
+                    {
+                        "id": i.id,
+                        "source_id": i.source_id or i.id,
+                        "gate_id": i.gate_id,
+                        "rule_id": i.rule_id,
+                        "evidence_kind": i.evidence_kind,
+                        "required": i.required,
+                        "blocker_level": i.blocker_level,
+                        "permitted_role_ids": i.permitted_role_ids,
+                        "status": i.status,
+                        "owner_actor_id": i.owner_user_id,
+                        "due_date": _jsonable(i.due_date),
+                        "completed_date": _jsonable(i.completed_date),
+                        "reference": i.reference,
+                        # BGP-F04: full history, not just current state -- each
+                        # revision's own source_version/source_hash included.
+                        "revisions": [
+                            {
+                                "revision_number": r.revision_number,
+                                "status": r.status,
+                                "owner_actor_id": r.owner_user_id,
+                                "due_date": _jsonable(r.due_date),
+                                "completed_date": _jsonable(r.completed_date),
+                                "reference": r.reference,
+                                "source_version": r.source_version,
+                                "source_hash": r.source_hash,
+                                # BGP-F04 follow-up: prefer the preserved
+                                # original identity over the live FK -- see
+                                # EvidenceRevision.source_actor_id's docstring
+                                # and the actor_ids loop above. created_at is
+                                # now always the true original time too, since
+                                # commit_import restores it instead of letting
+                                # it default to import time.
+                                "actor_actor_id": r.source_actor_id
+                                if r.source_actor_id is not None
+                                else r.actor_user_id,
+                                "created_at": _jsonable(r.created_at),
+                            }
+                            for r in revisions
+                        ],
+                    }
+                )
+            occs_out.append(
+                {
+                    "id": o.id,
+                    "source_id": o.source_id or o.id,
+                    "gate_id": o.gate_id,
+                    "sequence": o.sequence,
+                    "trigger": o.trigger,
+                    "due_at": _jsonable(o.due_at),
+                    "evidence_items": items_out,
+                }
+            )
+        projects_out.append(
+            {
+                "id": p.id,
+                "source_id": p.source_id or p.id,
+                "name": p.name,
+                "template_version_id": p.template_version_id,
+                "class_id": p.class_id,
+                "owner_actor_id": p.owner_user_id,
+                "members": [{"actor_id": m.user_id, "role": m.role} for m in members],
+                "occurrences": occs_out,
+            }
+        )
 
     compensating_reviews_out = []
     for r in db.query(CompensatingReview).filter(CompensatingReview.tenant_id == tenant_id).all():
         actor_ids.add(r.reviewer_user_id)
-        compensating_reviews_out.append({
-            "id": r.id, "source_id": r.id, "occurrence_id": r.occurrence_id,
-            "reviewer_actor_id": r.reviewer_user_id, "manifest_digest": r.manifest_digest,
-            "note": r.note, "created_at": _jsonable(r.created_at),
-        })
+        compensating_reviews_out.append(
+            {
+                "id": r.id,
+                "source_id": r.id,
+                "occurrence_id": r.occurrence_id,
+                "reviewer_actor_id": r.reviewer_user_id,
+                "manifest_digest": r.manifest_digest,
+                "note": r.note,
+                "created_at": _jsonable(r.created_at),
+            }
+        )
 
     decisions_out = []
     for d in db.query(DecisionRecord).filter(DecisionRecord.tenant_id == tenant_id).all():
         actor_ids.add(d.actor_user_id)
         if d.separation_override_reviewer_id:
             actor_ids.add(d.separation_override_reviewer_id)
-        decisions_out.append({
-            # BGP-F04: decisions are never live-recreated on import (see
-            # module docstring), so every row this query returns is always
-            # native to this tenant -- source_id is always its own id.
-            "id": d.id, "source_id": d.id, "project_id": d.project_id, "occurrence_id": d.occurrence_id,
-            "actor_actor_id": d.actor_user_id, "actor_role": d.actor_role, "outcome": d.outcome,
-            "manifest_json": d.manifest_json, "reviewed_manifest_digest": d.reviewed_manifest_digest,
-            "conditions_json": d.conditions_json, "supersedes_decision_id": d.supersedes_decision_id,
-            "reason": d.reason,
-            "separation_override_review_id": d.separation_override_review_id,
-            "separation_override_reviewer_actor_id": d.separation_override_reviewer_id,
-            "separation_override_note": d.separation_override_note,
-            "created_at": _jsonable(d.created_at),
-        })
+        decisions_out.append(
+            {
+                # BGP-F04: decisions are never live-recreated on import (see
+                # module docstring), so every row this query returns is always
+                # native to this tenant -- source_id is always its own id.
+                "id": d.id,
+                "source_id": d.id,
+                "project_id": d.project_id,
+                "occurrence_id": d.occurrence_id,
+                "actor_actor_id": d.actor_user_id,
+                "actor_role": d.actor_role,
+                "outcome": d.outcome,
+                "manifest_json": d.manifest_json,
+                "reviewed_manifest_digest": d.reviewed_manifest_digest,
+                "conditions_json": d.conditions_json,
+                "supersedes_decision_id": d.supersedes_decision_id,
+                "reason": d.reason,
+                "separation_override_review_id": d.separation_override_review_id,
+                "separation_override_reviewer_actor_id": d.separation_override_reviewer_id,
+                "separation_override_note": d.separation_override_note,
+                "created_at": _jsonable(d.created_at),
+            }
+        )
 
     exceptions_out = []
     for e in db.query(ExceptionRecord).filter(ExceptionRecord.tenant_id == tenant_id).all():
         actor_ids.add(e.approving_user_id)
         actor_ids.add(e.owner_user_id)
-        exceptions_out.append({
-            "id": e.id, "source_id": e.id, "evidence_item_id": e.evidence_item_id, "reason": e.reason, "safeguards": e.safeguards,
-            "approving_actor_id": e.approving_user_id, "owner_actor_id": e.owner_user_id,
-            "starts_at": _jsonable(e.starts_at), "expires_at": _jsonable(e.expires_at), "status": e.status,
-            "revoked_at": _jsonable(e.revoked_at),
-        })
+        exceptions_out.append(
+            {
+                "id": e.id,
+                "source_id": e.id,
+                "evidence_item_id": e.evidence_item_id,
+                "reason": e.reason,
+                "safeguards": e.safeguards,
+                "approving_actor_id": e.approving_user_id,
+                "owner_actor_id": e.owner_user_id,
+                "starts_at": _jsonable(e.starts_at),
+                "expires_at": _jsonable(e.expires_at),
+                "status": e.status,
+                "revoked_at": _jsonable(e.revoked_at),
+            }
+        )
 
     audit_out = []
     for a in db.query(AuditEvent).filter(AuditEvent.tenant_id == tenant_id).all():
         actor_ids.add(a.actor_user_id)
-        audit_out.append({
-            "id": a.id, "source_id": a.id, "project_id": a.project_id, "occurrence_id": a.occurrence_id, "decision_id": a.decision_id,
-            "actor_actor_id": a.actor_user_id, "event_type": a.event_type, "detail": a.detail, "sequence": a.sequence,
-            "created_at": _jsonable(a.created_at),
-        })
+        audit_out.append(
+            {
+                "id": a.id,
+                "source_id": a.id,
+                "project_id": a.project_id,
+                "occurrence_id": a.occurrence_id,
+                "decision_id": a.decision_id,
+                "actor_actor_id": a.actor_user_id,
+                "event_type": a.event_type,
+                "detail": a.detail,
+                "sequence": a.sequence,
+                "created_at": _jsonable(a.created_at),
+            }
+        )
 
     receipts_out = [
         {
-            "id": c.id, "source_id": c.id, "project_id": c.project_id, "from_sequence": c.from_sequence, "to_sequence": c.to_sequence,
-            "event_count": c.event_count, "chain_digest": c.chain_digest, "created_at": _jsonable(c.created_at),
+            "id": c.id,
+            "source_id": c.id,
+            "project_id": c.project_id,
+            "from_sequence": c.from_sequence,
+            "to_sequence": c.to_sequence,
+            "event_count": c.event_count,
+            "chain_digest": c.chain_digest,
+            "created_at": _jsonable(c.created_at),
         }
         for c in db.query(IntegrityCheckpoint).filter(IntegrityCheckpoint.tenant_id == tenant_id).all()
     ]
 
     sections = {
-        "templates": templates_out, "projects": projects_out,
-        "decisions": decisions_out, "exceptions": exceptions_out, "audit": audit_out,
-        "integrity_receipts": receipts_out, "compensating_reviews": compensating_reviews_out,
+        "templates": templates_out,
+        "projects": projects_out,
+        "decisions": decisions_out,
+        "exceptions": exceptions_out,
+        "audit": audit_out,
+        "integrity_receipts": receipts_out,
+        "compensating_reviews": compensating_reviews_out,
     }
 
     # BGP-F04: fold in historical content from a PRIOR import so it survives
     # this export too -- each entry is re-emitted exactly as it was first
     # exported (payload_json), never regenerated or reinterpreted.
     for section, kind in HISTORICAL_KINDS.items():
-        for ihr in db.query(ImportedHistoricalRecord).filter(ImportedHistoricalRecord.tenant_id == tenant_id, ImportedHistoricalRecord.kind == kind).all():
+        for ihr in (
+            db.query(ImportedHistoricalRecord)
+            .filter(ImportedHistoricalRecord.tenant_id == tenant_id, ImportedHistoricalRecord.kind == kind)
+            .all()
+        ):
             sections[section].append(ihr.payload_json)
-            for key in ("actor_actor_id", "owner_actor_id", "approving_actor_id", "reviewer_actor_id", "separation_override_reviewer_actor_id"):
+            for key in (
+                "actor_actor_id",
+                "owner_actor_id",
+                "approving_actor_id",
+                "reviewer_actor_id",
+                "separation_override_reviewer_actor_id",
+            ):
                 value = ihr.payload_json.get(key)
                 if value:
                     actor_ids.add(value)
@@ -331,8 +427,12 @@ class ExportJobOut(BaseModel):
     @classmethod
     def from_job(cls, job: ExportJob) -> "ExportJobOut":
         return cls(
-            id=job.id, status=job.status, format_version=job.format_version,
-            archive_digest=job.archive_digest, archive=job.archive_json, created_at=job.created_at,
+            id=job.id,
+            status=job.status,
+            format_version=job.format_version,
+            archive_digest=job.archive_digest,
+            archive=job.archive_json,
+            created_at=job.created_at,
         )
 
 
@@ -346,8 +446,10 @@ def create_export(
     honest state to leave it in until that requirement exists to enforce)."""
     archive = _build_archive(db, tenant_id, membership.user_id)
     job = ExportJob(
-        tenant_id=tenant_id, requested_by_user_id=membership.user_id,
-        archive_json=archive, archive_digest=_digest(archive),
+        tenant_id=tenant_id,
+        requested_by_user_id=membership.user_id,
+        archive_json=archive,
+        archive_digest=_digest(archive),
     )
     db.add(job)
     db.commit()
@@ -420,7 +522,9 @@ def validate_import(
     if not manifest:
         errors.append("archive has no 'manifest' section")
     elif manifest.get("format_version") != FORMAT_VERSION:
-        errors.append(f"unsupported format_version {manifest.get('format_version')!r} (this instance supports {FORMAT_VERSION})")
+        errors.append(
+            f"unsupported format_version {manifest.get('format_version')!r} (this instance supports {FORMAT_VERSION})"
+        )
 
     section_digests = (manifest or {}).get("section_digests", {})
     for section, expected in section_digests.items():
@@ -431,7 +535,13 @@ def validate_import(
     actor_matches = []
     for a in archive.get("actors", []) if isinstance(archive.get("actors"), list) else []:
         local = _match_actor(db, tenant_id, a.get("email"))
-        actor_matches.append({"source_actor_id": a.get("id"), "email": a.get("email"), "matched_local_user_id": local.id if local else None})
+        actor_matches.append(
+            {
+                "source_actor_id": a.get("id"),
+                "email": a.get("email"),
+                "matched_local_user_id": local.id if local else None,
+            }
+        )
 
     report = {
         "ok": not errors,
@@ -443,8 +553,12 @@ def validate_import(
     }
 
     job = ImportJob(
-        tenant_id=tenant_id, requested_by_user_id=membership.user_id, archive_json=archive,
-        validation_report=report, status=("validated" if report["ok"] else "rejected"), validated_at=_now(),
+        tenant_id=tenant_id,
+        requested_by_user_id=membership.user_id,
+        archive_json=archive,
+        validation_report=report,
+        status=("validated" if report["ok"] else "rejected"),
+        validated_at=_now(),
     )
     db.add(job)
     db.commit()
@@ -453,9 +567,14 @@ def validate_import(
     return ImportJobOut.model_validate(job)
 
 
-@router.post("/orgs/{tenant_id}/imports/{job_id}/commit", response_model=ImportJobOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/orgs/{tenant_id}/imports/{job_id}/commit", response_model=ImportJobOut, status_code=status.HTTP_201_CREATED
+)
 def commit_import(
-    tenant_id: str, job_id: str, db: Session = Depends(get_db), membership: Membership = Depends(require_role(Role.TENANT_ADMINISTRATOR))
+    tenant_id: str,
+    job_id: str,
+    db: Session = Depends(get_db),
+    membership: Membership = Depends(require_role(Role.TENANT_ADMINISTRATOR)),
 ) -> ImportJobOut:
     """REQ-030: 'lossless clean-instance re-import without privilege
     transfer.' Every row gets a fresh id (never reuses the archive's
@@ -474,7 +593,9 @@ def commit_import(
     if job.status == "committed":
         raise HTTPException(status.HTTP_409_CONFLICT, "Already committed")
     if job.status != "validated":
-        raise HTTPException(status.HTTP_409_CONFLICT, f"Job must be validated before committing (current status: {job.status})")
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, f"Job must be validated before committing (current status: {job.status})"
+        )
 
     archive = job.archive_json
     actor_map: dict[str, str | None] = {}
@@ -488,10 +609,15 @@ def commit_import(
             local = _match_actor(db, tenant_id, a.get("email"))
             actor_map[a["id"]] = local.id if local else None
             archive_actor_emails[a["id"]] = a.get("email")
-            db.add(ImportedActorProvenance(
-                tenant_id=tenant_id, import_job_id=job.id, source_actor_id=a["id"],
-                source_email=a.get("email"), matched_local_user_id=local.id if local else None,
-            ))
+            db.add(
+                ImportedActorProvenance(
+                    tenant_id=tenant_id,
+                    import_job_id=job.id,
+                    source_actor_id=a["id"],
+                    source_email=a.get("email"),
+                    matched_local_user_id=local.id if local else None,
+                )
+            )
 
         def resolve(source_actor_id: str | None, *, required: bool) -> str | None:
             if source_actor_id is None:
@@ -503,9 +629,15 @@ def commit_import(
 
         id_map: dict[str, str] = {}
         counts = {
-            k: 0 for k in (
-                "templates", "template_versions", "projects", "project_memberships",
-                "gate_occurrences", "evidence_items", "evidence_revisions",
+            k: 0
+            for k in (
+                "templates",
+                "template_versions",
+                "projects",
+                "project_memberships",
+                "gate_occurrences",
+                "evidence_items",
+                "evidence_revisions",
             )
         }
         historical_counts = {k: 0 for k in HISTORICAL_KINDS.values()}
@@ -520,45 +652,67 @@ def commit_import(
             for v in t.get("versions", []):
                 new_ver_id = str(uuid.uuid4())
                 id_map[v["id"]] = new_ver_id
-                db.add(TemplateVersion(
-                    id=new_ver_id, template_id=new_tpl_id, version_number=v["version_number"],
-                    schema_json=v["schema_json"], status=v["status"],
-                    created_by_user_id=resolve(v.get("created_by_actor_id"), required=False),
-                    published_at=_parse_dt(v.get("published_at")),
-                    source_id=v.get("source_id", v["id"]),
-                ))
+                db.add(
+                    TemplateVersion(
+                        id=new_ver_id,
+                        template_id=new_tpl_id,
+                        version_number=v["version_number"],
+                        schema_json=v["schema_json"],
+                        status=v["status"],
+                        created_by_user_id=resolve(v.get("created_by_actor_id"), required=False),
+                        published_at=_parse_dt(v.get("published_at")),
+                        source_id=v.get("source_id", v["id"]),
+                    )
+                )
                 counts["template_versions"] += 1
         db.flush()
 
         for p in archive.get("projects", []):
             new_tvid = id_map.get(p["template_version_id"])
             if new_tvid is None:
-                raise ValueError(f"project {p['id']} references template_version {p['template_version_id']!r} not present in this archive's templates section")
+                raise ValueError(
+                    f"project {p['id']} references template_version {p['template_version_id']!r} not present in this archive's templates section"
+                )
             new_pid = str(uuid.uuid4())
             id_map[p["id"]] = new_pid
-            db.add(Project(
-                id=new_pid, tenant_id=tenant_id, name=p["name"], template_version_id=new_tvid,
-                class_id=p["class_id"], owner_user_id=resolve(p.get("owner_actor_id"), required=True),
-                source_id=p.get("source_id", p["id"]),
-            ))
+            db.add(
+                Project(
+                    id=new_pid,
+                    tenant_id=tenant_id,
+                    name=p["name"],
+                    template_version_id=new_tvid,
+                    class_id=p["class_id"],
+                    owner_user_id=resolve(p.get("owner_actor_id"), required=True),
+                    source_id=p.get("source_id", p["id"]),
+                )
+            )
             db.flush()
             counts["projects"] += 1
 
             for m in p.get("members", []):
                 local_uid = actor_map.get(m["actor_id"])
                 if local_uid:
-                    db.add(ProjectMembership(tenant_id=tenant_id, project_id=new_pid, user_id=local_uid, role=m["role"]))
+                    db.add(
+                        ProjectMembership(tenant_id=tenant_id, project_id=new_pid, user_id=local_uid, role=m["role"])
+                    )
                     counts["project_memberships"] += 1
                 # else: no live user to attach an unmatched historical member to -- correctly omitted, not silently invented.
 
             for o in p.get("occurrences", []):
                 new_oid = str(uuid.uuid4())
                 id_map[o["id"]] = new_oid
-                db.add(GateOccurrence(
-                    id=new_oid, tenant_id=tenant_id, project_id=new_pid, gate_id=o["gate_id"],
-                    sequence=o["sequence"], trigger=o["trigger"], due_at=_parse_dt(o.get("due_at")),
-                    source_id=o.get("source_id", o["id"]),
-                ))
+                db.add(
+                    GateOccurrence(
+                        id=new_oid,
+                        tenant_id=tenant_id,
+                        project_id=new_pid,
+                        gate_id=o["gate_id"],
+                        sequence=o["sequence"],
+                        trigger=o["trigger"],
+                        due_at=_parse_dt(o.get("due_at")),
+                        source_id=o.get("source_id", o["id"]),
+                    )
+                )
                 db.flush()
                 counts["gate_occurrences"] += 1
 
@@ -573,58 +727,85 @@ def commit_import(
                     # a single synthetic revision-1 from current state
                     # otherwise, for backward compatibility with an archive
                     # exported before this fix.
-                    revisions_in = i.get("revisions") or [{
-                        "revision_number": 1, "status": i["status"], "owner_actor_id": i.get("owner_actor_id"),
-                        "due_date": i.get("due_date"), "completed_date": i.get("completed_date"),
-                        "reference": i.get("reference"), "source_version": None, "source_hash": None,
-                        "actor_actor_id": None,
-                    }]
+                    revisions_in = i.get("revisions") or [
+                        {
+                            "revision_number": 1,
+                            "status": i["status"],
+                            "owner_actor_id": i.get("owner_actor_id"),
+                            "due_date": i.get("due_date"),
+                            "completed_date": i.get("completed_date"),
+                            "reference": i.get("reference"),
+                            "source_version": None,
+                            "source_hash": None,
+                            "actor_actor_id": None,
+                        }
+                    ]
                     latest_revision_number = max(r["revision_number"] for r in revisions_in)
 
-                    db.add(EvidenceItem(
-                        id=new_iid, tenant_id=tenant_id, project_id=new_pid, occurrence_id=new_oid,
-                        gate_id=i["gate_id"], rule_id=i["rule_id"], evidence_kind=i["evidence_kind"],
-                        required=i["required"], blocker_level=i["blocker_level"], permitted_role_ids=i["permitted_role_ids"],
-                        status=i["status"], owner_user_id=owner, due_date=due_date,
-                        completed_date=completed_date, reference=i.get("reference"),
-                        latest_revision_number=latest_revision_number,
-                        source_id=i.get("source_id", i["id"]),
-                    ))
+                    db.add(
+                        EvidenceItem(
+                            id=new_iid,
+                            tenant_id=tenant_id,
+                            project_id=new_pid,
+                            occurrence_id=new_oid,
+                            gate_id=i["gate_id"],
+                            rule_id=i["rule_id"],
+                            evidence_kind=i["evidence_kind"],
+                            required=i["required"],
+                            blocker_level=i["blocker_level"],
+                            permitted_role_ids=i["permitted_role_ids"],
+                            status=i["status"],
+                            owner_user_id=owner,
+                            due_date=due_date,
+                            completed_date=completed_date,
+                            reference=i.get("reference"),
+                            latest_revision_number=latest_revision_number,
+                            source_id=i.get("source_id", i["id"]),
+                        )
+                    )
                     db.flush()
                     counts["evidence_items"] += 1
 
                     for r in sorted(revisions_in, key=lambda rev: rev["revision_number"]):
                         source_created_at = _parse_dt(r.get("created_at"))
-                        db.add(EvidenceRevision(
-                            tenant_id=tenant_id, evidence_item_id=new_iid, revision_number=r["revision_number"],
-                            status=r["status"], owner_user_id=resolve(r.get("owner_actor_id"), required=False),
-                            due_date=_parse_dt(r.get("due_date")), completed_date=_parse_dt(r.get("completed_date")),
-                            reference=r.get("reference"), source_version=r.get("source_version"), source_hash=r.get("source_hash"),
-                            # A revision's own recorded actor -- unmatched
-                            # falls back to the importer, same discipline as
-                            # every other required actor here, never invented.
-                            # This FK is for referential integrity only; it
-                            # is never read back as "who really did this"
-                            # once source_actor_id (below) is set.
-                            actor_user_id=resolve(r.get("actor_actor_id"), required=True),
-                            # BGP-F04 follow-up: the archive's own actor id,
-                            # preserved as historical provenance independent
-                            # of the live FK above -- see EvidenceRevision.
-                            # source_actor_id's docstring. Set even when the
-                            # actor WAS matched, so re-export always has a
-                            # stable identity to report regardless of
-                            # whether a later re-import's matching differs.
-                            source_actor_id=r.get("actor_actor_id"),
-                            source_actor_email=archive_actor_emails.get(r.get("actor_actor_id")),
-                            # BGP-F04 follow-up: restore the ORIGINAL
-                            # creation time instead of letting the column
-                            # default to "now" (import time) -- an archive
-                            # with no created_at (pre-follow-up export, or
-                            # the single synthetic revision-1 fallback
-                            # above) still falls back to now, which is the
-                            # honest answer when no original time exists.
-                            created_at=source_created_at if source_created_at is not None else _now(),
-                        ))
+                        db.add(
+                            EvidenceRevision(
+                                tenant_id=tenant_id,
+                                evidence_item_id=new_iid,
+                                revision_number=r["revision_number"],
+                                status=r["status"],
+                                owner_user_id=resolve(r.get("owner_actor_id"), required=False),
+                                due_date=_parse_dt(r.get("due_date")),
+                                completed_date=_parse_dt(r.get("completed_date")),
+                                reference=r.get("reference"),
+                                source_version=r.get("source_version"),
+                                source_hash=r.get("source_hash"),
+                                # A revision's own recorded actor -- unmatched
+                                # falls back to the importer, same discipline as
+                                # every other required actor here, never invented.
+                                # This FK is for referential integrity only; it
+                                # is never read back as "who really did this"
+                                # once source_actor_id (below) is set.
+                                actor_user_id=resolve(r.get("actor_actor_id"), required=True),
+                                # BGP-F04 follow-up: the archive's own actor id,
+                                # preserved as historical provenance independent
+                                # of the live FK above -- see EvidenceRevision.
+                                # source_actor_id's docstring. Set even when the
+                                # actor WAS matched, so re-export always has a
+                                # stable identity to report regardless of
+                                # whether a later re-import's matching differs.
+                                source_actor_id=r.get("actor_actor_id"),
+                                source_actor_email=archive_actor_emails.get(r.get("actor_actor_id")),
+                                # BGP-F04 follow-up: restore the ORIGINAL
+                                # creation time instead of letting the column
+                                # default to "now" (import time) -- an archive
+                                # with no created_at (pre-follow-up export, or
+                                # the single synthetic revision-1 fallback
+                                # above) still falls back to now, which is the
+                                # honest answer when no original time exists.
+                                created_at=source_created_at if source_created_at is not None else _now(),
+                            )
+                        )
                         counts["evidence_revisions"] += 1
 
         # BGP-F04: decisions/exceptions/audit events/integrity receipts/
@@ -673,9 +854,15 @@ def commit_import(
                     skipped_historical += 1
                     continue
 
-                db.add(ImportedHistoricalRecord(
-                    tenant_id=tenant_id, import_job_id=job.id, kind=kind, source_id=source_id, payload_json=payload,
-                ))
+                db.add(
+                    ImportedHistoricalRecord(
+                        tenant_id=tenant_id,
+                        import_job_id=job.id,
+                        kind=kind,
+                        source_id=source_id,
+                        payload_json=payload,
+                    )
+                )
                 historical_counts[kind] += 1
 
         job.status = "committed"

@@ -67,7 +67,9 @@ def _as_utc(dt: datetime) -> datetime:
 
 
 @router.post("/orgs", response_model=OrgOut, status_code=status.HTTP_201_CREATED)
-def create_org(payload: CreateOrgRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> Tenant:
+def create_org(
+    payload: CreateOrgRequest, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> Tenant:
     """REQ-001: explicit organisation membership before project access --
     the creator becomes tenant_administrator of their own new tenant, not of
     any tenant they didn't create or weren't invited to.
@@ -113,7 +115,13 @@ def create_invitation(
         expires_at=datetime.now(timezone.utc) + INVITATION_TTL,
     )
     db.add(invitation)
-    log_security_event(db, "invitation_created", user_id=membership.user_id, tenant_id=tenant_id, detail={"invited_email": payload.email, "role": payload.role.value})
+    log_security_event(
+        db,
+        "invitation_created",
+        user_id=membership.user_id,
+        tenant_id=tenant_id,
+        detail={"invited_email": payload.email, "role": payload.role.value},
+    )
     db.commit()
     return InviteOut(invitation_id=invitation.id, token=token)
 
@@ -168,7 +176,9 @@ def accept_invitation(
     membership = Membership(tenant_id=invitation.tenant_id, user_id=user.id, role=invitation.role)
     invitation.accepted_at = datetime.now(timezone.utc)
     db.add(membership)
-    log_security_event(db, "invitation_accepted", user_id=user.id, tenant_id=invitation.tenant_id, detail={"role": invitation.role})
+    log_security_event(
+        db, "invitation_accepted", user_id=user.id, tenant_id=invitation.tenant_id, detail={"role": invitation.role}
+    )
     db.commit()
     # No db.refresh() -- see app/db.py's SessionLocal docstring
     # (expire_on_commit=False): every field here was already set in Python
@@ -221,7 +231,9 @@ class AccessReviewEntryOut(BaseModel):
 
 @router.get("/orgs/{tenant_id}/access-review", response_model=list[AccessReviewEntryOut])
 def access_review(
-    tenant_id: str, db: Session = Depends(get_db), _membership: Membership = Depends(require_role(Role.TENANT_ADMINISTRATOR))
+    tenant_id: str,
+    db: Session = Depends(get_db),
+    _membership: Membership = Depends(require_role(Role.TENANT_ADMINISTRATOR)),
 ) -> list[AccessReviewEntryOut]:
     """WP12/REQ-047: 'review access quarterly' -- this is the mechanism
     (a complete, current membership listing for a tenant administrator to

@@ -52,9 +52,7 @@ _BLANK_SCHEMA = {
     "roles": ["contributor", "approver"],
     "statuses": ["Not started", "Complete"],
     "decision_outcomes": ["Approve", "Hold"],
-    "gates": [
-        {"gate_id": "G1", "name": "Intake", "sequence": 1, "class_ids": ["Draft"], "rules": []}
-    ],
+    "gates": [{"gate_id": "G1", "name": "Intake", "sequence": 1, "class_ids": ["Draft"], "rules": []}],
 }
 
 

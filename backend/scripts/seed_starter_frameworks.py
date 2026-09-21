@@ -7,6 +7,7 @@ so this administrative path is the only way starters get created.
 Usage (from backend/, with BGP_MIGRATION_DATABASE_URL set in .env):
     python scripts/seed_starter_frameworks.py
 """
+
 import json
 import sys
 import uuid

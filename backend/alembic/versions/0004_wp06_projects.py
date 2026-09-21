@@ -16,6 +16,7 @@ overlapping enforcement mechanism for the same invariant the application
 code already owns; immutability is enforced by never calling those
 statements, not by making the role incapable of them.
 """
+
 from alembic import op
 import sqlalchemy as sa
 

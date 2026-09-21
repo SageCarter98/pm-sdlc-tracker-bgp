@@ -13,6 +13,7 @@ and post-attempt content, not on an exception (an earlier version of this
 migration relied on simply omitting an UPDATE/DELETE policy, which turned
 out NOT to deny those commands -- see the migration's own docstring).
 """
+
 import uuid
 
 import pytest
@@ -47,10 +48,15 @@ def seeded_checkpoint():
         conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": tenant_id})
         conn.execute(text("INSERT INTO tenants (id, name, created_at) VALUES (:id, 'T', now())"), {"id": tenant_id})
         conn.execute(
-            text("INSERT INTO users (id, email, password_hash, verified, created_at, mfa_enabled) VALUES (:id, :email, 'x', false, now(), false)"),
+            text(
+                "INSERT INTO users (id, email, password_hash, verified, created_at, mfa_enabled) VALUES (:id, :email, 'x', false, now(), false)"
+            ),
             {"id": user_id, "email": f"{user_id}@example.com"},
         )
-        conn.execute(text("INSERT INTO templates (id, tenant_id, name, created_at) VALUES (:id, :tid, 'T', now())"), {"id": template_id, "tid": tenant_id})
+        conn.execute(
+            text("INSERT INTO templates (id, tenant_id, name, created_at) VALUES (:id, :tid, 'T', now())"),
+            {"id": template_id, "tid": tenant_id},
+        )
         conn.execute(
             text(
                 "INSERT INTO template_versions (id, template_id, version_number, schema_json, status, created_by_user_id, created_at, published_at) "
@@ -59,7 +65,9 @@ def seeded_checkpoint():
             {"id": version_id, "tpl": template_id, "schema": minimal_schema, "uid": user_id},
         )
         conn.execute(
-            text("INSERT INTO projects (id, tenant_id, name, template_version_id, class_id, owner_user_id, created_at) VALUES (:id, :tid, 'P', :ver, 'A', :uid, now())"),
+            text(
+                "INSERT INTO projects (id, tenant_id, name, template_version_id, class_id, owner_user_id, created_at) VALUES (:id, :tid, 'P', :ver, 'A', :uid, now())"
+            ),
             {"id": project_id, "tid": tenant_id, "ver": version_id, "uid": user_id},
         )
         conn.execute(
@@ -90,12 +98,16 @@ def test_owner_cannot_update_a_checkpoint(seeded_checkpoint):
     t = seeded_checkpoint
     with _owner_engine.begin() as conn:
         conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_id"]})
-        result = conn.execute(text("UPDATE integrity_checkpoints SET chain_digest = 'hacked' WHERE id = :id"), {"id": t["checkpoint_id"]})
+        result = conn.execute(
+            text("UPDATE integrity_checkpoints SET chain_digest = 'hacked' WHERE id = :id"), {"id": t["checkpoint_id"]}
+        )
         assert result.rowcount == 0, "the owner's UPDATE must match zero rows under the deny-all policy"
 
     with _owner_engine.begin() as conn:
         conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_id"]})
-        row = conn.execute(text("SELECT chain_digest FROM integrity_checkpoints WHERE id = :id"), {"id": t["checkpoint_id"]}).fetchone()
+        row = conn.execute(
+            text("SELECT chain_digest FROM integrity_checkpoints WHERE id = :id"), {"id": t["checkpoint_id"]}
+        ).fetchone()
     assert row.chain_digest == "original-digest"
 
 
@@ -108,7 +120,9 @@ def test_owner_cannot_delete_a_checkpoint(seeded_checkpoint):
 
     with _owner_engine.begin() as conn:
         conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_id"]})
-        row = conn.execute(text("SELECT chain_digest FROM integrity_checkpoints WHERE id = :id"), {"id": t["checkpoint_id"]}).fetchone()
+        row = conn.execute(
+            text("SELECT chain_digest FROM integrity_checkpoints WHERE id = :id"), {"id": t["checkpoint_id"]}
+        ).fetchone()
     assert row is not None, "the row must still exist -- the DELETE must not have removed it"
 
 
@@ -124,4 +138,7 @@ def test_app_role_cannot_update_or_delete_a_checkpoint_either(seeded_checkpoint)
     with pytest.raises(ProgrammingError, match="permission denied"):
         with _app_engine.begin() as conn:
             conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_id"]})
-            conn.execute(text("UPDATE integrity_checkpoints SET chain_digest = 'hacked' WHERE id = :id"), {"id": t["checkpoint_id"]})
+            conn.execute(
+                text("UPDATE integrity_checkpoints SET chain_digest = 'hacked' WHERE id = :id"),
+                {"id": t["checkpoint_id"]},
+            )

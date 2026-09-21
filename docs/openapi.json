@@ -1,0 +1,5302 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Build Governance Platform",
+    "description": "Local prototype: identity/sessions/MFA/invitations (WP03), PostgreSQL RLS tenant isolation (WP04), versioned templates with a declarative rule interpreter (WP05), projects/evidence revisions with atomic occurrence seeding (WP06), exceptions/decisions with idempotent, append-only recording (WP07), hash-chain integrity checkpoints with incident-blocking (WP08), open-format tenant export/import (WP09 -- full evidence revision history and full decision/exception/compensating-review content, since BGP-F04; decisions/exceptions/audit/integrity-receipts/compensating-reviews stay historical-only, never re-created as live rows on import, but ARE preserved and re-emitted on a later export of the importing tenant -- see ImportedHistoricalRecord), and essential-journey backend support (WP10 -- My work with reason/direct-action, save/resume drafts, plain-language blocker explanations and a permitted-outcomes confirmation summary). No frontend exists yet (DEC04 unresolved) -- REQ-033's guided-form navigation and REQ-039's timezone display/translation are frontend-only concerns this backend cannot satisfy alone. DEC05 (decision durability mechanism) is still unresolved -- decisions here commit atomically to a single local Postgres instance only, and the integrity checkpoint's custody is enforced by this same instance's RLS, not by a genuinely separate system (see IntegrityCheckpoint's docstring). See docs/blueprint/ Section 6 for the delivery sequence. Session mechanism is a prototype signed cookie, not the DEC04-approved design. WP12: secrets moved off hardcoded literals and MFA secrets are now encrypted at rest, security logging covers auth/MFA/invitation events, and CI now runs dependency and secret scans (REQ-045/046/047) -- REQ-043's numeric performance budgets remain DEC08-gated, and a real 99.5% monthly-availability baseline needs production traffic history this prototype has never had; only the measurement mechanism (below) is built. 2026-09-17: BGP_Development_Review_Findings_v1.0.pdf's BGP-F01-F04 fixed -- login only issues a real session after a session-bound second-factor check (app/routers/mfa.py's login-verify), a compensating review is now an authenticated action from the reviewer's own session (CompensatingReview), decision commits and evidence-revision writes take coordinated row locks plus two partial unique indexes close the remaining races (see decisions.py's _compute_readiness/_require_decision_authority docstrings), and export/import gained per-row source_id stability and full historical preservation described above. BGP-F05 (README) fixed the same day. See TRACKER.md for details and the tests proving each one.",
+    "version": "0.1.0-bgp-remediation"
+  },
+  "paths": {
+    "/auth/register": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Register",
+        "description": "REQ-001: register verified users. Email verification delivery is out\nof scope for this prototype (no mail infra yet) -- `verified` starts\nFalse and nothing here elevates it; that gap is tracked, not hidden.",
+        "operationId": "register_auth_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Login",
+        "description": "WP12/REQ-047: both outcomes are logged -- a failed attempt against a\nreal email records that user_id (so the account holder can see\nsomeone tried), a failed attempt against an unknown email records\nuser_id=None (there is no account to attribute it to, and this must\nnever reveal whether the email exists via a different log shape).\n\nBGP-F01 fix: password verification alone never issues a full session\nany more. An account with MFA enabled instead gets a short-lived\npre-auth cookie and `mfa_required: true` -- the caller must complete\nPOST /auth/mfa/login-verify to get a real `bgp_session` cookie. An\naccount with no MFA enrolled still gets a full session directly (there\nis no second factor to withhold it for).",
+        "operationId": "login_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Login Auth Login Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Logout",
+        "operationId": "logout_auth_logout_post",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        }
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Me",
+        "operationId": "me_auth_me_get",
+        "parameters": [
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/security-log": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "My Security Log",
+        "description": "REQ-031/047: own-data security history. Self-only in this pass --\nsee SecurityLogEvent's docstring in app/models.py for why there is no\ntenant-administrator cross-user view here yet.",
+        "operationId": "my_security_log_auth_security_log_get",
+        "parameters": [
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SecurityLogEventOut"
+                  },
+                  "title": "Response My Security Log Auth Security Log Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/mfa/enroll": {
+      "post": {
+        "tags": [
+          "mfa"
+        ],
+        "summary": "Enroll",
+        "description": "REQ-002: accessible MFA setup. Generates a fresh secret each call\n(not yet enabled) so a user can retry scanning without side effects.\nREQ-045: only the encrypted form (app.security.encrypt_mfa_secret) is\never persisted -- the plaintext seed lives only in this function's\nlocal variable and the one-time provisioning URI response.\n\nBGP-F01 fix: if the account already has an enrolled factor, replacing it\nrequires THIS session to have already passed a second-factor check\n(`mfa_verified`) -- a password-only session can no longer overwrite an\nexisting enrolled factor. First-time enrolment (nothing to replace yet)\nstill only needs an authenticated, password-verified session.\n\nBGP-F01 follow-up fix: the proposed secret is staged in\n`pending_mfa_secret`/`pending_mfa_created_at`, NOT written into\n`mfa_secret`/`mfa_enabled` -- so an already-enrolled account keeps its\nworking factor (and stays `mfa_enabled=True`) for the entire replacement\nwindow. Calling this again before verifying just overwrites the pending\nsecret (fine -- it hasn't taken effect yet); it can never touch the\nactive factor. Only verify() promotes a pending secret to active.",
+        "operationId": "enroll_auth_mfa_enroll_post",
+        "parameters": [
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrollOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/mfa/verify": {
+      "post": {
+        "tags": [
+          "mfa"
+        ],
+        "summary": "Verify",
+        "description": "BGP-F01 fix: on success this both activates the new factor AND bumps\n`token_version`, invalidating every other previously-issued session for\nthis user (a stale session from before a factor replacement must not\nkeep being treated as MFA-satisfying). The CALLING session is kept\nusable by reissuing its cookie here with the new token_version and\n`mfa_verified=True` -- completing a second-factor check is exactly the\naction that should leave a session MFA-satisfying.\n\nBGP-F01 follow-up fix: verifies against `pending_mfa_secret` (the\nproposed replacement from enroll()), never the still-active\n`mfa_secret` -- so success is exactly what atomically promotes the\npending secret to active. An expired pending secret (older than\nPENDING_MFA_MAX_AGE_SECONDS) is cleared and rejected here rather than\nsilently accepted, so an abandoned replacement cannot be redeemed long\nafter the fact; the active factor was never touched by enroll() in\neither case.",
+        "operationId": "verify_auth_mfa_verify_post",
+        "parameters": [
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/mfa/login-verify": {
+      "post": {
+        "tags": [
+          "mfa"
+        ],
+        "summary": "Login Verify",
+        "description": "BGP-F01 fix: the other half of the corrected login flow -- POST\n/auth/login never issues a full `bgp_session` cookie for an MFA-enabled\naccount by itself any more; this endpoint is the only place that does,\nand only after checking the second factor against the pre-auth cookie\n/auth/login set. A password-only caller who never passes a valid code\nhere never gets a session that satisfies require_mfa.",
+        "operationId": "login_verify_auth_mfa_login_verify_post",
+        "parameters": [
+          {
+            "name": "bgp_preauth",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Preauth"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginVerifyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginVerifyOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/mfa/recover": {
+      "post": {
+        "tags": [
+          "mfa"
+        ],
+        "summary": "Recover",
+        "description": "REQ-002: verified recovery without elevating rights -- a spent\nrecovery code disables MFA and forces re-enrolment; it never grants\napproval authority by itself.\n\nBGP-F01 fix: also bumps `token_version`, so any session token issued\nbefore this recovery (on any device) stops being accepted the moment it\nis next presented -- 'invalidate affected sessions after... recovery'.",
+        "operationId": "recover_auth_mfa_recover_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecoverRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Recover Auth Mfa Recover Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs": {
+      "post": {
+        "tags": [
+          "orgs"
+        ],
+        "summary": "Create Org",
+        "description": "REQ-001: explicit organisation membership before project access --\nthe creator becomes tenant_administrator of their own new tenant, not of\nany tenant they didn't create or weren't invited to.\n\nOrg bootstrap fix: `memberships` is RLS-protected, fail-closed with no\n`app.tenant_id` set -- there is no existing membership dependency to set\nit here (this IS the request that creates the first one), so this\nendpoint sets it itself, from the just-generated tenant.id, before the\nINSERT. Without this the INSERT was rejected outright\n(`new row violates row-level security policy`) against real Postgres --\nnobody could ever create an organisation there at all.",
+        "operationId": "create_org_orgs_post",
+        "parameters": [
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOrgRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrgOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/invitations": {
+      "post": {
+        "tags": [
+          "orgs"
+        ],
+        "summary": "Create Invitation",
+        "operationId": "create_invitation_orgs__tenant_id__invitations_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InviteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/invitations/accept": {
+      "post": {
+        "tags": [
+          "orgs"
+        ],
+        "summary": "Accept Invitation",
+        "description": "REQ-038: invited user reaches the intended project after sign-in.\n\nOrg bootstrap fix, two parts. First: the initial `Invitation` lookup is\nBY TOKEN, deliberately without knowing the tenant yet -- that is the\nwhole point of a self-contained invitation link. But `invitations` is\nRLS-protected the same way `memberships` is, and there is no tenant\ncontext to set beforehand here (unlike get_active_membership, the\ntenant isn't known until AFTER this exact query finds it). Migration\n0014 adds a second, narrowly-scoped permissive SELECT policy on\n`invitations` keyed on `app.invitation_lookup_token_hash` -- Postgres\ncombines multiple permissive policies for the same command with OR, so\na caller who sets this to the token hash they're presenting can find\nthat ONE row regardless of tenant context, without weakening the\ntenant-isolation policy for anything else (INSERT/UPDATE/DELETE, or a\nSELECT that doesn't set this). Knowing the unguessable, high-entropy\ntoken IS the authorization to read that row -- the same trust\nassumption an emailed invitation link already relies on. Second: once\nthe invitation's real tenant_id is known, context is set from it before\nthe `existing`-membership check and the INSERT below -- the same\nordering bug create_org had, for the same reason (no prior\nget_active_membership dependency to have set it already).",
+        "operationId": "accept_invitation_invitations_accept_post",
+        "parameters": [
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptInvitationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MembershipOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/me": {
+      "get": {
+        "tags": [
+          "orgs"
+        ],
+        "summary": "My Membership",
+        "description": "REQ-003: active tenant resolved from session and re-verified here,\nnever trusted from a client-supplied claim.",
+        "operationId": "my_membership_orgs__tenant_id__me_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MembershipOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/approval-gate-check": {
+      "get": {
+        "tags": [
+          "orgs"
+        ],
+        "summary": "Approval Gate Check",
+        "description": "REQ-002 enforcement placeholder: proves the MFA gate for\napproval-adjacent roles works before WP07's actual decision endpoints\nexist to protect. Delete once POST /api/occurrences/{id}/decisions\n(Blueprint Sec.5.3/5.4) is built and carries this same dependency.",
+        "operationId": "approval_gate_check_orgs__tenant_id__approval_gate_check_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Approval Gate Check Orgs  Tenant Id  Approval Gate Check Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/access-review": {
+      "get": {
+        "tags": [
+          "orgs"
+        ],
+        "summary": "Access Review",
+        "description": "WP12/REQ-047: 'review access quarterly' -- this is the mechanism\n(a complete, current membership listing for a tenant administrator to\nactually review) not the cadence itself, which stays an operational\npractice this endpoint doesn't schedule (same honest split as WP08's\ncheckpoint-frequency note: the capability exists, running it on a\nreal quarterly cycle is a process decision, not code). Includes\ninactive (revoked) memberships too -- a review that only shows who\ncurrently has access can't confirm past revocations actually took\neffect.",
+        "operationId": "access_review_orgs__tenant_id__access_review_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AccessReviewEntryOut"
+                  },
+                  "title": "Response Access Review Orgs  Tenant Id  Access Review Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/templates": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "List Templates",
+        "operationId": "list_templates_orgs__tenant_id__templates_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TemplateOut"
+                  },
+                  "title": "Response List Templates Orgs  Tenant Id  Templates Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Create Template",
+        "description": "REQ-012: blank creation. A JSON body is accepted here too, but this\nis the 'guided authoring'/blank path -- AC08 requires a tenant can reach\nthe same result without ever hand-editing JSON, which the blank default\nbelow satisfies.",
+        "operationId": "create_template_orgs__tenant_id__templates_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTemplateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateVersionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/templates/import": {
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Import Template",
+        "description": "REQ-012: schema-validated JSON import; malformed input explains the\nfailing field rather than a single opaque failure.",
+        "operationId": "import_template_orgs__tenant_id__templates_import_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportTemplateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateVersionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/templates/{template_id}/versions/{version_id}/fork": {
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Fork Template",
+        "description": "REQ-012: fork -- from a tenant's own template or a shared starter.",
+        "operationId": "fork_template_orgs__tenant_id__templates__template_id__versions__version_id__fork_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateVersionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/templates/{template_id}/versions/{version_id}": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Get Template Version",
+        "operationId": "get_template_version_orgs__tenant_id__templates__template_id__versions__version_id__get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateVersionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Update Draft",
+        "operationId": "update_draft_orgs__tenant_id__templates__template_id__versions__version_id__put",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateDraftRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateVersionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/templates/{template_id}/versions/{version_id}/publish": {
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "Publish Version",
+        "description": "REQ-011: publishing is immutable and irreversible in this prototype --\nthere is no unpublish endpoint. A later change must be a new version.",
+        "operationId": "publish_version_orgs__tenant_id__templates__template_id__versions__version_id__publish_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateVersionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/projects": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Create Project",
+        "description": "REQ-015: creation commits the project, its explicit members, every\napplicable gate's first routine occurrence, and that occurrence's\nevidence together -- or none of it. See\ntests/test_projects.py::test_seeding_failure_leaves_no_project_row for\nthe atomicity proof (REQ-015's own verification text).",
+        "operationId": "create_project_orgs__tenant_id__projects_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProjectRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateProjectResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "List Projects",
+        "operationId": "list_projects_orgs__tenant_id__projects_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProjectOut"
+                  },
+                  "title": "Response List Projects Orgs  Tenant Id  Projects Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/projects/{project_id}/occurrences": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Create Occurrence",
+        "description": "REQ-016: a new routine or triggered review of one gate, with its own\nsequence and its own evidence -- never touching any earlier occurrence's\nevidence or decisions. Sequence allocation is enforced by the\n(project_id, gate_id, sequence) unique constraint (app/models.py\nGateOccurrence): a concurrent request racing for the same next sequence\nnumber loses on IntegrityError and gets a 409, not a silent duplicate.\nThis prototype does not retry automatically -- documented scope, not an\noversight; see docs/wp02/ for the general prototype-scope caveats this\nproject already carries.",
+        "operationId": "create_occurrence_orgs__tenant_id__projects__project_id__occurrences_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOccurrenceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateOccurrenceResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/my-work": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "My Work",
+        "description": "Blueprint Sec.5.3 GET /api/my-work: permitted tasks and next actions,\nmembership scoped, paginated. 'Permitted' here means: assigned directly\nto this user, or unassigned but within a project this user belongs to\nwith a role the rule permits (rule.permitted_role_ids). TST-032:\n'Each persona finds their assigned action while unrelated assignments\nstay hidden' -- the query below is the hiding half; `reason` and\n`direct_action` below are the finding half, so a future frontend (none\nexists yet, DEC04) doesn't have to re-derive 'why is this mine' or\n'what do I do about it' from raw evidence-item fields itself.",
+        "operationId": "my_work_orgs__tenant_id__my_work_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "status_filter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status Filter"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MyWorkItemOut"
+                  },
+                  "title": "Response My Work Orgs  Tenant Id  My Work Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/evidence/{evidence_item_id}": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Get Evidence Item",
+        "operationId": "get_evidence_item_orgs__tenant_id__evidence__evidence_item_id__get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "evidence_item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Evidence Item Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceItemDetailOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/evidence/{evidence_item_id}/revisions": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Create Evidence Revision",
+        "description": "REQ-017: every edit is a new, immutable, attributed revision -- this\nendpoint only ever INSERTs into evidence_revisions, never UPDATEs an\nexisting row. REQ-018: a resulting status of 'Complete' on a required\nitem without a reference is rejected outright (the only way to satisfy\n'do not allow removal of required evidence while Complete' when every\nedit replaces the full record rather than patching one field: clearing\nthe reference is only possible by also moving status away from\nComplete in the same revision). REQ-019: source_version/source_hash are\naccepted as-given, never inferred from the reference string's shape.\n\nBGP-F03: the item row is locked FOR UPDATE (a no-op on SQLite) before\nthe base_revision check -- the same fixed lock order (evidence rows,\nsingle-row here) that decisions.py's _compute_readiness(lock=True)\nuses for its multi-row lock, so the two can only ever wait on each\nother, never deadlock. This closes the read-then-write race for\nbase_revision itself (two concurrent submissions with the same\nbase_revision now serialise: the second sees the FIRST's committed\nlatest_revision_number once it acquires the lock, and its own\nbase_revision check -- now correctly comparing against fresh data --\nrejects it with the existing 409, before it ever reaches the insert)\nand, together with decisions.py's matching lock, closes the\n'evidence changed between a decision's readiness read and its commit'\nrace from the other side.",
+        "operationId": "create_evidence_revision_orgs__tenant_id__evidence__evidence_item_id__revisions_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "evidence_item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Evidence Item Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateEvidenceRevisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceItemDetailOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/projects/{project_id}/occurrences/{occurrence_id}/preview": {
+      "post": {
+        "tags": [
+          "decisions"
+        ],
+        "summary": "Preview Decision",
+        "operationId": "preview_decision_orgs__tenant_id__projects__project_id__occurrences__occurrence_id__preview_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "occurrence_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Occurrence Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/projects/{project_id}/occurrences/{occurrence_id}/decisions": {
+      "post": {
+        "tags": [
+          "decisions"
+        ],
+        "summary": "Create Decision",
+        "description": "Blueprint Sec.5.4 steps 1-6, 8: authenticate/MFA (dependency), resolve\nproject membership and authority, idempotency check, recompute\nreadiness against current state and reject stale manifests, construct\nand append the decision atomically. Step 7 (DEC05 durability) is\nexplicitly not implemented -- see DecisionRecord's docstring.",
+        "operationId": "create_decision_orgs__tenant_id__projects__project_id__occurrences__occurrence_id__decisions_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "occurrence_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Occurrence Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Idempotency-Key"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/decisions/{decision_id}": {
+      "get": {
+        "tags": [
+          "decisions"
+        ],
+        "summary": "Get Decision",
+        "description": "Sec.5.4 step 8: 'If the response is lost, the client retrieves the\noutcome rather than creating a second decision.'",
+        "operationId": "get_decision_orgs__tenant_id__decisions__decision_id__get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "decision_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Decision Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/decisions/{decision_id}/superseding": {
+      "post": {
+        "tags": [
+          "decisions"
+        ],
+        "summary": "Supersede Decision",
+        "description": "REQ-025: 'support superseding corrections only'. The original row is\nnever touched -- this only ever INSERTs a new DecisionRecord with\nsupersedes_decision_id set. A reason is mandatory.",
+        "operationId": "supersede_decision_orgs__tenant_id__decisions__decision_id__superseding_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "decision_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Decision Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Idempotency-Key"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SupersedingRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/evidence/{evidence_item_id}/exceptions": {
+      "post": {
+        "tags": [
+          "decisions"
+        ],
+        "summary": "Create Exception",
+        "description": "REQ-020: authority, scope and expiry are all validated up front, not\nleft to be inferred later from a typed status.",
+        "operationId": "create_exception_orgs__tenant_id__evidence__evidence_item_id__exceptions_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "evidence_item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Evidence Item Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateExceptionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExceptionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "decisions"
+        ],
+        "summary": "List Exceptions",
+        "operationId": "list_exceptions_orgs__tenant_id__evidence__evidence_item_id__exceptions_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "evidence_item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Evidence Item Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExceptionOut"
+                  },
+                  "title": "Response List Exceptions Orgs  Tenant Id  Evidence  Evidence Item Id  Exceptions Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/exceptions/{exception_id}/revoke": {
+      "post": {
+        "tags": [
+          "decisions"
+        ],
+        "summary": "Revoke Exception",
+        "description": "REQ-021: revocation never deletes the row -- the fact that an\nexception existed and was later revoked stays visible.",
+        "operationId": "revoke_exception_orgs__tenant_id__exceptions__exception_id__revoke_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "exception_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Exception Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExceptionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/projects/{project_id}/occurrences/{occurrence_id}/compensating-reviews": {
+      "post": {
+        "tags": [
+          "decisions"
+        ],
+        "summary": "Create Compensating Review",
+        "description": "REQ-006/BGP-F02: the independent reviewer's OWN authenticated,\nMFA-verified action -- `reviewer_user_id` below is always this caller's\nown id, never a name someone else typed. Binds to the CURRENT evidence\nmanifest (`_compute_readiness` freshly, not a client-supplied digest) so\na later evidence change makes this review stale automatically; see\n_check_separation_of_duties, which re-validates all of this again at\ndecision-commit time rather than trusting this row indefinitely.",
+        "operationId": "create_compensating_review_orgs__tenant_id__projects__project_id__occurrences__occurrence_id__compensating_reviews_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "occurrence_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Occurrence Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompensatingReviewIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompensatingReviewOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/projects/{project_id}/integrity/checkpoint": {
+      "post": {
+        "tags": [
+          "integrity"
+        ],
+        "summary": "Create Checkpoint",
+        "description": "REQ-026: 'defined custody and verification frequency' -- this is the\ncustody action (fold new audit events into a new unmodifiable\ncheckpoint). This prototype has no scheduler; running it on a real\ncadence (see TRACKER.md) is an operational follow-up, not built here.",
+        "operationId": "create_checkpoint_orgs__tenant_id__projects__project_id__integrity_checkpoint_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/CheckpointOut"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Create Checkpoint Orgs  Tenant Id  Projects  Project Id  Integrity Checkpoint Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/projects/{project_id}/integrity/verify": {
+      "post": {
+        "tags": [
+          "integrity"
+        ],
+        "summary": "Run Verification",
+        "description": "REQ-026's verification half. On failure this also satisfies REQ-027's\n'trigger incident handling' -- see the IntegrityIncident this returns,\nand app/routers/decisions.py for how an open one blocks new decisions.",
+        "operationId": "run_verification_orgs__tenant_id__projects__project_id__integrity_verify_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/projects/{project_id}/integrity/checkpoints": {
+      "get": {
+        "tags": [
+          "integrity"
+        ],
+        "summary": "List Checkpoints",
+        "operationId": "list_checkpoints_orgs__tenant_id__projects__project_id__integrity_checkpoints_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CheckpointOut"
+                  },
+                  "title": "Response List Checkpoints Orgs  Tenant Id  Projects  Project Id  Integrity Checkpoints Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/projects/{project_id}/integrity/incidents": {
+      "get": {
+        "tags": [
+          "integrity"
+        ],
+        "summary": "List Incidents",
+        "operationId": "list_incidents_orgs__tenant_id__projects__project_id__integrity_incidents_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/IncidentOut"
+                  },
+                  "title": "Response List Incidents Orgs  Tenant Id  Projects  Project Id  Integrity Incidents Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/integrity/incidents/{incident_id}/resolve": {
+      "post": {
+        "tags": [
+          "integrity"
+        ],
+        "summary": "Resolve Incident",
+        "description": "No 'security lead' platform role exists yet (blueprint Sec.2's table\ndoesn't define one) -- resolution is scoped to tenant_administrator for\nnow, with a mandatory note, as the closest fit. Revisit if/when a\ndedicated assurance/security role is added.",
+        "operationId": "resolve_incident_orgs__tenant_id__integrity_incidents__incident_id__resolve_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "incident_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Incident Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveIncidentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IncidentOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/exports": {
+      "post": {
+        "tags": [
+          "export-import"
+        ],
+        "summary": "Create Export",
+        "description": "REQ-031: any active member can export -- own-data export is not role\nor billing-tier gated (billing tiers aren't built yet, WP14; this\nendpoint has no gate to add one to when they are, which is itself the\nhonest state to leave it in until that requirement exists to enforce).",
+        "operationId": "create_export_orgs__tenant_id__exports_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportJobOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/exports/{job_id}": {
+      "get": {
+        "tags": [
+          "export-import"
+        ],
+        "summary": "Get Export",
+        "operationId": "get_export_orgs__tenant_id__exports__job_id__get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportJobOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/imports/{job_id}": {
+      "get": {
+        "tags": [
+          "export-import"
+        ],
+        "summary": "Get Import",
+        "operationId": "get_import_orgs__tenant_id__imports__job_id__get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportJobOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/imports/validate": {
+      "post": {
+        "tags": [
+          "export-import"
+        ],
+        "summary": "Validate Import",
+        "description": "Blueprint Sec.5.6: 'Import validates archive sizes, paths, hashes,\nschema and tenant bindings in quarantine.' Nothing here writes to any\nlive table except the ImportJob (quarantine) row itself.",
+        "operationId": "validate_import_orgs__tenant_id__imports_validate_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidateImportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportJobOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/imports/{job_id}/commit": {
+      "post": {
+        "tags": [
+          "export-import"
+        ],
+        "summary": "Commit Import",
+        "description": "REQ-030: 'lossless clean-instance re-import without privilege\ntransfer.' Every row gets a fresh id (never reuses the archive's\noriginal ids, avoiding any collision with existing data and making\n'clean instance' vs. 'same instance re-import' behave identically).\nActor references resolve to a real local user only via\nImportedActorProvenance (matched by email, re-checked live here, not\ntrusted from the earlier validate() report); an unmatched actor on a\nNOT-NULL column falls back to the importing user, never a fabricated\nor reused identity -- see this module's docstring for why decisions/\nexceptions/audit/integrity_receipts stay historical-only and are not\nrecreated as live rows at all.",
+        "operationId": "commit_import_orgs__tenant_id__imports__job_id__commit_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportJobOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/drafts": {
+      "get": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "List Drafts",
+        "description": "Own drafts only, regardless of tenant role -- a draft is never\nvisible to anyone but the user who saved it (Blueprint Sec.5.2: 'Owner\nscoped'), including tenant administrators.",
+        "operationId": "list_drafts_orgs__tenant_id__drafts_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DraftOut"
+                  },
+                  "title": "Response List Drafts Orgs  Tenant Id  Drafts Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/drafts/{draft_key}": {
+      "get": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "Get Draft",
+        "operationId": "get_draft_orgs__tenant_id__drafts__draft_key__get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "draft_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Draft Key"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "Save Draft",
+        "description": "Upsert with optimistic concurrency, same base_revision pattern as\nevidence revisions (app/routers/projects.py) -- base_revision=0 creates\na new draft; any other value must match the current revision exactly,\nor this is a 409 (two tabs/devices editing the same draft, not a\nsilent last-write-wins).",
+        "operationId": "save_draft_orgs__tenant_id__drafts__draft_key__put",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "draft_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Draft Key"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveDraftRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "drafts"
+        ],
+        "summary": "Discard Draft",
+        "operationId": "discard_draft_orgs__tenant_id__drafts__draft_key__delete",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "draft_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Draft Key"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "summary": "Healthz",
+        "operationId": "healthz_healthz_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Healthz Healthz Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/status": {
+      "get": {
+        "summary": "Status Report",
+        "description": "WP12/REQ-043: minimal operational status -- version, environment,\nand process uptime. Not a substitute for real monitoring (no\naggregation, no alerting, no historical retention of its own); a\nstarting point for whatever real telemetry pipeline a production\ndeployment would need, which doesn't exist yet.",
+        "operationId": "status_report_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Status Report Status Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AcceptInvitationRequest": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "title": "Token"
+          }
+        },
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "title": "AcceptInvitationRequest"
+      },
+      "AccessReviewEntryOut": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "title": "User Id"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active"
+          },
+          "member_since": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Member Since"
+          }
+        },
+        "type": "object",
+        "required": [
+          "user_id",
+          "email",
+          "role",
+          "active",
+          "member_since"
+        ],
+        "title": "AccessReviewEntryOut"
+      },
+      "BlockerExplanation": {
+        "properties": {
+          "item_id": {
+            "type": "string",
+            "title": "Item Id"
+          },
+          "gate_id": {
+            "type": "string",
+            "title": "Gate Id"
+          },
+          "blocker_level": {
+            "type": "string",
+            "title": "Blocker Level"
+          },
+          "explanation": {
+            "type": "string",
+            "title": "Explanation"
+          },
+          "corrective_action": {
+            "type": "string",
+            "title": "Corrective Action"
+          }
+        },
+        "type": "object",
+        "required": [
+          "item_id",
+          "gate_id",
+          "blocker_level",
+          "explanation",
+          "corrective_action"
+        ],
+        "title": "BlockerExplanation"
+      },
+      "CheckpointOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "project_id": {
+            "type": "string",
+            "title": "Project Id"
+          },
+          "from_sequence": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Sequence"
+          },
+          "to_sequence": {
+            "type": "integer",
+            "title": "To Sequence"
+          },
+          "event_count": {
+            "type": "integer",
+            "title": "Event Count"
+          },
+          "chain_digest": {
+            "type": "string",
+            "title": "Chain Digest"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "from_sequence",
+          "to_sequence",
+          "event_count",
+          "chain_digest",
+          "created_at"
+        ],
+        "title": "CheckpointOut"
+      },
+      "CompensatingReviewIn": {
+        "properties": {
+          "note": {
+            "type": "string",
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "note"
+        ],
+        "title": "CompensatingReviewIn"
+      },
+      "CompensatingReviewOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "occurrence_id": {
+            "type": "string",
+            "title": "Occurrence Id"
+          },
+          "reviewer_user_id": {
+            "type": "string",
+            "title": "Reviewer User Id"
+          },
+          "manifest_digest": {
+            "type": "string",
+            "title": "Manifest Digest"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "occurrence_id",
+          "reviewer_user_id",
+          "manifest_digest",
+          "note",
+          "created_at"
+        ],
+        "title": "CompensatingReviewOut"
+      },
+      "ConditionsIn": {
+        "properties": {
+          "conditions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Conditions"
+          },
+          "owner_user_id": {
+            "type": "string",
+            "title": "Owner User Id"
+          },
+          "deadline": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Deadline"
+          }
+        },
+        "type": "object",
+        "required": [
+          "conditions",
+          "owner_user_id",
+          "deadline"
+        ],
+        "title": "ConditionsIn"
+      },
+      "CreateEvidenceRevisionRequest": {
+        "properties": {
+          "base_revision": {
+            "type": "integer",
+            "title": "Base Revision"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "owner_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner User Id"
+          },
+          "due_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due Date"
+          },
+          "completed_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed Date"
+          },
+          "reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference"
+          },
+          "source_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Version"
+          },
+          "source_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Hash"
+          }
+        },
+        "type": "object",
+        "required": [
+          "base_revision",
+          "status"
+        ],
+        "title": "CreateEvidenceRevisionRequest"
+      },
+      "CreateExceptionRequest": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "safeguards": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Safeguards"
+          },
+          "owner_user_id": {
+            "type": "string",
+            "title": "Owner User Id"
+          },
+          "starts_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Starts At"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reason",
+          "owner_user_id",
+          "starts_at",
+          "expires_at"
+        ],
+        "title": "CreateExceptionRequest"
+      },
+      "CreateOccurrenceRequest": {
+        "properties": {
+          "gate_id": {
+            "type": "string",
+            "title": "Gate Id"
+          },
+          "trigger": {
+            "type": "string",
+            "enum": [
+              "routine",
+              "triggered"
+            ],
+            "title": "Trigger"
+          },
+          "due_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "gate_id",
+          "trigger"
+        ],
+        "title": "CreateOccurrenceRequest"
+      },
+      "CreateOccurrenceResponse": {
+        "properties": {
+          "occurrence": {
+            "$ref": "#/components/schemas/OccurrenceOut"
+          },
+          "evidence_items": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceItemOut"
+            },
+            "type": "array",
+            "title": "Evidence Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "occurrence",
+          "evidence_items"
+        ],
+        "title": "CreateOccurrenceResponse"
+      },
+      "CreateOrgRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "CreateOrgRequest"
+      },
+      "CreateProjectRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "template_version_id": {
+            "type": "string",
+            "title": "Template Version Id"
+          },
+          "class_id": {
+            "type": "string",
+            "title": "Class Id"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectMemberIn"
+            },
+            "type": "array",
+            "title": "Members",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "template_version_id",
+          "class_id"
+        ],
+        "title": "CreateProjectRequest"
+      },
+      "CreateProjectResponse": {
+        "properties": {
+          "project": {
+            "$ref": "#/components/schemas/ProjectOut"
+          },
+          "occurrences": {
+            "items": {
+              "$ref": "#/components/schemas/OccurrenceOut"
+            },
+            "type": "array",
+            "title": "Occurrences"
+          },
+          "evidence_items": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceItemOut"
+            },
+            "type": "array",
+            "title": "Evidence Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "project",
+          "occurrences",
+          "evidence_items"
+        ],
+        "title": "CreateProjectResponse"
+      },
+      "CreateTemplateRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "schema_json": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schema Json"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "CreateTemplateRequest"
+      },
+      "DecisionOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "occurrence_id": {
+            "type": "string",
+            "title": "Occurrence Id"
+          },
+          "actor_user_id": {
+            "type": "string",
+            "title": "Actor User Id"
+          },
+          "actor_role": {
+            "type": "string",
+            "title": "Actor Role"
+          },
+          "outcome": {
+            "type": "string",
+            "title": "Outcome"
+          },
+          "reviewed_manifest_digest": {
+            "type": "string",
+            "title": "Reviewed Manifest Digest"
+          },
+          "supersedes_decision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Decision Id"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "occurrence_id",
+          "actor_user_id",
+          "actor_role",
+          "outcome",
+          "reviewed_manifest_digest",
+          "supersedes_decision_id",
+          "reason",
+          "created_at"
+        ],
+        "title": "DecisionOut"
+      },
+      "DecisionRequest": {
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "title": "Outcome"
+          },
+          "manifest_digest": {
+            "type": "string",
+            "title": "Manifest Digest"
+          },
+          "conditions": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConditionsIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "separation_override": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SeparationOverrideIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "outcome",
+          "manifest_digest"
+        ],
+        "title": "DecisionRequest"
+      },
+      "DraftOut": {
+        "properties": {
+          "draft_key": {
+            "type": "string",
+            "title": "Draft Key"
+          },
+          "form_data": {
+            "type": "object",
+            "title": "Form Data"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "draft_key",
+          "form_data",
+          "revision"
+        ],
+        "title": "DraftOut"
+      },
+      "EnrollOut": {
+        "properties": {
+          "provisioning_uri": {
+            "type": "string",
+            "title": "Provisioning Uri"
+          }
+        },
+        "type": "object",
+        "required": [
+          "provisioning_uri"
+        ],
+        "title": "EnrollOut"
+      },
+      "EvidenceItemDetailOut": {
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/EvidenceItemOut"
+          },
+          "revisions": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceRevisionOut"
+            },
+            "type": "array",
+            "title": "Revisions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "item",
+          "revisions"
+        ],
+        "title": "EvidenceItemDetailOut"
+      },
+      "EvidenceItemOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "project_id": {
+            "type": "string",
+            "title": "Project Id"
+          },
+          "occurrence_id": {
+            "type": "string",
+            "title": "Occurrence Id"
+          },
+          "gate_id": {
+            "type": "string",
+            "title": "Gate Id"
+          },
+          "rule_id": {
+            "type": "string",
+            "title": "Rule Id"
+          },
+          "evidence_kind": {
+            "type": "string",
+            "title": "Evidence Kind"
+          },
+          "required": {
+            "type": "boolean",
+            "title": "Required"
+          },
+          "blocker_level": {
+            "type": "string",
+            "title": "Blocker Level"
+          },
+          "permitted_role_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Permitted Role Ids"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "owner_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner User Id"
+          },
+          "due_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due Date"
+          },
+          "completed_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed Date"
+          },
+          "reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference"
+          },
+          "latest_revision_number": {
+            "type": "integer",
+            "title": "Latest Revision Number"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "occurrence_id",
+          "gate_id",
+          "rule_id",
+          "evidence_kind",
+          "required",
+          "blocker_level",
+          "permitted_role_ids",
+          "status",
+          "owner_user_id",
+          "due_date",
+          "completed_date",
+          "reference",
+          "latest_revision_number"
+        ],
+        "title": "EvidenceItemOut"
+      },
+      "EvidenceRevisionOut": {
+        "properties": {
+          "revision_number": {
+            "type": "integer",
+            "title": "Revision Number"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "owner_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner User Id"
+          },
+          "due_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due Date"
+          },
+          "completed_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed Date"
+          },
+          "reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference"
+          },
+          "source_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Version"
+          },
+          "source_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Hash"
+          },
+          "reference_is_mutable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Is Mutable"
+          },
+          "actor_user_id": {
+            "type": "string",
+            "title": "Actor User Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "revision_number",
+          "status",
+          "owner_user_id",
+          "due_date",
+          "completed_date",
+          "reference",
+          "source_version",
+          "source_hash",
+          "reference_is_mutable",
+          "actor_user_id",
+          "created_at"
+        ],
+        "title": "EvidenceRevisionOut"
+      },
+      "ExceptionOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "evidence_item_id": {
+            "type": "string",
+            "title": "Evidence Item Id"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "safeguards": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Safeguards"
+          },
+          "approving_user_id": {
+            "type": "string",
+            "title": "Approving User Id"
+          },
+          "owner_user_id": {
+            "type": "string",
+            "title": "Owner User Id"
+          },
+          "starts_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Starts At"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "evidence_item_id",
+          "reason",
+          "safeguards",
+          "approving_user_id",
+          "owner_user_id",
+          "starts_at",
+          "expires_at",
+          "status",
+          "revoked_at"
+        ],
+        "title": "ExceptionOut"
+      },
+      "ExportJobOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "format_version": {
+            "type": "integer",
+            "title": "Format Version"
+          },
+          "archive_digest": {
+            "type": "string",
+            "title": "Archive Digest"
+          },
+          "archive": {
+            "type": "object",
+            "title": "Archive"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "format_version",
+          "archive_digest",
+          "archive",
+          "created_at"
+        ],
+        "title": "ExportJobOut"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "ImportJobOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "validation_report": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validation Report"
+          },
+          "commit_report": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Report"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "validation_report",
+          "commit_report",
+          "created_at"
+        ],
+        "title": "ImportJobOut"
+      },
+      "ImportTemplateRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "schema_json": {
+            "type": "object",
+            "title": "Schema Json"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "ImportTemplateRequest"
+      },
+      "IncidentOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "project_id": {
+            "type": "string",
+            "title": "Project Id"
+          },
+          "detail": {
+            "type": "object",
+            "title": "Detail"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "detected_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Detected At"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          },
+          "resolved_by_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved By User Id"
+          },
+          "resolution_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolution Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "detail",
+          "status",
+          "detected_at",
+          "resolved_at",
+          "resolved_by_user_id",
+          "resolution_note"
+        ],
+        "title": "IncidentOut"
+      },
+      "InviteOut": {
+        "properties": {
+          "invitation_id": {
+            "type": "string",
+            "title": "Invitation Id"
+          },
+          "token": {
+            "type": "string",
+            "title": "Token"
+          }
+        },
+        "type": "object",
+        "required": [
+          "invitation_id",
+          "token"
+        ],
+        "title": "InviteOut"
+      },
+      "InviteRequest": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "title": "Email"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          }
+        },
+        "type": "object",
+        "required": [
+          "email",
+          "role"
+        ],
+        "title": "InviteRequest"
+      },
+      "LoginRequest": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "title": "Email"
+          },
+          "password": {
+            "type": "string",
+            "title": "Password"
+          }
+        },
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "title": "LoginRequest"
+      },
+      "LoginVerifyOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "mfa_enabled": {
+            "type": "boolean",
+            "title": "Mfa Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "mfa_enabled"
+        ],
+        "title": "LoginVerifyOut"
+      },
+      "LoginVerifyRequest": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "title": "LoginVerifyRequest"
+      },
+      "MembershipOut": {
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "role"
+        ],
+        "title": "MembershipOut"
+      },
+      "MyWorkItemOut": {
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/EvidenceItemOut"
+          },
+          "project_id": {
+            "type": "string",
+            "title": "Project Id"
+          },
+          "project_name": {
+            "type": "string",
+            "title": "Project Name"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "due_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due Date"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "direct_action": {
+            "type": "string",
+            "title": "Direct Action"
+          }
+        },
+        "type": "object",
+        "required": [
+          "item",
+          "project_id",
+          "project_name",
+          "reason",
+          "due_date",
+          "status",
+          "direct_action"
+        ],
+        "title": "MyWorkItemOut",
+        "description": "REQ-032: 'role-specific My work with project, reason, deadline,\nstate and a direct action.' Wraps EvidenceItemOut with the three\nfields that requirement names beyond what the item already carries\n(deadline = due_date, state = status -- both already on the item)."
+      },
+      "OccurrenceOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "project_id": {
+            "type": "string",
+            "title": "Project Id"
+          },
+          "gate_id": {
+            "type": "string",
+            "title": "Gate Id"
+          },
+          "sequence": {
+            "type": "integer",
+            "title": "Sequence"
+          },
+          "trigger": {
+            "type": "string",
+            "title": "Trigger"
+          },
+          "due_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "gate_id",
+          "sequence",
+          "trigger",
+          "due_at"
+        ],
+        "title": "OccurrenceOut"
+      },
+      "OrgOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "OrgOut"
+      },
+      "PreviewRequest": {
+        "properties": {
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          }
+        },
+        "type": "object",
+        "title": "PreviewRequest"
+      },
+      "PreviewResponse": {
+        "properties": {
+          "occurrence_id": {
+            "type": "string",
+            "title": "Occurrence Id"
+          },
+          "manifest_digest": {
+            "type": "string",
+            "title": "Manifest Digest"
+          },
+          "hard_blockers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Hard Blockers"
+          },
+          "conditional_blockers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Conditional Blockers"
+          },
+          "advisory_unsatisfied": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Advisory Unsatisfied"
+          },
+          "blocker_explanations": {
+            "items": {
+              "$ref": "#/components/schemas/BlockerExplanation"
+            },
+            "type": "array",
+            "title": "Blocker Explanations"
+          },
+          "permitted_outcomes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Permitted Outcomes"
+          },
+          "outcome_allowed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome Allowed"
+          },
+          "outcome_denial_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome Denial Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "occurrence_id",
+          "manifest_digest",
+          "hard_blockers",
+          "conditional_blockers",
+          "advisory_unsatisfied",
+          "blocker_explanations",
+          "permitted_outcomes"
+        ],
+        "title": "PreviewResponse"
+      },
+      "ProjectMemberIn": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "title": "User Id"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          }
+        },
+        "type": "object",
+        "required": [
+          "user_id",
+          "role"
+        ],
+        "title": "ProjectMemberIn"
+      },
+      "ProjectOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "template_version_id": {
+            "type": "string",
+            "title": "Template Version Id"
+          },
+          "class_id": {
+            "type": "string",
+            "title": "Class Id"
+          },
+          "owner_user_id": {
+            "type": "string",
+            "title": "Owner User Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "tenant_id",
+          "name",
+          "template_version_id",
+          "class_id",
+          "owner_user_id"
+        ],
+        "title": "ProjectOut"
+      },
+      "RecoverRequest": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "recovery_code": {
+            "type": "string",
+            "title": "Recovery Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "email",
+          "recovery_code"
+        ],
+        "title": "RecoverRequest"
+      },
+      "RegisterRequest": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "title": "Email"
+          },
+          "password": {
+            "type": "string",
+            "title": "Password"
+          }
+        },
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "title": "RegisterRequest"
+      },
+      "ResolveIncidentRequest": {
+        "properties": {
+          "resolution_note": {
+            "type": "string",
+            "title": "Resolution Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "resolution_note"
+        ],
+        "title": "ResolveIncidentRequest"
+      },
+      "Role": {
+        "type": "string",
+        "enum": [
+          "contributor",
+          "approver",
+          "sponsor",
+          "assurance_reviewer",
+          "tenant_administrator"
+        ],
+        "title": "Role",
+        "description": "Blueprint Sec.2 role table. platform_operator is out of tenant scope\n(no membership row) and is not modelled here yet -- WP12."
+      },
+      "SaveDraftRequest": {
+        "properties": {
+          "base_revision": {
+            "type": "integer",
+            "title": "Base Revision"
+          },
+          "form_data": {
+            "type": "object",
+            "title": "Form Data"
+          }
+        },
+        "type": "object",
+        "required": [
+          "base_revision",
+          "form_data"
+        ],
+        "title": "SaveDraftRequest"
+      },
+      "SecurityLogEventOut": {
+        "properties": {
+          "event_type": {
+            "type": "string",
+            "title": "Event Type"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "event_type",
+          "detail",
+          "created_at"
+        ],
+        "title": "SecurityLogEventOut"
+      },
+      "SeparationOverrideIn": {
+        "properties": {
+          "review_id": {
+            "type": "string",
+            "title": "Review Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "review_id"
+        ],
+        "title": "SeparationOverrideIn",
+        "description": "BGP-F02: identifies a CompensatingReview row the independent reviewer\nalready created from their OWN session (POST .../compensating-reviews)\n-- the deciding actor can no longer just name a colleague and a note\nthemselves."
+      },
+      "SupersedingRequest": {
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "title": "Outcome"
+          },
+          "manifest_digest": {
+            "type": "string",
+            "title": "Manifest Digest"
+          },
+          "conditions": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConditionsIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "separation_override": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SeparationOverrideIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "outcome",
+          "manifest_digest",
+          "reason"
+        ],
+        "title": "SupersedingRequest"
+      },
+      "TemplateOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "tenant_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tenant Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "tenant_id",
+          "name"
+        ],
+        "title": "TemplateOut"
+      },
+      "TemplateVersionOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "template_id": {
+            "type": "string",
+            "title": "Template Id"
+          },
+          "version_number": {
+            "type": "integer",
+            "title": "Version Number"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "schema_json": {
+            "type": "object",
+            "title": "Schema Json"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "template_id",
+          "version_number",
+          "status"
+        ],
+        "title": "TemplateVersionOut"
+      },
+      "UpdateDraftRequest": {
+        "properties": {
+          "schema_json": {
+            "type": "object",
+            "title": "Schema Json"
+          }
+        },
+        "type": "object",
+        "title": "UpdateDraftRequest"
+      },
+      "UserOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "mfa_enabled": {
+            "type": "boolean",
+            "title": "Mfa Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "mfa_enabled"
+        ],
+        "title": "UserOut"
+      },
+      "ValidateImportRequest": {
+        "properties": {
+          "archive": {
+            "type": "object",
+            "title": "Archive"
+          }
+        },
+        "type": "object",
+        "required": [
+          "archive"
+        ],
+        "title": "ValidateImportRequest"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "VerifyOut": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "recovery_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Recovery Codes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled",
+          "recovery_codes"
+        ],
+        "title": "VerifyOut"
+      },
+      "VerifyRequest": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "title": "VerifyRequest"
+      },
+      "VerifyResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "checked_checkpoints": {
+            "type": "integer",
+            "title": "Checked Checkpoints"
+          },
+          "incident": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IncidentOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "ok",
+          "checked_checkpoints",
+          "incident"
+        ],
+        "title": "VerifyResponse"
+      }
+    }
+  }
+}
