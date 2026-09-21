@@ -1,14 +1,11 @@
 """WP10/REQ-034: save and resume drafts. See Draft's docstring in
 app/models.py for scope -- this is the storage primitive, not the
-wp11-frontend-first-increment
-<<<<<<truthful-Saving/Saved/Not-saved UI state itself (WP11's evidence_form.html
+truthful-Saving/Saved/Not-saved UI state itself (WP11's evidence_form.html
 gives that a plain "Save as draft" button plus a re-load confirmation
 rather than a live Saving/Saved indicator -- an honest, simpler first
 increment, not the richer state DEC04 left open the door to)."""
-========
-truthful-Saving/Saved/Not-saved UI state itself (frontend concern, DEC04
-unresolved)."""
-master>>>>>>
+
+master
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
