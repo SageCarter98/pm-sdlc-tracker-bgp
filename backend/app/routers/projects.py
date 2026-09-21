@@ -679,7 +679,9 @@ def create_evidence_revision(
                 reference=r.reference,
                 source_version=r.source_version,
                 source_hash=r.source_hash,
-                reference_is_mutable=(None if r.reference is None else (r.source_version is None and r.source_hash is None)),
+                reference_is_mutable=(
+                    None if r.reference is None else (r.source_version is None and r.source_hash is None)
+                ),
                 actor_user_id=r.actor_user_id,
                 created_at=r.created_at,
             )
