@@ -22,6 +22,7 @@ teardown and are flaky under CI scheduling jitter):
    first -- refuses a second root decision or a second supersession for
    the same target.
 """
+
 import uuid
 
 import pytest
@@ -49,7 +50,10 @@ def seeded_project():
     tenant_id, user_id = str(uuid.uuid4()), str(uuid.uuid4())
     template_id, version_id = str(uuid.uuid4()), str(uuid.uuid4())
     project_id, occurrence_id, item_id, pm_id = (
-        str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+        str(uuid.uuid4()),
+        str(uuid.uuid4()),
+        str(uuid.uuid4()),
+        str(uuid.uuid4()),
     )
     root_decision_id = str(uuid.uuid4())
 
@@ -58,11 +62,16 @@ def seeded_project():
     with _owner_engine.begin() as conn:
         conn.execute(text("INSERT INTO tenants (id, name, created_at) VALUES (:id, 'T', now())"), {"id": tenant_id})
         conn.execute(
-            text("INSERT INTO users (id, email, password_hash, verified, created_at, mfa_enabled, token_version) VALUES (:id, :email, 'x', false, now(), false, 0)"),
+            text(
+                "INSERT INTO users (id, email, password_hash, verified, created_at, mfa_enabled, token_version) VALUES (:id, :email, 'x', false, now(), false, 0)"
+            ),
             {"id": user_id, "email": f"{user_id}@example.com"},
         )
         conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": tenant_id})
-        conn.execute(text("INSERT INTO templates (id, tenant_id, name, created_at) VALUES (:id, :tid, 'T', now())"), {"id": template_id, "tid": tenant_id})
+        conn.execute(
+            text("INSERT INTO templates (id, tenant_id, name, created_at) VALUES (:id, :tid, 'T', now())"),
+            {"id": template_id, "tid": tenant_id},
+        )
         conn.execute(
             text(
                 "INSERT INTO template_versions (id, template_id, version_number, schema_json, status, created_by_user_id, created_at, published_at) "
@@ -71,15 +80,21 @@ def seeded_project():
             {"id": version_id, "tpl": template_id, "schema": minimal_schema, "uid": user_id},
         )
         conn.execute(
-            text("INSERT INTO projects (id, tenant_id, name, template_version_id, class_id, owner_user_id, created_at) VALUES (:id, :tid, 'P', :ver, 'A', :uid, now())"),
+            text(
+                "INSERT INTO projects (id, tenant_id, name, template_version_id, class_id, owner_user_id, created_at) VALUES (:id, :tid, 'P', :ver, 'A', :uid, now())"
+            ),
             {"id": project_id, "tid": tenant_id, "ver": version_id, "uid": user_id},
         )
         conn.execute(
-            text("INSERT INTO project_memberships (id, tenant_id, project_id, user_id, role, created_at) VALUES (:id, :tid, :pid, :uid, 'approver', now())"),
+            text(
+                "INSERT INTO project_memberships (id, tenant_id, project_id, user_id, role, created_at) VALUES (:id, :tid, :pid, :uid, 'approver', now())"
+            ),
             {"id": pm_id, "tid": tenant_id, "pid": project_id, "uid": user_id},
         )
         conn.execute(
-            text("INSERT INTO gate_occurrences (id, tenant_id, project_id, gate_id, sequence, trigger, created_at) VALUES (:id, :tid, :pid, 'G1', 1, 'routine', now())"),
+            text(
+                "INSERT INTO gate_occurrences (id, tenant_id, project_id, gate_id, sequence, trigger, created_at) VALUES (:id, :tid, :pid, 'G1', 1, 'routine', now())"
+            ),
             {"id": occurrence_id, "tid": tenant_id, "pid": project_id},
         )
         conn.execute(
@@ -98,8 +113,12 @@ def seeded_project():
         )
 
     yield {
-        "tenant_id": tenant_id, "user_id": user_id, "project_id": project_id,
-        "occurrence_id": occurrence_id, "item_id": item_id, "pm_id": pm_id,
+        "tenant_id": tenant_id,
+        "user_id": user_id,
+        "project_id": project_id,
+        "occurrence_id": occurrence_id,
+        "item_id": item_id,
+        "pm_id": pm_id,
         "root_decision_id": root_decision_id,
     }
 
@@ -131,7 +150,9 @@ def test_evidence_item_lock_blocks_a_concurrent_writer(seeded_project):
             with _app_engine.begin() as conn_b:
                 conn_b.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_id"]})
                 conn_b.execute(text("SET LOCAL lock_timeout = '300ms'"))
-                conn_b.execute(text("UPDATE evidence_items SET status = 'Complete' WHERE id = :id"), {"id": t["item_id"]})
+                conn_b.execute(
+                    text("UPDATE evidence_items SET status = 'Complete' WHERE id = :id"), {"id": t["item_id"]}
+                )
     finally:
         txn_a.rollback()
         conn_a.close()
@@ -157,7 +178,9 @@ def test_project_membership_lock_blocks_a_concurrent_writer(seeded_project):
             with _app_engine.begin() as conn_b:
                 conn_b.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_id"]})
                 conn_b.execute(text("SET LOCAL lock_timeout = '300ms'"))
-                conn_b.execute(text("UPDATE project_memberships SET role = 'contributor' WHERE id = :id"), {"id": t["pm_id"]})
+                conn_b.execute(
+                    text("UPDATE project_memberships SET role = 'contributor' WHERE id = :id"), {"id": t["pm_id"]}
+                )
     finally:
         txn_a.rollback()
         conn_a.close()
@@ -182,7 +205,13 @@ def test_second_root_decision_for_same_occurrence_rejected_at_db_level(seeded_pr
                     "INSERT INTO decision_records (id, tenant_id, project_id, occurrence_id, actor_user_id, actor_role, outcome, manifest_json, reviewed_manifest_digest, created_at) "
                     "VALUES (:id, :tid, :pid, :oid, :uid, 'approver', 'Approve', CAST('{}' AS JSON), 'deadbeef', now())"
                 ),
-                {"id": str(uuid.uuid4()), "tid": t["tenant_id"], "pid": t["project_id"], "oid": t["occurrence_id"], "uid": t["user_id"]},
+                {
+                    "id": str(uuid.uuid4()),
+                    "tid": t["tenant_id"],
+                    "pid": t["project_id"],
+                    "oid": t["occurrence_id"],
+                    "uid": t["user_id"],
+                },
             )
 
 
@@ -199,7 +228,14 @@ def test_second_supersession_of_same_decision_rejected_at_db_level(seeded_projec
                 "INSERT INTO decision_records (id, tenant_id, project_id, occurrence_id, actor_user_id, actor_role, outcome, manifest_json, reviewed_manifest_digest, supersedes_decision_id, reason, created_at) "
                 "VALUES (:id, :tid, :pid, :oid, :uid, 'approver', 'Hold', CAST('{}' AS JSON), 'deadbeef', :sup, 'first correction', now())"
             ),
-            {"id": str(uuid.uuid4()), "tid": t["tenant_id"], "pid": t["project_id"], "oid": t["occurrence_id"], "uid": t["user_id"], "sup": t["root_decision_id"]},
+            {
+                "id": str(uuid.uuid4()),
+                "tid": t["tenant_id"],
+                "pid": t["project_id"],
+                "oid": t["occurrence_id"],
+                "uid": t["user_id"],
+                "sup": t["root_decision_id"],
+            },
         )
 
     with pytest.raises(IntegrityError, match="duplicate key value violates unique constraint"):
@@ -210,5 +246,12 @@ def test_second_supersession_of_same_decision_rejected_at_db_level(seeded_projec
                     "INSERT INTO decision_records (id, tenant_id, project_id, occurrence_id, actor_user_id, actor_role, outcome, manifest_json, reviewed_manifest_digest, supersedes_decision_id, reason, created_at) "
                     "VALUES (:id, :tid, :pid, :oid, :uid, 'approver', 'Hold', CAST('{}' AS JSON), 'deadbeef', :sup, 'second correction', now())"
                 ),
-                {"id": str(uuid.uuid4()), "tid": t["tenant_id"], "pid": t["project_id"], "oid": t["occurrence_id"], "uid": t["user_id"], "sup": t["root_decision_id"]},
+                {
+                    "id": str(uuid.uuid4()),
+                    "tid": t["tenant_id"],
+                    "pid": t["project_id"],
+                    "oid": t["occurrence_id"],
+                    "uid": t["user_id"],
+                    "sup": t["root_decision_id"],
+                },
             )

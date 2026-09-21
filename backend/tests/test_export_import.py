@@ -3,6 +3,7 @@ re-import without privilege transfer), REQ-031 (own-data export always
 available). BGP-F04 (BGP_Development_Review_Findings_v1.0.pdf): full
 revision history, decision/exception/compensating-review content and its
 survival across a SECOND export -> import hop."""
+
 import copy
 import hashlib
 import json
@@ -114,19 +115,27 @@ def test_unmatched_actor_falls_back_to_importer_not_fabricated(client):
     # A completely different person imports this into their own tenant --
     # no email overlap, so nothing in the archive's actor list can match.
     tenant_b = _create_org_as_admin(client, "someone-else@tenant-b.example")
-    b_admin_login = client.post("/auth/login", json={"email": "someone-else@tenant-b.example", "password": "correct horse battery staple"})
+    b_admin_login = client.post(
+        "/auth/login", json={"email": "someone-else@tenant-b.example", "password": "correct horse battery staple"}
+    )
     b_admin_id = b_admin_login.json()["id"]
 
     validated = client.post(f"/orgs/{tenant_b}/imports/validate", json={"archive": archive})
-    assert validated.json()["validation_report"]["unmatched_actor_count"] == validated.json()["validation_report"]["section_counts"].get("actors", 0)
+    assert validated.json()["validation_report"]["unmatched_actor_count"] == validated.json()["validation_report"][
+        "section_counts"
+    ].get("actors", 0)
     job_id = validated.json()["id"]
 
     committed = client.post(f"/orgs/{tenant_b}/imports/{job_id}/commit")
     assert committed.status_code == 201, committed.text
-    assert committed.json()["commit_report"]["counts"]["project_memberships"] == 0, "no live user existed to attach an unmatched historical member to"
+    assert committed.json()["commit_report"]["counts"]["project_memberships"] == 0, (
+        "no live user existed to attach an unmatched historical member to"
+    )
 
     project = client.get(f"/orgs/{tenant_b}/projects").json()[0]
-    assert project["owner_user_id"] == b_admin_id, "an unmatched required owner must fall back to the importing user, never a fabricated identity"
+    assert project["owner_user_id"] == b_admin_id, (
+        "an unmatched required owner must fall back to the importing user, never a fabricated identity"
+    )
 
 
 def test_commit_requires_validated_status_first(client):
@@ -151,7 +160,9 @@ def test_import_requires_tenant_administrator_role(client):
     _create_project(client, tenant_id, version_id, "Standard-High")
     archive = client.post(f"/orgs/{tenant_id}/exports").json()["archive"]
 
-    token = client.post(f"/orgs/{tenant_id}/invitations", json={"email": "c@tenant-a.example", "role": "contributor"}).json()["token"]
+    token = client.post(
+        f"/orgs/{tenant_id}/invitations", json={"email": "c@tenant-a.example", "role": "contributor"}
+    ).json()["token"]
     register_and_login(client, "c@tenant-a.example")
     client.post("/invitations/accept", json={"token": token})
 
@@ -179,7 +190,10 @@ def test_full_evidence_revision_history_survives_import(client):
     archive = client.post(f"/orgs/{tenant_a}/exports").json()["archive"]
 
     exported_item = next(
-        i for p in archive["projects"] for o in p["occurrences"] for i in o["evidence_items"]
+        i
+        for p in archive["projects"]
+        for o in p["occurrences"]
+        for i in o["evidence_items"]
         if i["source_id"] == s1_item_id
     )
     assert len(exported_item["revisions"]) == 3, "seed-time revision 1 plus the two explicit edits above"
@@ -197,13 +211,20 @@ def test_full_evidence_revision_history_survives_import(client):
     # doubles as the first half of the re-export reconciliation check.
     reexported = client.post(f"/orgs/{tenant_b}/exports").json()["archive"]
     reimported_item = next(
-        i for p in reexported["projects"] for o in p["occurrences"] for i in o["evidence_items"]
+        i
+        for p in reexported["projects"]
+        for o in p["occurrences"]
+        for i in o["evidence_items"]
         if i["source_id"] == s1_item_id
     )
     assert len(reimported_item["revisions"]) == 3
     assert [r["source_hash"] for r in reimported_item["revisions"][-2:]] == ["sha256:v1", "sha256:v2"]
-    assert reimported_item["source_id"] == s1_item_id, "source_id must survive even though 'id' was regenerated on import"
-    assert reimported_item["id"] != s1_item_id, "the LIVE id in tenant_b must be freshly generated, never reuse tenant_a's"
+    assert reimported_item["source_id"] == s1_item_id, (
+        "source_id must survive even though 'id' was regenerated on import"
+    )
+    assert reimported_item["id"] != s1_item_id, (
+        "the LIVE id in tenant_b must be freshly generated, never reuse tenant_a's"
+    )
 
 
 def test_unmatched_revision_author_and_timestamp_survive_reexport(client):
@@ -224,7 +245,11 @@ def test_unmatched_revision_author_and_timestamp_survive_reexport(client):
     )
     archive = client.post(f"/orgs/{tenant_a}/exports").json()["archive"]
     original_item = next(
-        i for p in archive["projects"] for o in p["occurrences"] for i in o["evidence_items"] if i["source_id"] == s1_item_id
+        i
+        for p in archive["projects"]
+        for o in p["occurrences"]
+        for i in o["evidence_items"]
+        if i["source_id"] == s1_item_id
     )
     original_revision = original_item["revisions"][-1]
     assert original_revision["actor_actor_id"] == original_author_id
@@ -239,7 +264,11 @@ def test_unmatched_revision_author_and_timestamp_survive_reexport(client):
 
     reexported = client.post(f"/orgs/{tenant_b}/exports").json()["archive"]
     reexported_item = next(
-        i for p in reexported["projects"] for o in p["occurrences"] for i in o["evidence_items"] if i["source_id"] == s1_item_id
+        i
+        for p in reexported["projects"]
+        for o in p["occurrences"]
+        for i in o["evidence_items"]
+        if i["source_id"] == s1_item_id
     )
     reexported_revision = reexported_item["revisions"][-1]
     assert reexported_revision["actor_actor_id"] == original_author_id, (
@@ -267,14 +296,18 @@ def test_decision_exception_and_compensating_review_preserved_through_second_exp
     project_id = created["project"]["id"]
     s1_occurrence_id = next(o["id"] for o in created["occurrences"] if o["gate_id"] == "S1")
     s1_item_id = next(e["id"] for e in created["evidence_items"] if e["gate_id"] == "S1")
-    s2_occurrence_id = next(o["id"] for o in created["occurrences"] if o["gate_id"] == "S2")
     s2_item_id = next(e["id"] for e in created["evidence_items"] if e["gate_id"] == "S2")
 
     # An exception excusing S2's hard blocker.
     now = datetime.now(timezone.utc)
     client.post(
         f"/orgs/{tenant_a}/evidence/{s2_item_id}/exceptions",
-        json={"reason": "Vendor doc pending", "owner_user_id": admin_id, "starts_at": now.isoformat(), "expires_at": (now + timedelta(days=30)).isoformat()},
+        json={
+            "reason": "Vendor doc pending",
+            "owner_user_id": admin_id,
+            "starts_at": now.isoformat(),
+            "expires_at": (now + timedelta(days=30)).isoformat(),
+        },
     )
 
     # Complete S1 (owned by admin -- self-only approval, needs a real
@@ -282,7 +315,13 @@ def test_decision_exception_and_compensating_review_preserved_through_second_exp
     _complete_item(client, tenant_a, s1_item_id)
     client.post(
         f"/orgs/{tenant_a}/evidence/{s1_item_id}/revisions",
-        json={"base_revision": 2, "status": "Complete", "owner_user_id": admin_id, "reference": "doc-1", "source_hash": "x"},
+        json={
+            "base_revision": 2,
+            "status": "Complete",
+            "owner_user_id": admin_id,
+            "reference": "doc-1",
+            "source_hash": "x",
+        },
     )
     preview = client.post(f"/orgs/{tenant_a}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={})
     digest = preview.json()["manifest_digest"]
@@ -332,7 +371,9 @@ def test_decision_exception_and_compensating_review_preserved_through_second_exp
 
     reexported_root = next(d for d in reexported["decisions"] if d["source_id"] == original_decision["id"])
     reexported_correction = next(d for d in reexported["decisions"] if d["source_id"] == superseded["id"])
-    assert reexported_correction["supersedes_decision_id"] == original_decision["id"], "the supersession link is content, not a live FK -- it stays as first exported"
+    assert reexported_correction["supersedes_decision_id"] == original_decision["id"], (
+        "the supersession link is content, not a live FK -- it stays as first exported"
+    )
     assert reexported_correction["reason"] == "Correction for export history test"
     assert reexported_root["project_id"] == new_project_id, "the live-row reference IS remapped to tenant_b's own id"
     assert reexported_root["project_id"] != project_id
@@ -374,4 +415,6 @@ def test_commit_rejects_corrupted_archive_cleanly_without_partial_state(client):
     assert committed.status_code == 422, committed.text
     assert "malformed" in committed.text.lower() or "missing" in committed.text.lower()
 
-    assert client.get(f"/orgs/{tenant_b}/projects").json() == [], "a rejected commit must leave no partially-created project"
+    assert client.get(f"/orgs/{tenant_b}/projects").json() == [], (
+        "a rejected commit must leave no partially-created project"
+    )

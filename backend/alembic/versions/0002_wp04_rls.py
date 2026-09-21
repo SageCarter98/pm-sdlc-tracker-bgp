@@ -17,6 +17,7 @@ request never inherits the previous tenant's context.
 `tenant_id = NULL` is never true, so a missing tenant context yields zero
 rows rather than an error or an accidental full-table match (fail closed).
 """
+
 from alembic import op
 
 revision = "0002_wp04_rls"

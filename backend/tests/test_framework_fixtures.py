@@ -2,6 +2,7 @@
 roles and gates without application code changes -- these are read and
 validated exactly as a tenant's imported JSON would be (app.rule_engine),
 with no framework-specific code anywhere in this test or the app."""
+
 import json
 from pathlib import Path
 

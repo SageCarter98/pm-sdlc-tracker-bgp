@@ -4,6 +4,7 @@ docstring in app/models.py for exactly what this mechanism does and does
 not defend against -- read it before treating a clean verify_integrity()
 result as a stronger guarantee than it actually is).
 """
+
 import hashlib
 import json
 

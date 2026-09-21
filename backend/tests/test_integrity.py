@@ -3,6 +3,7 @@ block new decisions). Pure application-layer logic -- runs against the
 SQLite test fixture like every other functional test; the *database-role*
 half of REQ-026 (not even bgp_owner can UPDATE/DELETE a checkpoint) is
 Postgres-only and lives in test_wp08_tenant_isolation_rls.py instead."""
+
 from app.db import get_db
 from app.main import app
 from app.models import AuditEvent

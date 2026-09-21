@@ -18,7 +18,6 @@ from app.models import (
     ProjectMembership,
     Role,
     TemplateVersion,
-    User,
 )
 from app.rule_engine import RuleValidationError, TemplateSchema, evaluate_condition, validate_template_schema
 
@@ -236,16 +235,24 @@ def create_project(
     the atomicity proof (REQ-015's own verification text)."""
     schema = _load_bound_schema(db, tenant_id, payload.template_version_id)
     if payload.class_id not in schema.classes:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"class_id '{payload.class_id}' is not declared by this template version")
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"class_id '{payload.class_id}' is not declared by this template version",
+        )
 
     for member in payload.members:
         exists = (
             db.query(Membership)
-            .filter(Membership.tenant_id == tenant_id, Membership.user_id == member.user_id, Membership.active.is_(True))
+            .filter(
+                Membership.tenant_id == tenant_id, Membership.user_id == member.user_id, Membership.active.is_(True)
+            )
             .one_or_none()
         )
         if exists is None:
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"user '{member.user_id}' has no active membership in this organisation")
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"user '{member.user_id}' has no active membership in this organisation",
+            )
 
     try:
         project = Project(
@@ -258,11 +265,19 @@ def create_project(
         db.add(project)
         db.flush()
 
-        db.add(ProjectMembership(tenant_id=tenant_id, project_id=project.id, user_id=membership.user_id, role=membership.role))
+        db.add(
+            ProjectMembership(
+                tenant_id=tenant_id, project_id=project.id, user_id=membership.user_id, role=membership.role
+            )
+        )
         for member in payload.members:
             if member.user_id == membership.user_id:
                 continue
-            db.add(ProjectMembership(tenant_id=tenant_id, project_id=project.id, user_id=member.user_id, role=member.role.value))
+            db.add(
+                ProjectMembership(
+                    tenant_id=tenant_id, project_id=project.id, user_id=member.user_id, role=member.role.value
+                )
+            )
 
         occurrences: list[GateOccurrence] = []
         evidence_items: list[EvidenceItem] = []
@@ -274,7 +289,12 @@ def create_project(
                 continue  # a gate with only triggered rules gets no automatic occurrence (REQ-016)
 
             occurrence = GateOccurrence(
-                tenant_id=tenant_id, project_id=project.id, gate_id=gate.gate_id, sequence=1, trigger="routine", due_at=None
+                tenant_id=tenant_id,
+                project_id=project.id,
+                gate_id=gate.gate_id,
+                sequence=1,
+                trigger="routine",
+                due_at=None,
             )
             db.add(occurrence)
             db.flush()
@@ -393,7 +413,9 @@ def create_occurrence(
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(status.HTTP_409_CONFLICT, "A concurrent request already created this occurrence's sequence -- retry") from None
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "A concurrent request already created this occurrence's sequence -- retry"
+        ) from None
     except Exception:
         db.rollback()
         raise
@@ -439,7 +461,10 @@ def my_work(
     exists yet, DEC04) doesn't have to re-derive 'why is this mine' or
     'what do I do about it' from raw evidence-item fields itself."""
     my_project_ids = [
-        pid for (pid,) in db.query(ProjectMembership.project_id).filter(ProjectMembership.user_id == membership.user_id).all()
+        pid
+        for (pid,) in db.query(ProjectMembership.project_id)
+        .filter(ProjectMembership.user_id == membership.user_id)
+        .all()
     ]
     my_pm_by_project = {
         pm.project_id: pm.role
@@ -466,17 +491,21 @@ def my_work(
         if item.status == "Complete":
             direct_action = "No action needed -- already Complete."
         else:
-            direct_action = f"POST /orgs/{tenant_id}/evidence/{item.id}/revisions with status 'Complete' and a reference"
+            direct_action = (
+                f"POST /orgs/{tenant_id}/evidence/{item.id}/revisions with status 'Complete' and a reference"
+            )
 
-        results.append(MyWorkItemOut(
-            item=EvidenceItemOut.model_validate(item),
-            project_id=item.project_id,
-            project_name=project_names.get(item.project_id, ""),
-            reason=reason,
-            due_date=item.due_date,
-            status=item.status,
-            direct_action=direct_action,
-        ))
+        results.append(
+            MyWorkItemOut(
+                item=EvidenceItemOut.model_validate(item),
+                project_id=item.project_id,
+                project_name=project_names.get(item.project_id, ""),
+                reason=reason,
+                due_date=item.due_date,
+                status=item.status,
+                direct_action=direct_action,
+            )
+        )
     return results
 
 
@@ -487,7 +516,11 @@ def get_evidence_item(
     db: Session = Depends(get_db),
     membership: Membership = Depends(get_active_membership),
 ) -> EvidenceItemDetailOut:
-    item = db.query(EvidenceItem).filter(EvidenceItem.id == evidence_item_id, EvidenceItem.tenant_id == tenant_id).one_or_none()
+    item = (
+        db.query(EvidenceItem)
+        .filter(EvidenceItem.id == evidence_item_id, EvidenceItem.tenant_id == tenant_id)
+        .one_or_none()
+    )
     if item is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Evidence item not found")
     _require_project_member(db, item.project_id, membership.user_id)
@@ -510,7 +543,9 @@ def get_evidence_item(
                 reference=r.reference,
                 source_version=r.source_version,
                 source_hash=r.source_hash,
-                reference_is_mutable=(None if r.reference is None else (r.source_version is None and r.source_hash is None)),
+                reference_is_mutable=(
+                    None if r.reference is None else (r.source_version is None and r.source_hash is None)
+                ),
                 actor_user_id=r.actor_user_id,
                 created_at=r.created_at,
             )
@@ -571,7 +606,9 @@ def create_evidence_revision(
         )
 
     if payload.status == "Complete" and item.required and not payload.reference:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Cannot mark a required item Complete without a reference (REQ-018)")
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Cannot mark a required item Complete without a reference (REQ-018)"
+        )
 
     next_revision = item.latest_revision_number + 1
     db.add(

@@ -23,6 +23,7 @@ docstring in app/models.py for the honest limits of this even now
 integrity_incidents is an ordinary table -- see IntegrityIncident's
 docstring for why it doesn't need the same protection.
 """
+
 from alembic import op
 import sqlalchemy as sa
 

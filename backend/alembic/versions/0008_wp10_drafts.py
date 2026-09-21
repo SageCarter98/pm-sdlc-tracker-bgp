@@ -13,6 +13,7 @@ existing app.tenant_id RLS mechanism expresses, and adding a second
 session variable for it was judged not worth the complexity for a
 same-tenant, non-adversarial-within-tenant scoping requirement.
 """
+
 from alembic import op
 import sqlalchemy as sa
 

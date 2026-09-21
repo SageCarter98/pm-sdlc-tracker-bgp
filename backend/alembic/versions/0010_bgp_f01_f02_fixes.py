@@ -22,6 +22,7 @@ never mutates a compensating_reviews row after insert (same SELECT+INSERT-
 only grant shape as decision_records, REQ-025's precedent), since it is
 audit trail material, not editable state.
 """
+
 from alembic import op
 import sqlalchemy as sa
 
@@ -52,7 +53,9 @@ def upgrade() -> None:
 
     op.add_column(
         "decision_records",
-        sa.Column("separation_override_review_id", sa.String(36), sa.ForeignKey("compensating_reviews.id"), nullable=True),
+        sa.Column(
+            "separation_override_review_id", sa.String(36), sa.ForeignKey("compensating_reviews.id"), nullable=True
+        ),
     )
 
     # Same shape as decision_records (REQ-025's precedent): an audit-trail

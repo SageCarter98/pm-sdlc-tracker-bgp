@@ -110,16 +110,23 @@ def verify(
     after the fact; the active factor was never touched by enroll() in
     either case."""
     if user.pending_mfa_secret is None:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "No MFA enrolment in progress -- call /auth/mfa/enroll first")
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "No MFA enrolment in progress -- call /auth/mfa/enroll first"
+        )
     pending_created_at = user.pending_mfa_created_at
     if pending_created_at is not None and pending_created_at.tzinfo is None:
         pending_created_at = pending_created_at.replace(tzinfo=timezone.utc)
-    if pending_created_at is None or (datetime.now(timezone.utc) - pending_created_at).total_seconds() > PENDING_MFA_MAX_AGE_SECONDS:
+    if (
+        pending_created_at is None
+        or (datetime.now(timezone.utc) - pending_created_at).total_seconds() > PENDING_MFA_MAX_AGE_SECONDS
+    ):
         user.pending_mfa_secret = None
         user.pending_mfa_created_at = None
         log_security_event(db, "mfa_enrolment_expired", user_id=user.id)
         db.commit()
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "MFA enrolment expired -- call /auth/mfa/enroll again")
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "MFA enrolment expired -- call /auth/mfa/enroll again"
+        )
     if not verify_totp(decrypt_mfa_secret(user.pending_mfa_secret), payload.code):
         log_security_event(db, "mfa_verify_failed", user_id=user.id)
         db.commit()
@@ -190,7 +197,11 @@ def recover(payload: RecoverRequest, db: Session = Depends(get_db)) -> dict:
     code_hash = hash_recovery_code(payload.recovery_code)
     record = (
         db.query(MfaRecoveryCode)
-        .filter(MfaRecoveryCode.user_id == user.id, MfaRecoveryCode.code_hash == code_hash, MfaRecoveryCode.used_at.is_(None))
+        .filter(
+            MfaRecoveryCode.user_id == user.id,
+            MfaRecoveryCode.code_hash == code_hash,
+            MfaRecoveryCode.used_at.is_(None),
+        )
         .one_or_none()
     )
     if record is None:

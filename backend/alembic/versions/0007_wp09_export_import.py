@@ -9,6 +9,7 @@ No special append-only or deny-all treatment needed here -- unlike
 decision_records/integrity_checkpoints, nothing about export/import jobs
 claims tamper-evidence.
 """
+
 from alembic import op
 import sqlalchemy as sa
 

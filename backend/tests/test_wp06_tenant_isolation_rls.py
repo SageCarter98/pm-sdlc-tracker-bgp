@@ -10,6 +10,7 @@ evidence_revisions) use the identical migration-generated policy shape
 in one loop) -- not independently re-proven here, which is a smaller gap than
 before this file existed, not a closed one.
 """
+
 import uuid
 
 import pytest
@@ -55,11 +56,15 @@ def two_tenants_with_projects():
 
     with _owner_engine.begin() as conn:
         for tid, name in [(tenant_a, "Tenant A"), (tenant_b, "Tenant B")]:
-            conn.execute(text("INSERT INTO tenants (id, name, created_at) VALUES (:id, :name, now())"), {"id": tid, "name": name})
+            conn.execute(
+                text("INSERT INTO tenants (id, name, created_at) VALUES (:id, :name, now())"), {"id": tid, "name": name}
+            )
         for uid, email in [(user_a, f"{user_a}@example.com"), (user_b, f"{user_b}@example.com")]:
             conn.execute(
-                text("INSERT INTO users (id, email, password_hash, verified, created_at, mfa_enabled) "
-                     "VALUES (:id, :email, 'x', false, now(), false)"),
+                text(
+                    "INSERT INTO users (id, email, password_hash, verified, created_at, mfa_enabled) "
+                    "VALUES (:id, :email, 'x', false, now(), false)"
+                ),
                 {"id": uid, "email": email},
             )
 
@@ -140,9 +145,11 @@ def test_seeded_leak_in_projects_rls_policy_is_detected(two_tenants_with_project
         assert t["project_b"] in leaked_ids, "seeded leak was not observed -- the weakened policy did not take effect"
     finally:
         with _owner_engine.begin() as conn:
-            conn.execute(text(
-                f"ALTER POLICY projects_tenant_isolation ON projects USING ({_ORIGINAL_POLICY}) WITH CHECK ({_ORIGINAL_POLICY})"
-            ))
+            conn.execute(
+                text(
+                    f"ALTER POLICY projects_tenant_isolation ON projects USING ({_ORIGINAL_POLICY}) WITH CHECK ({_ORIGINAL_POLICY})"
+                )
+            )
 
     with _app_engine.connect() as conn:
         conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_a"]})

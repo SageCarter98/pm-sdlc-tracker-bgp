@@ -57,7 +57,9 @@ def test_edit_draft_then_publish_then_edit_rejected(client):
     template_id, version_id = created["template_id"], created["id"]
 
     updated_schema = {**MINIMAL_SCHEMA, "tracks": ["Delivery", "Assurance"]}
-    edit = client.put(f"/orgs/{tenant_id}/templates/{template_id}/versions/{version_id}", json={"schema_json": updated_schema})
+    edit = client.put(
+        f"/orgs/{tenant_id}/templates/{template_id}/versions/{version_id}", json={"schema_json": updated_schema}
+    )
     assert edit.status_code == 200
     assert edit.json()["schema_json"]["tracks"] == ["Delivery", "Assurance"]
 
@@ -91,11 +93,11 @@ def test_import_malformed_schema_rejected_with_field_errors(client):
 
 def test_fork_creates_independent_copy(client):
     tenant_id = _create_org_as_admin(client)
-    original = client.post(f"/orgs/{tenant_id}/templates", json={"name": "Original", "schema_json": MINIMAL_SCHEMA}).json()
+    original = client.post(
+        f"/orgs/{tenant_id}/templates", json={"name": "Original", "schema_json": MINIMAL_SCHEMA}
+    ).json()
 
-    forked = client.post(
-        f"/orgs/{tenant_id}/templates/{original['template_id']}/versions/{original['id']}/fork"
-    )
+    forked = client.post(f"/orgs/{tenant_id}/templates/{original['template_id']}/versions/{original['id']}/fork")
     assert forked.status_code == 201
     forked_body = forked.json()
     assert forked_body["template_id"] != original["template_id"]
@@ -106,13 +108,17 @@ def test_fork_creates_independent_copy(client):
         f"/orgs/{tenant_id}/templates/{forked_body['template_id']}/versions/{forked_body['id']}",
         json={**MINIMAL_SCHEMA, "tracks": ["Changed"]},
     )
-    original_after = client.get(f"/orgs/{tenant_id}/templates/{original['template_id']}/versions/{original['id']}").json()
+    original_after = client.get(
+        f"/orgs/{tenant_id}/templates/{original['template_id']}/versions/{original['id']}"
+    ).json()
     assert original_after["schema_json"]["tracks"] == ["Delivery"]
 
 
 def test_contributor_cannot_create_or_publish_templates(client):
     tenant_id = _create_org_as_admin(client)
-    token = client.post(f"/orgs/{tenant_id}/invitations", json={"email": "c@tenant-a.example", "role": "contributor"}).json()["token"]
+    token = client.post(
+        f"/orgs/{tenant_id}/invitations", json={"email": "c@tenant-a.example", "role": "contributor"}
+    ).json()["token"]
     register_and_login(client, "c@tenant-a.example")
     client.post("/invitations/accept", json={"token": token})
 
@@ -124,7 +130,7 @@ def test_other_tenant_cannot_edit_or_publish_this_tenants_template(client):
     tenant_a = _create_org_as_admin(client, "admin@tenant-a.example")
     created = client.post(f"/orgs/{tenant_a}/templates", json={"name": "F", "schema_json": MINIMAL_SCHEMA}).json()
 
-    tenant_b = _create_org_as_admin(client, "admin@tenant-b.example")
+    _create_org_as_admin(client, "admin@tenant-b.example")
     # tenant B has no membership in tenant A -- the tenant_id in the URL is tenant A's,
     # so the membership check on tenant_a itself should already deny tenant B's session.
     resp = client.put(

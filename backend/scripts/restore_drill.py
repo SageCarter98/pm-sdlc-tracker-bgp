@@ -52,6 +52,7 @@ Honest limits, read before treating a clean run as more than it is:
   credential is itself now a thing requiring its own custody discipline,
   which this drill script does not solve, only names.
 """
+
 import subprocess
 import sys
 import time
@@ -68,13 +69,22 @@ BACKUP_DIR = Path(__file__).resolve().parent.parent / "backups"
 # (table, timestamp column) -- tenant_access_events uses occurred_at, not
 # created_at, unlike every other tenant-owned table (app/models.py).
 TENANT_OWNED_TABLES_WITH_TIMESTAMPS = [
-    ("memberships", "created_at"), ("invitations", "created_at"), ("tenant_access_events", "occurred_at"),
-    ("templates", "created_at"), ("template_versions", "created_at"),
-    ("projects", "created_at"), ("project_memberships", "created_at"), ("gate_occurrences", "created_at"),
-    ("evidence_items", "created_at"), ("evidence_revisions", "created_at"),
-    ("exception_records", "created_at"), ("decision_records", "created_at"),
-    ("idempotency_records", "created_at"), ("audit_events", "created_at"),
-    ("integrity_checkpoints", "created_at"), ("integrity_incidents", "detected_at"),
+    ("memberships", "created_at"),
+    ("invitations", "created_at"),
+    ("tenant_access_events", "occurred_at"),
+    ("templates", "created_at"),
+    ("template_versions", "created_at"),
+    ("projects", "created_at"),
+    ("project_memberships", "created_at"),
+    ("gate_occurrences", "created_at"),
+    ("evidence_items", "created_at"),
+    ("evidence_revisions", "created_at"),
+    ("exception_records", "created_at"),
+    ("decision_records", "created_at"),
+    ("idempotency_records", "created_at"),
+    ("audit_events", "created_at"),
+    ("integrity_checkpoints", "created_at"),
+    ("integrity_incidents", "detected_at"),
 ]
 TENANT_OWNED_TABLES = [t for t, _ in TENANT_OWNED_TABLES_WITH_TIMESTAMPS]
 
@@ -93,7 +103,13 @@ def _find_pg_binary(name: str) -> str:
 
 def _conn_parts(url: str) -> dict:
     u = urlparse(url.replace("postgresql+psycopg2", "postgresql"))
-    return {"host": u.hostname, "port": str(u.port), "user": u.username, "password": u.password, "dbname": u.path.lstrip("/")}
+    return {
+        "host": u.hostname,
+        "port": str(u.port),
+        "user": u.username,
+        "password": u.password,
+        "dbname": u.path.lstrip("/"),
+    }
 
 
 def main() -> None:
@@ -116,8 +132,21 @@ def main() -> None:
     # which pg_dump has no way to set per-row; see this script's docstring.
     t0 = time.monotonic()
     subprocess.run(
-        [pg_dump, "-h", backup_role["host"], "-p", backup_role["port"], "-U", backup_role["user"], "-Fc", "-f", str(backup_path), backup_role["dbname"]],
-        env=backup_env, check=True,
+        [
+            pg_dump,
+            "-h",
+            backup_role["host"],
+            "-p",
+            backup_role["port"],
+            "-U",
+            backup_role["user"],
+            "-Fc",
+            "-f",
+            str(backup_path),
+            backup_role["dbname"],
+        ],
+        env=backup_env,
+        check=True,
     )
     backup_seconds = time.monotonic() - t0
     backup_size = backup_path.stat().st_size
@@ -144,29 +173,67 @@ def main() -> None:
             latest_write = row.m
     now = datetime.now(timezone.utc)
     rpo = (now - latest_write).total_seconds() if latest_write else None
-    print(f"[2/5] Latest recoverable ordinary write: {latest_write} (RPO proxy: {rpo:.1f}s ago)" if latest_write else "[2/5] No tenant-owned rows exist yet -- RPO has nothing to measure this run.")
+    print(
+        f"[2/5] Latest recoverable ordinary write: {latest_write} (RPO proxy: {rpo:.1f}s ago)"
+        if latest_write
+        else "[2/5] No tenant-owned rows exist yet -- RPO has nothing to measure this run."
+    )
 
     # --- Step 3: restore into a fresh, empty database ---
     drill_db = f"bgp_restore_drill_{stamp.lower()}"
     t0 = time.monotonic()
     try:
         subprocess.run(
-            [psql, "-h", backup_role["host"], "-p", backup_role["port"], "-U", backup_role["user"], "-d", "postgres", "-c", f'CREATE DATABASE "{drill_db}"'],
-            env=backup_env, check=True, capture_output=True, text=True,
+            [
+                psql,
+                "-h",
+                backup_role["host"],
+                "-p",
+                backup_role["port"],
+                "-U",
+                backup_role["user"],
+                "-d",
+                "postgres",
+                "-c",
+                f'CREATE DATABASE "{drill_db}"',
+            ],
+            env=backup_env,
+            check=True,
+            capture_output=True,
+            text=True,
         )
     except subprocess.CalledProcessError as exc:
-        print(f"[3/5] SKIPPED: could not CREATE DATABASE ({exc.stderr.strip()}). "
-              f"bgp_backup needs CREATEDB for this step -- see this script's own docstring. "
-              f"Falling back to pg_restore --list (structural validation only, not a full restore).")
-        result = subprocess.run([pg_restore, "--list", str(backup_path)], env=backup_env, capture_output=True, text=True, check=True)
+        print(
+            f"[3/5] SKIPPED: could not CREATE DATABASE ({exc.stderr.strip()}). "
+            f"bgp_backup needs CREATEDB for this step -- see this script's own docstring. "
+            f"Falling back to pg_restore --list (structural validation only, not a full restore)."
+        )
+        result = subprocess.run(
+            [pg_restore, "--list", str(backup_path)], env=backup_env, capture_output=True, text=True, check=True
+        )
         object_count = len([line for line in result.stdout.splitlines() if line and not line.startswith(";")])
         print(f"    Dump is structurally valid: {object_count} restorable objects listed.")
         print("=== Drill incomplete: full restore-into-clean-environment step needs bgp_backup CREATEDB. ===")
         return
 
     subprocess.run(
-        [pg_restore, "-h", backup_role["host"], "-p", backup_role["port"], "-U", backup_role["user"], "-d", drill_db, "--no-owner", str(backup_path)],
-        env=backup_env, check=True, capture_output=True, text=True,
+        [
+            pg_restore,
+            "-h",
+            backup_role["host"],
+            "-p",
+            backup_role["port"],
+            "-U",
+            backup_role["user"],
+            "-d",
+            drill_db,
+            "--no-owner",
+            str(backup_path),
+        ],
+        env=backup_env,
+        check=True,
+        capture_output=True,
+        text=True,
     )
     restore_seconds = time.monotonic() - t0
     print(f"[3/5] Restore into clean database '{drill_db}' complete in {restore_seconds:.2f}s (RTO proxy)")
@@ -190,7 +257,9 @@ def main() -> None:
 
     integrity_ok = True
     with Session(drill_engine) as dsession:
-        project_ids = [r[0] for r in dsession.execute(text("SELECT DISTINCT project_id FROM integrity_checkpoints")).fetchall()]
+        project_ids = [
+            r[0] for r in dsession.execute(text("SELECT DISTINCT project_id FROM integrity_checkpoints")).fetchall()
+        ]
         for pid in project_ids:
             tenant_id = dsession.execute(text("SELECT tenant_id FROM projects WHERE id = :id"), {"id": pid}).scalar()
             result = verify_integrity(dsession, tenant_id, pid)
@@ -200,21 +269,40 @@ def main() -> None:
     if mismatches:
         print(f"[4/5] RECONCILIATION FAILED -- row count mismatches: {mismatches}")
     else:
-        print(f"[4/5] Reconciliation OK: row counts match across {len(TENANT_OWNED_TABLES)} tables checked; "
-              f"hash-chain integrity re-verified on {len(project_ids)} project(s) in the restored copy: "
-              f"{'OK' if integrity_ok else 'MISMATCH'}")
+        print(
+            f"[4/5] Reconciliation OK: row counts match across {len(TENANT_OWNED_TABLES)} tables checked; "
+            f"hash-chain integrity re-verified on {len(project_ids)} project(s) in the restored copy: "
+            f"{'OK' if integrity_ok else 'MISMATCH'}"
+        )
 
     # --- Step 5: cleanup ---
     drill_engine.dispose()
     subprocess.run(
-        [psql, "-h", backup_role["host"], "-p", backup_role["port"], "-U", backup_role["user"], "-d", "postgres", "-c", f'DROP DATABASE "{drill_db}"'],
-        env=backup_env, check=True, capture_output=True, text=True,
+        [
+            psql,
+            "-h",
+            backup_role["host"],
+            "-p",
+            backup_role["port"],
+            "-U",
+            backup_role["user"],
+            "-d",
+            "postgres",
+            "-c",
+            f'DROP DATABASE "{drill_db}"',
+        ],
+        env=backup_env,
+        check=True,
+        capture_output=True,
+        text=True,
     )
     print(f"[5/5] Dropped temporary database '{drill_db}'")
 
-    print(f"=== Drill complete. Backup {backup_seconds:.2f}s, Restore {restore_seconds:.2f}s. "
-          f"Both trivially within REQ-029's 1h RPO / 8h RTO targets on this near-empty dev database -- "
-          f"see this script's docstring for why that is not a production-scale proof. ===")
+    print(
+        f"=== Drill complete. Backup {backup_seconds:.2f}s, Restore {restore_seconds:.2f}s. "
+        f"Both trivially within REQ-029's 1h RPO / 8h RTO targets on this near-empty dev database -- "
+        f"see this script's docstring for why that is not a production-scale proof. ==="
+    )
 
 
 if __name__ == "__main__":

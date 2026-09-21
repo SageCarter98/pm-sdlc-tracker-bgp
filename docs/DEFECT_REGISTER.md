@@ -1,0 +1,34 @@
+# Defect register (SDLC G3.12)
+
+Structured register of known defects found and fixed since the first BGP-F0x
+review, closing the gap tracker item #126 named: prior write-ups in
+`TRACKER.md` describe each fix in narrative form but never as one register
+with consistent owner/commit/test/closure fields per finding. This file is
+the register; `TRACKER.md` remains the fuller narrative record — see there
+for complete technical detail on any row.
+
+A defect is added here once it is found, and a row's `Status`/`Closure date`
+are only updated once tests demonstrate the fix (never on the fix commit
+existing alone). No row here is a gate decision.
+
+| ID | Description | Severity | Discovered | Fix commit(s) | Reviewer (real, checked) | Test evidence | Status | Closure date |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| BGP-F01 | `POST /auth/login` issued a full session for an MFA-enabled account before the second factor was checked | High (auth bypass) | 2026-09-17 (`BGP_Development_Review_Findings_v1.0.pdf`) | `b1fb402` | Not reviewed by Milton | `test_identity.py` (2 new MFA-session tests) | Closed | 2026-09-17 |
+| BGP-F02 | Compensating review's reviewer/note were caller-supplied, so the deciding actor could self-approve | High (separation of duties) | 2026-09-17 (same PDF) | `b1fb402` | Not reviewed by Milton | `test_decisions.py` (2 new compensating-review tests); `test_wp07_tenant_isolation_rls.py` (3 new RLS tests) | Closed | 2026-09-17 |
+| BGP-F03 | No lock/constraint stopped two concurrent decisions or evidence revisions from both passing readiness checks before either committed | High (concurrency/integrity) | 2026-09-17 (same PDF) | `b1fb402` | Not reviewed by Milton | `test_bgp_f03_decision_concurrency.py` (4 tests, live Postgres, raw-SQL lock proofs) | Closed (raw-SQL level only — see BGP-F03 follow-up) | 2026-09-17 |
+| BGP-F04 | Export/import silently dropped evidence-revision history, compensating reviews, and original author/timestamp provenance on re-export | High (audit-trail integrity) | 2026-09-17 (same PDF) | `b1fb402` | Not reviewed by Milton | `test_export_import.py` (new round-trip and corrupted-archive tests) | Closed | 2026-09-17 |
+| BGP-F05 | README described the WP01-only skeleton, not the real WP01/WP03–WP10/WP12 build | Low (documentation) | 2026-09-17 (same PDF) | `b1fb402` | Not reviewed by Milton | N/A (documentation) | Closed | 2026-09-17 |
+| BGP-F01 follow-up | `POST /auth/mfa/enroll` overwrote the live MFA secret immediately, leaving a zero-second-factor window during factor replacement | High (auth bypass window) | 2026-09-18 (`BGP_Follow_Up_Review_Findings_v1.0.pdf`) | `b8bb22a` (PR [#3](https://github.com/SageCarter98/pm-sdlc-tracker-bgp/pull/3)) | MiltonBello15 — `APPROVED` on commit `b8bb22a`, checked via `gh pr view --json reviews` | `test_hardening.py` (+2: expiry, old-factor-still-works) | Closed | 2026-09-19 |
+| BGP-F02 follow-up | Separation-of-duties check derived "preparer" from the reassignable `owner_user_id` field instead of who actually submitted the revision | High (separation of duties bypass) | 2026-09-18 (same PDF) | `b8bb22a` (PR #3) | MiltonBello15 — `APPROVED` on `b8bb22a` | `test_clearing_or_reassigning_ownership_cannot_defeat_separation_of_duties` | Closed | 2026-09-19 |
+| BGP-F03 follow-up | Remaining unlocked reads (approver membership, exception rows) on the decision-commit path, plus tenant context lost after `db.rollback()` in the conflict handler | High (concurrency/RLS) | 2026-09-18 (same PDF) | `b8bb22a` (PR #3) | MiltonBello15 — `APPROVED` on `b8bb22a` | `test_decisions.py`, `test_integrity.py` fixture rewrites | Closed at the raw-SQL/lock level; the missing app-level HTTP test the review specifically asked for was the gap closed separately below | 2026-09-19 |
+| BGP-F04 follow-up | Re-export lost the original author identity and creation timestamp for an imported evidence revision, substituting the importer and import time | Medium (audit-trail provenance) | 2026-09-18 (same PDF) | `b8bb22a` (PR #3) | MiltonBello15 — `APPROVED` on `b8bb22a` | `test_unmatched_revision_author_and_timestamp_survive_reexport` | Closed | 2026-09-19 |
+| BGP-F03 app-level test gap | No test drove a real HTTP request through the actual decision endpoint into a genuine lock conflict — only raw-SQL/direct-table tests existed, which the follow-up review named as insufficient | Medium (test-coverage gap, not a code defect) | 2026-09-19 (found while addressing it) | `ac7f0f1` (PR [#4](https://github.com/SageCarter98/pm-sdlc-tracker-bgp/pull/4)) | MiltonBello15 — `APPROVED` on `ac7f0f1` | `test_bgp_f03_followup_app_level_concurrency.py` (real `TestClient` + real Postgres, deterministic lock-based conflict) | Closed | 2026-09-19 |
+| Org-bootstrap RLS ordering | `get_active_membership`, `create_org`, and `accept_invitation` set Postgres tenant RLS context (`SET LOCAL app.tenant_id`) after the RLS-protected query instead of before — against real Postgres, nobody could create an org, and no existing member could pass membership resolution | High (availability/correctness — fail-closed RLS blocking legitimate access, not a data exposure) | 2026-09-19 (found writing the BGP-F03 app-level test above) | `ac7f0f1` (PR #4); migration `0014_org_bootstrap_rls_fix.py` | MiltonBello15 — `APPROVED` on `ac7f0f1` | `test_bgp_f03_followup_app_level_concurrency.py` (exercises `get_active_membership`'s fixed ordering indirectly); full suite (132 passed) | Closed | 2026-09-19 |
+
+**Still open, honestly, per the source reviews' own language** (not claimed
+closed anywhere in this register):
+- BGP-F05 follow-up (clean-setup verification): migrations applied and the
+  suite passed, but against the existing dev checkout, not a genuinely fresh
+  clone with an empty database — see `TRACKER.md`.
+- No CI run has ever been deliberately broken (e.g. a reintroduced tenant
+  leak) to prove a relevant check actually goes red, for any finding above.
