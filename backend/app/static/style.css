@@ -1,47 +1,84 @@
-/* WP11 design system. Accessible-first (WCAG 2.2 AA per Blueprint Sec.4.3):
-   real color contrast, visible keyboard focus, status is always text-plus-
-   color, never color alone. Server-rendered HTML, no framework (DEC04) --
-   this file IS the visual system, not a stand-in for one. */
+/* WP13 design system. Token values reconciled from the WP13 Stitch design
+   package (rigorous_sdlc_governance_engine/DESIGN.md's prose palette --
+   the one with cited WCAG contrast ratios -- cross-checked against
+   complete_frontend_specification_token_bundle.md's CSS bundle where they
+   overlap). Accessible-first (WCAG 2.2 AA per Blueprint Sec.4.3): real
+   color contrast, visible keyboard focus, status is always text-plus-color,
+   never color alone. Server-rendered HTML, no framework (DEC04) -- this
+   file IS the visual system, not a stand-in for one. No Tailwind CDN, no
+   externally-hosted images: everything here is self-contained. */
 
 :root {
-  /* Brand: a single indigo hue, stepped for depth rather than flat fills. */
+  /* Brand: a single indigo hue, stepped for depth rather than flat fills.
+     Used for links and the brand mark; primary actions use the
+     institutional slate scale below (Corporate High-Density Systematics). */
   --brand-50: #eef2ff;
   --brand-100: #e0e7ff;
   --brand-500: #4338ca;
   --brand-600: #3730a3;
   --brand-700: #2e2a85;
 
-  --ink-900: #14161a;
-  --ink-700: #383d47;
-  --ink-500: #666d78;
-  --ink-300: #c6cbd3;
-  --ink-200: #dde1e6;
-  --ink-100: #eef0f3;
+  /* Institutional slate scale: canvas, borders, primary text, primary
+     button fill. Contrast: #0f172a on #f8fafc is 17.2:1 (AAA). */
+  --ink-900: #0f172a;
+  --ink-700: #1e293b;
+  --ink-500: #475569;
+  --ink-400: #64748b;
+  --ink-300: #cbd5e1;
+  --ink-200: #e2e8f0;
+  --ink-100: #f1f5f9;
   --paper: #ffffff;
-  --canvas: #f4f5f8;
+  --canvas: #f8fafc;
 
-  --success-600: #15803d;
-  --success-100: #dcfce7;
-  --error-600: #b91c1c;
-  --error-100: #fee2e2;
-  --warning-600: #a15c00;
-  --warning-100: #fef3c7;
-  --neutral-600: #52606d;
-  --neutral-100: #e6e9ee;
+  /* Governance state system: every status pairs a background, border and
+     text token so color is never the only signal. */
+  --success-600: #065f46;
+  --success-500: #059669;
+  --success-100: #ecfdf5;
+  --success-border: #a7f3d0;
 
-  --focus-ring: #f5a623;
+  --error-600: #991b1b;
+  --error-500: #dc2626;
+  --error-100: #fef2f2;
+  --error-border: #fecaca;
 
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 16px;
+  --warning-600: #92400e;
+  --warning-500: #d97706;
+  --warning-100: #fffbeb;
+  --warning-border: #fde68a;
 
-  --shadow-card: 0 1px 2px rgba(20, 22, 26, 0.04), 0 8px 24px -8px rgba(20, 22, 26, 0.10);
-  --shadow-sm: 0 1px 2px rgba(20, 22, 26, 0.06);
+  --neutral-600: #334155;
+  --neutral-100: #f1f5f9;
+  --neutral-border: #cbd5e1;
+
+  --info-600: #1e40af;
+  --info-100: #eff6ff;
+  --info-border: #bfdbfe;
+
+  /* WCAG 2.2 AA focus contract: 2px solid, 2px offset, Cobalt 600. */
+  --focus-ring: #2563eb;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+
+  --shadow-card: 0 1px 3px rgba(15, 23, 42, 0.05), 0 1px 2px -1px rgba(15, 23, 42, 0.05);
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-popover: 0 10px 15px -3px rgba(15, 23, 42, 0.08), 0 4px 6px -4px rgba(15, 23, 42, 0.04);
 
   --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+/* Tabular figures for anything numeric, versioned or hash-like: prevents
+   horizontal jitter when values update (WP13 component guide Sec.OpenType). */
+.mono, .crypto-hash, code, .tabular {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum" 1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 * { box-sizing: border-box; }
@@ -76,7 +113,7 @@ body {
    never removed, never replaced by a subtler "design-y" alternative. */
 a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible,
 textarea:focus-visible, [tabindex]:focus-visible {
-  outline: 3px solid var(--focus-ring);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }
@@ -175,9 +212,19 @@ input[type="text"], input[type="email"], input[type="password"], input[type="dat
 }
 input:hover, select:hover, textarea:hover { border-color: var(--ink-500); }
 input:focus-visible, select:focus-visible, textarea:focus-visible {
-  border-color: var(--brand-500);
+  border-color: var(--focus-ring);
 }
 .hint { color: var(--ink-500); font-size: 0.85rem; }
+
+/* Requirement guidance -- optional, template-author-written plain-language
+   help ("what to do" / "evidence to provide") shown next to a gate or
+   evidence rule when the template schema supplies it. Collapsed by
+   default so a dense checklist doesn't turn into a wall of text. */
+.guidance { margin-top: 0.5rem; font-size: 0.88rem; color: var(--ink-500); }
+.guidance summary { cursor: pointer; color: var(--brand-500); font-weight: 600; user-select: none; }
+.guidance summary:hover { color: var(--brand-600); }
+.guidance p { margin: 0.5rem 0 0; color: var(--ink-700); }
+.guidance p strong { color: var(--ink-900); }
 
 .filter-form { display: flex; flex-direction: row; align-items: flex-end; gap: 0.75rem; flex-wrap: wrap; }
 .field--tight { margin-bottom: 0; }
@@ -188,8 +235,11 @@ fieldset .field { margin-bottom: 0.6rem; }
 fieldset > div { margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.5rem; }
 
 /* ----------------------------------------------------------------- Buttons
-   Transform-only transitions (GPU, interruptible); press feedback via
-   scale(0.97) rather than color alone. */
+   Institutional monochrome primary (slate-900), not a brand color -- this
+   is a governance/audit tool, not a marketing surface. Transform-only
+   transitions (GPU, interruptible); press feedback via scale(0.97) rather
+   than color alone. Minimum 44x44px hit target (WP13 touch-ergonomics
+   contract). */
 button, .button {
   appearance: none;
   border: none;
@@ -197,23 +247,29 @@ button, .button {
   font-family: inherit;
   font-size: 0.95rem;
   font-weight: 600;
+  min-height: 2.75rem;
   padding: 0.65rem 1.3rem;
   border-radius: var(--radius-sm);
-  background: var(--brand-500);
+  background: var(--ink-900);
   color: #fff;
   box-shadow: var(--shadow-sm);
   transition: transform 160ms var(--ease-out), background-color 140ms var(--ease-out);
 }
-button:hover { background: var(--brand-600); }
+button:hover { background: var(--ink-700); }
 button:active { transform: scale(0.97); }
 
 button.secondary, button[class~="secondary"] {
   background: var(--paper);
-  color: var(--brand-500);
-  border: 1px solid var(--brand-500);
+  color: var(--ink-700);
+  border: 1px solid var(--ink-300);
   box-shadow: none;
 }
-button.secondary:hover { background: var(--brand-50); }
+button.secondary:hover { background: var(--canvas); }
+
+button.danger, button[class~="danger"] {
+  background: var(--error-500);
+}
+button.danger:hover { background: var(--error-600); }
 
 .button--ghost {
   background: transparent;
@@ -249,15 +305,20 @@ button.secondary:hover { background: var(--brand-50); }
   font-weight: 500;
 }
 
-/* ----------------------------------------------------------------- Tables */
+/* ----------------------------------------------------------------- Tables
+   High-density data table (WP13 component guide Sec.1): no zebra striping,
+   crisp 1px borders, uppercase tracked headers, numeric columns right-
+   aligned with tabular figures. */
 table { width: 100%; border-collapse: collapse; margin-bottom: 1.5rem; font-size: 0.92rem; }
 caption { text-align: left; color: var(--ink-500); font-size: 0.85rem; margin-bottom: 0.5rem; }
-th, td { text-align: left; padding: 0.7rem 0.6rem; border-bottom: 1px solid var(--ink-100); vertical-align: top; }
-th { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-500); font-weight: 600; border-bottom: 2px solid var(--ink-200); }
+th, td { text-align: left; padding: 0.7rem 0.6rem; border-bottom: 1px solid var(--ink-200); vertical-align: top; }
+th { height: 36px; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-500); font-weight: 600; background: var(--canvas); border-bottom: 1px solid var(--ink-300); }
 tbody tr { transition: background-color 120ms var(--ease-out); }
 tbody tr:hover { background: var(--canvas); }
+th.num, td.num { text-align: right; font-family: var(--font-mono); font-feature-settings: "tnum" 1; }
 
-/* Status is always text; color is reinforcement only (never color alone). */
+/* Status is always text plus an explicit border; color is reinforcement
+   only, never the sole signal (WP13 Governance State System). */
 .status-badge {
   display: inline-flex;
   align-items: center;
@@ -268,24 +329,82 @@ tbody tr:hover { background: var(--canvas); }
   font-weight: 600;
   background: var(--neutral-100);
   color: var(--neutral-600);
-  border: 1px solid transparent;
+  border: 1px solid var(--neutral-border);
+  white-space: nowrap;
 }
 .status-badge::before { content: "●"; font-size: 0.6rem; }
-.status-badge[data-status="Complete"] { background: var(--success-100); color: var(--success-600); }
-.status-badge[data-status="In progress"] { background: var(--brand-100); color: var(--brand-600); }
-.status-badge[data-status="Not started"] { background: var(--neutral-100); color: var(--neutral-600); }
-.status-badge[data-status="Approve"] { background: var(--success-100); color: var(--success-600); }
-.status-badge[data-status="Approve with conditions"] { background: var(--warning-100); color: var(--warning-600); }
-.status-badge[data-status="Hold"], .status-badge[data-status="Redirect"] { background: var(--warning-100); color: var(--warning-600); }
-.status-badge[data-status="Terminate"] { background: var(--error-100); color: var(--error-600); }
+.status-badge[data-status="Complete"] { background: var(--success-100); color: var(--success-600); border-color: var(--success-border); }
+.status-badge[data-status="In progress"] { background: var(--info-100); color: var(--info-600); border-color: var(--info-border); }
+.status-badge[data-status="Not started"] { background: var(--neutral-100); color: var(--neutral-600); border-color: var(--neutral-border); }
+.status-badge[data-status="Approve"] { background: var(--success-100); color: var(--success-600); border-color: var(--success-border); }
+.status-badge[data-status="Approve with conditions"] { background: var(--warning-100); color: var(--warning-600); border-color: var(--warning-border); }
+.status-badge[data-status="Hold"], .status-badge[data-status="Redirect"] { background: var(--warning-100); color: var(--warning-600); border-color: var(--warning-border); }
+.status-badge[data-status="Terminate"] { background: var(--error-100); color: var(--error-600); border-color: var(--error-border); }
+
+/* Small binary-state pills ("Saved", "Recorded") -- distinct from the
+   status badge above, which always carries a leading dot marker. */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  border: 1px solid var(--neutral-border);
+  background: var(--neutral-100);
+  color: var(--neutral-600);
+  white-space: nowrap;
+}
+.pill--success { background: var(--success-100); color: var(--success-600); border-color: var(--success-border); }
+.pill--warning { background: var(--warning-100); color: var(--warning-600); border-color: var(--warning-border); }
+.pill--danger { background: var(--error-100); color: var(--error-600); border-color: var(--error-border); }
 
 .blocker-list ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.75rem; }
 .blocker-list li {
-  border: 1px solid var(--error-100);
+  border: 1px solid var(--error-border);
   background: var(--error-100);
   border-radius: var(--radius-md);
   padding: 0.85rem 1rem;
 }
+
+/* Blocker / compliance callout banner -- three explicit slots (rule id,
+   root cause, remediation) so a blocked reviewer always sees why and what
+   to do next, never just a red box. */
+.blocker-banner {
+  border: 1px solid var(--error-500);
+  background: var(--error-100);
+  border-radius: var(--radius-sm);
+  padding: 0.9rem 1.1rem;
+  margin-bottom: 0.75rem;
+}
+.blocker-banner__rule { font-family: var(--font-mono); font-size: 0.78rem; color: var(--error-600); font-weight: 600; }
+.blocker-banner__cause { margin: 0.35rem 0; color: var(--ink-900); }
+.blocker-banner__remedy { margin: 0; font-size: 0.85rem; color: var(--ink-500); }
+
+/* Separation-of-duty callout: who staged this, who is (and isn't) eligible
+   to sign off on it. */
+.sod-box {
+  border: 1px solid var(--ink-200);
+  border-left: 4px solid var(--ink-900);
+  background: var(--canvas);
+  border-radius: var(--radius-sm);
+  padding: 0.85rem 1.1rem;
+  margin-bottom: 1rem;
+}
+.sod-box dl { grid-template-columns: max-content 1fr; margin: 0; }
+
+/* Immutable manifest summary -- read-only receipt styling for a recorded
+   decision: dotted separators, monospace identifiers. */
+.manifest-summary {
+  background: var(--canvas);
+  border: 1px solid var(--ink-200);
+  border-radius: var(--radius-md);
+  padding: 1rem 1.25rem;
+}
+.manifest-summary dt { border-bottom: 1px dotted var(--ink-300); padding-bottom: 0.35rem; }
+.manifest-summary dd { border-bottom: 1px dotted var(--ink-300); padding-bottom: 0.35rem; font-family: var(--font-mono); font-size: 0.85rem; }
+.manifest-summary dt:last-of-type, .manifest-summary dd:last-of-type { border-bottom: none; }
 
 .secret-code {
   font-family: var(--font-mono);

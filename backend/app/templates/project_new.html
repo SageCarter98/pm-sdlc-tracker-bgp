@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}New project{% endblock %}
+{% block content %}
+<h1>New project</h1>
+
+{% if not can_create %}
+<p class="hint">Your role does not permit creating a project in this organisation. Contact a tenant administrator or approver.</p>
+{% elif not starters %}
+<p class="hint">No published starter template is available yet. Ask a tenant administrator to publish one under Template authoring.</p>
+{% else %}
+<form method="post" action="/ui/orgs/{{ tenant_id }}/projects/new" novalidate>
+  <div class="field">
+    <label for="name">Project name</label>
+    <input type="text" id="name" name="name" required>
+  </div>
+
+  <fieldset>
+    <legend>Starter</legend>
+    {% for s in starters %}
+    <div>
+      <input type="radio" id="starter-{{ loop.index }}" name="template_version_id" value="{{ s.version_id }}" required {% if loop.first %}checked{% endif %}>
+      <label for="starter-{{ loop.index }}">{{ s.template_name }} v{{ s.version_number }} — classes: {{ s.classes | join(", ") }}</label>
+    </div>
+    {% endfor %}
+  </fieldset>
+
+  <div class="field">
+    <label for="class_id">Class</label>
+    <input type="text" id="class_id" name="class_id" required>
+    <span class="hint">Enter exactly one of the class names listed for your chosen starter above.</span>
+  </div>
+
+  {% if members %}
+  <fieldset>
+    <legend>Additional member (optional)</legend>
+    <div class="field field--tight">
+      <label for="member_user_id">Member</label>
+      <select id="member_user_id" name="member_user_id">
+        <option value="">— none —</option>
+        {% for m in members %}
+        <option value="{{ m.user_id }}">{{ m.email }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field field--tight">
+      <label for="member_role">Their role on this project</label>
+      <select id="member_role" name="member_role">
+        <option value="contributor">Contributor</option>
+        <option value="approver">Approver</option>
+        <option value="sponsor">Sponsor</option>
+        <option value="assurance_reviewer">Assurance reviewer</option>
+        <option value="tenant_administrator">Tenant administrator</option>
+      </select>
+    </div>
+  </fieldset>
+  {% endif %}
+
+  <button type="submit">Create project</button>
+</form>
+{% endif %}
+
+<p><a href="/ui/orgs/{{ tenant_id }}/my-work">Back to My work</a></p>
+{% endblock %}

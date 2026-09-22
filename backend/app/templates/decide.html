@@ -1,20 +1,17 @@
 {% extends "base.html" %}
 {% block title %}Decide: {{ occurrence.gate_id }}{% endblock %}
 {% block content %}
-<h1>Decide: {{ occurrence.gate_id }} (occurrence #{{ occurrence.sequence }})</h1>
+<h1>Decide: <span class="mono">{{ occurrence.gate_id }} #{{ occurrence.sequence }}</span></h1>
 
 {% if preview.hard_blockers or preview.conditional_blockers %}
-<div class="blocker-list">
-  <h2>Outstanding blockers</h2>
-  <ul>
-    {% for b in preview.blocker_explanations %}
-    <li>
-      <strong>{{ b.blocker_level | capitalize }} blocker</strong> — {{ b.explanation }}
-      <br><span class="hint">What to do: {{ b.corrective_action }}</span>
-    </li>
-    {% endfor %}
-  </ul>
+<h2>Outstanding blockers</h2>
+{% for b in preview.blocker_explanations %}
+<div class="blocker-banner">
+  <div class="blocker-banner__rule">{{ b.gate_id }} / {{ b.item_id }} — {{ b.blocker_level | upper }} BLOCKER</div>
+  <p class="blocker-banner__cause">{{ b.explanation }}</p>
+  <p class="blocker-banner__remedy">What to do: {{ b.corrective_action }}</p>
 </div>
+{% endfor %}
 {% else %}
 <p class="flash" role="status">No outstanding blockers — this occurrence is ready for a decision.</p>
 {% endif %}
@@ -24,6 +21,10 @@
 {% endif %}
 
 <h2>Record a decision</h2>
+<dl class="manifest-summary">
+  <dt>Occurrence</dt><dd>{{ occurrence.gate_id }} #{{ occurrence.sequence }}</dd>
+  <dt>Evidence manifest digest</dt><dd>{{ preview.manifest_digest }}</dd>
+</dl>
 {% if preview.permitted_outcomes %}
 <form method="post" action="/ui/orgs/{{ tenant_id }}/projects/{{ project_id }}/occurrences/{{ occurrence.id }}/decide" novalidate>
   <input type="hidden" name="manifest_digest" value="{{ preview.manifest_digest }}">

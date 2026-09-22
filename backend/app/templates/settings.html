@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Organisation settings{% endblock %}
+{% block content %}
+<h1>Organisation settings</h1>
+
+<h2>Your account</h2>
+<dl>
+  <dt>Email</dt>
+  <dd>{{ current_user.email }}</dd>
+  <dt>Your role in this organisation</dt>
+  <dd><span class="status-badge">{{ membership.role }}</span></dd>
+  <dt>Multi-factor authentication</dt>
+  <dd>
+    {% if current_user.mfa_enabled %}
+    <span class="pill pill--success">Enrolled</span>
+    {% else %}
+    <span class="pill pill--warning">Not enrolled</span> — <a href="/ui/mfa/enroll">Enrol now</a>
+    {% endif %}
+  </dd>
+</dl>
+
+{% if is_admin %}
+<h2>Membership and access review</h2>
+<p class="hint">A complete, current membership listing, including revoked members -- REQ-047's quarterly access review is a process run against this list, not a feature this page schedules itself.</p>
+{% if members %}
+<table>
+  <thead>
+    <tr><th scope="col">Email</th><th scope="col">Role</th><th scope="col">Status</th><th scope="col">Member since</th></tr>
+  </thead>
+  <tbody>
+    {% for m in members %}
+    <tr>
+      <td data-label="Email">{{ m.email }}</td>
+      <td data-label="Role">{{ m.role }}</td>
+      <td data-label="Status">
+        {% if m.active %}<span class="pill pill--success">Active</span>{% else %}<span class="pill pill--danger">Revoked</span>{% endif %}
+      </td>
+      <td data-label="Member since">{{ m.member_since.strftime("%Y-%m-%d") }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No other members yet.</p>
+{% endif %}
+
+<h2>Invite a member</h2>
+<p class="hint">No mail infrastructure in this prototype -- the invitation token is shown directly here for you to share out-of-band.</p>
+<form method="post" action="/ui/orgs/{{ tenant_id }}/settings/invitations" novalidate>
+  <div class="field">
+    <label for="email">Email</label>
+    <input type="email" id="email" name="email" required>
+  </div>
+  <div class="field">
+    <label for="role">Role</label>
+    <select id="role" name="role">
+      <option value="contributor">Contributor</option>
+      <option value="approver">Approver</option>
+      <option value="sponsor">Sponsor</option>
+      <option value="assurance_reviewer">Assurance reviewer</option>
+      <option value="tenant_administrator">Tenant administrator</option>
+    </select>
+  </div>
+  <button type="submit">Create invitation</button>
+</form>
+
+<p class="hint">There is no revoke-membership or change-role control here yet -- no such endpoint exists in the API this page calls (tracked as a gap, not built as a placeholder).</p>
+{% endif %}
+
+<p><a href="/ui/orgs/{{ tenant_id }}/my-work">Back to My work</a></p>
+{% endblock %}

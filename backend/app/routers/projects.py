@@ -336,6 +336,29 @@ def list_projects(
     return db.query(Project).filter(Project.tenant_id == tenant_id).all()
 
 
+@router.get("/orgs/{tenant_id}/projects/{project_id}/occurrences", response_model=list[OccurrenceOut])
+def list_occurrences(
+    tenant_id: str,
+    project_id: str,
+    db: Session = Depends(get_db),
+    membership: Membership = Depends(get_active_membership),
+) -> list[GateOccurrence]:
+    """Return the project-scoped gate occurrences in display order.
+
+    The webapp gate dashboard calls this function directly so it shares the
+    same project-membership and tenant scoping as the JSON API rather than
+    reimplementing an occurrence query in the page route.
+    """
+    _get_owned_project_or_404(db, tenant_id, project_id)
+    _require_project_member(db, project_id, membership.user_id)
+    return (
+        db.query(GateOccurrence)
+        .filter(GateOccurrence.tenant_id == tenant_id, GateOccurrence.project_id == project_id)
+        .order_by(GateOccurrence.gate_id, GateOccurrence.sequence)
+        .all()
+    )
+
+
 def _get_owned_project_or_404(db: Session, tenant_id: str, project_id: str) -> Project:
     project = db.query(Project).filter(Project.id == project_id, Project.tenant_id == tenant_id).one_or_none()
     if project is None:

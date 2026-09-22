@@ -52,5 +52,29 @@ class Settings(BaseSettings):
     # bgp_backup exists.
     backup_database_url: str = "postgresql+psycopg2://bgp_backup:CHANGE-ME-BACKUP@localhost:5432/bgp_dev"
 
+    # WP15 Phase 1 (FE-097/098): local-disk root for uploaded evidence
+    # attachments -- deliberately not object storage; nothing else in this
+    # stack uses it yet, and the app is still local-prototype/synthetic-data
+    # stage. Set BGP_ATTACHMENT_STORAGE_ROOT for a real deployment; a
+    # relative default is fine for local dev (created on first use).
+    attachment_storage_root: str = "./var/attachments"
+
+    # Not an approved numeric budget (no DEC has set one, same honest gap
+    # as DEC08's performance numbers) -- a conservative placeholder so
+    # Phase 1 has SOME bound rather than none. Set
+    # BGP_ATTACHMENT_MAX_SIZE_BYTES to override; revisit once a real limit
+    # is actually decided.
+    attachment_max_size_bytes: int = 20 * 1024 * 1024
+
+    # WP15 Phase 2 (FE-097): Cloudmersive Virus Scan API key. Chosen over
+    # VirusTotal specifically because VirusTotal's standard API shares
+    # submitted files with a multi-vendor corpus -- a poor fit for a
+    # platform built around not letting tenant data cross boundaries it
+    # shouldn't. Empty string means "no scanner configured" -- every
+    # attachment stays scan_status="unavailable" and permanently
+    # undownloadable, same as Phase 1, never silently treated as safe. Set
+    # BGP_CLOUDMERSIVE_API_KEY in backend/.env (never commit the real key).
+    cloudmersive_api_key: str = ""
+
 
 settings = Settings()

@@ -31,11 +31,11 @@
   <tbody>
     {% for row in items %}
     <tr>
-      <td data-label="Project">{{ row.project_name }}</td>
-      <td data-label="Item">{{ row.item.gate_id }} / {{ row.item.rule_id }}</td>
+      <td data-label="Project"><a href="/ui/orgs/{{ tenant_id }}/projects/{{ row.project_id }}/gates">{{ row.project_name }}</a></td>
+      <td data-label="Item"><span class="mono">{{ row.item.gate_id }} / {{ row.item.rule_id }}</span></td>
       <td data-label="Status"><span class="status-badge" data-status="{{ row.status }}">{{ row.status }}</span></td>
       <td data-label="Why it's yours">{{ row.reason }}</td>
-      <td data-label="Due">{{ row.due_date.strftime("%Y-%m-%d") if row.due_date else "No due date set" }}</td>
+      <td data-label="Due">{% if row.due_date %}<span class="mono">{{ row.due_date.strftime("%Y-%m-%d") }}</span>{% else %}No due date set{% endif %}</td>
       <td data-label="Action">
         {% if row.status != "Complete" %}
         <a href="/ui/orgs/{{ tenant_id }}/evidence/{{ row.item.id }}">Work on this item</a>

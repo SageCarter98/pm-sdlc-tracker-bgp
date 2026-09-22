@@ -787,6 +787,29 @@ def get_decision(
     return DecisionOut.model_validate(decision)
 
 
+@router.get("/orgs/{tenant_id}/projects/{project_id}/decisions", response_model=list[DecisionOut])
+def list_decisions(
+    tenant_id: str,
+    project_id: str,
+    db: Session = Depends(get_db),
+    membership: Membership = Depends(get_active_membership),
+) -> list[DecisionRecord]:
+    """WP13 UI07 (Audit history & supersession tracker): a project-level
+    timeline needs every decision, not just one looked up by id (the only
+    existing read path, get_decision above). Read-only, membership-gated
+    the same way get_decision already is; each row's own
+    supersedes_decision_id is what lets the page draw the correction chain
+    -- no new field, no new write path."""
+    _get_owned_project_or_404(db, tenant_id, project_id)
+    _require_project_member(db, project_id, membership.user_id)
+    return (
+        db.query(DecisionRecord)
+        .filter(DecisionRecord.project_id == project_id, DecisionRecord.tenant_id == tenant_id)
+        .order_by(DecisionRecord.created_at)
+        .all()
+    )
+
+
 @router.post(
     "/orgs/{tenant_id}/decisions/{decision_id}/superseding",
     response_model=DecisionOut,

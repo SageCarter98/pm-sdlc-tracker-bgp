@@ -383,6 +383,45 @@ class EvidenceRevision(Base):
     source_actor_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
 
 
+class EvidenceAttachment(Base):
+    """WP15 (FE-097/098, conditional capability -- REQ-053): an uploaded
+    file offered as evidence for one item. Immutable and versioned exactly
+    like EvidenceRevision -- app/routers/attachments.py only ever INSERTs.
+    `storage_key` is always server-generated (tenant_id + a fresh uuid),
+    never derived from the client's filename, so nothing here can
+    path-traverse or collide.
+
+    `scan_status`: "unavailable" (no scanner configured -- Phase 1 default,
+    still what every deployment without BGP_CLOUDMERSIVE_API_KEY sees),
+    "clean", "infected", or "error" (scanner configured but the call
+    itself failed/timed out/came back unparseable -- never conflated with
+    "clean"). download_attachment refuses anything that isn't "clean" --
+    "unavailable" and "error" both mean "we don't know", not "safe".
+
+    `status` (version lineage, independent of scan_status): "active" (the
+    current version), "superseded" (replaced by a later upload), or
+    "rejected" (scan_status came back "infected" -- WP15 Phase 2 keeps the
+    row, for the same reason nothing in this project silently deletes a
+    record of what happened, but a rejected upload never becomes "active"
+    and never supersedes whatever was active before it; the previous good
+    version stays current)."""
+
+    __tablename__ = "evidence_attachments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
+    evidence_item_id: Mapped[str] = mapped_column(String(36), ForeignKey("evidence_items.id"), nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(127), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    scan_status: Mapped[str] = mapped_column(String(20), nullable=False, default="unavailable")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    uploaded_by_user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
 class ExceptionRecord(Base):
     """REQ-020/021: scoped to exactly one EvidenceItem. `status` transitions
     active -> revoked only (never deleted -- REQ-021 "preserve earlier

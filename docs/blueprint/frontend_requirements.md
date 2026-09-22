@@ -1,12 +1,18 @@
 # Frontend development requirements (extracted)
 
 Extracted 2026-09-17 from `Blueprint_Working_Source.md` (owner-approved under APR-001,
-2026-09-15) — Sections 2, 3 (Usability/Accessibility), 4, 5.1, and the DEC register. No
-frontend code exists yet. This document exists so starting frontend work doesn't mean
-re-reading the whole 800-line blueprint pack cold, and so what the backend already provides is
-visible in one place next to what each screen needs. It is a reference extract, not a new
-approval — the blueprint itself remains the authoritative source; if this drifts from it, the
-blueprint wins.
+2026-09-15) — Sections 2, 3 (Usability/Accessibility), 4, 5.1, and the DEC register. It is a
+reference extract, not a new approval — the blueprint itself remains the authoritative source;
+if this drifts from it, the blueprint wins.
+
+**2026-09-20 update:** "No frontend code exists yet" (below) is now stale — WP11 resolved DEC04
+and built a real server-rendered frontend for UI01/UI03/UI04/UI06; WP13 added UI02/UI05/UI07/UI10.
+See `TRACKER.md`'s WP11/WP13 entries. There is also now a separate, later, owner-approved
+frontend requirements document at `BGP_Frontend_Requirements_v1.1_FE-APR-001.md` (FE-APR-001,
+2026-09-20) — a numbered FE-001..FE-102 supplement, not a replacement, of the REQ/UI identifiers
+this extract already uses. Where the two describe the same screen, prefer the newer FE-APR-001
+document; where they conflict, that document's own provenance note flags it rather than picking
+a side silently.
 
 ## 1. What's already decided, and what isn't (read this first)
 

@@ -86,6 +86,51 @@ def list_templates(
     return _visible_templates_query(db, tenant_id).all()
 
 
+class PublishedVersionOut(BaseModel):
+    template_id: str
+    template_name: str
+    version_id: str
+    version_number: int
+    classes: list[str]
+
+
+@router.get("/published", response_model=list[PublishedVersionOut])
+def list_published_versions(
+    tenant_id: str, db: Session = Depends(get_db), _membership: Membership = Depends(get_active_membership)
+) -> list[PublishedVersionOut]:
+    """WP13 UI02 (First project creation): the create-project form needs a
+    starter picker with each starter's applicable classes (REQ-021,
+    'explain available licensed starters'). Same visibility rule as
+    list_templates/_load_bound_schema (own tenant + shared platform
+    starters), scoped to published versions only -- a draft can't be bound
+    to a project (projects.py's _load_bound_schema rejects it)."""
+    rows = (
+        db.query(TemplateVersion, Template)
+        .join(Template, Template.id == TemplateVersion.template_id)
+        .filter(
+            (Template.tenant_id == tenant_id) | (Template.tenant_id.is_(None)),
+            TemplateVersion.status == "published",
+        )
+        .all()
+    )
+    out = []
+    for version, template in rows:
+        try:
+            schema = validate_template_schema(version.schema_json)
+        except RuleValidationError:  # pragma: no cover -- published versions were validated at publish time
+            continue
+        out.append(
+            PublishedVersionOut(
+                template_id=template.id,
+                template_name=template.name,
+                version_id=version.id,
+                version_number=version.version_number,
+                classes=schema.classes,
+            )
+        )
+    return out
+
+
 @router.post("", response_model=TemplateVersionOut, status_code=status.HTTP_201_CREATED)
 def create_template(
     tenant_id: str,
