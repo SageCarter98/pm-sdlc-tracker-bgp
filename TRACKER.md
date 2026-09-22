@@ -1050,6 +1050,68 @@ link with correct byte content; the earlier Phase-1-era upload (scanned
 before this key existed) correctly stayed `unavailable` rather than being
 retroactively rescanned. Full suite: 153 passing (was 150).
 
+## BGP-HR-001 and BGP-IPA-001: review register widened, 5 new findings logged (2026-09-22)
+
+Two governance records landed at the repo root: `BGP_Human_Code_Review_Approval_Record_v1.0_Approved.docx`
+(BGP-HR-001) and `BGP_Implementation_Plan_Alignment_Findings_v1.0.docx` (BGP-IPA-001, an AI-assisted
+assessment against the approved blueprint, inspected commit `0b284c6fb95c`). Neither document's
+claims were taken on faith -- every material claim was independently re-checked against live
+GitHub/repo state before this tracker was touched:
+
+- `gh pr view --json reviews` for PRs 3-7 confirmed every final-head `APPROVED` review BGP-HR-001
+  cites (PR3 `b8bb22a3f384`/MiltonBello15, PR4 `ac7f0f1068ce`/MiltonBello15, PR5 `0966b1b750b9`/
+  MiltonBello15+kenAddme, PR6 `4562f299426f`/kenAddme, PR7 `fa87b817996c`/kenAddme), and confirmed
+  PR6's earlier commit `06662fe8193c` (MiltonBello15 approval + kenAddme's later-dismissed review)
+  is correctly excluded from the register, not double-counted.
+- `gh run view --job --log` on run `35670396664` / job `106565331468` confirmed BGP-IPA-001's exact
+  cited figures: `151 passed, 2 skipped, 24 warnings`, `73 files already formatted`, Ruff
+  `All checks passed!`, dependency scan and secret scan both clean.
+- Grepped `backend/app/webapp/router.py` line 578 and confirmed `decide_submit` really does
+  `idempotency_key=str(uuid.uuid4())` fresh on every call -- BGP-IPA-001's IPA03 finding is real,
+  not a documentation artefact.
+- Grepped `README.md` lines 193/212 and confirmed the "lint unconfigured" and "No frontend" claims
+  are both still there and both now stale -- IPA05 is real; **README.md itself was not fixed by
+  this pass**, only flagged (see #125 below).
+- Grepped this file's own `## WP13` / `## WP14` / `## WP15` headings and confirmed the drift IPA01
+  flags: Blueprint Sec.6 assigns WP13=independent acceptance/release and WP14=optional/paid, but
+  this file uses WP13/WP14/WP15 for frontend pages/guidance/attachments instead, with no recorded
+  mapping back to the blueprint's own numbering.
+- One thing neither document's own claims could settle: both cite `BGP-CR-001, Collaborator Review
+  Closure Record v1.0, 18 September 2026` as a historical companion file. **No such file exists
+  anywhere in this repository.** Not fabricated or assumed benign -- flagged as a real gap.
+
+**Tracker items updated** (`pm-sdlc-tracker` DB, project id 1; overall completion 8.2% -> 9.4%):
+
+- **#124 (SDLC G3.10)** stays Complete; evidence widened from PR#3/#4 only to the full PR3-7
+  register above. Still explicitly scoped -- not a standing guarantee for a future unreviewed PR.
+- **#116 (SDLC G3.02)** Not started -> Complete: PR/commit/reviewer/CI-check linkage now recorded
+  for PRs 3-7.
+- **#120 (SDLC G3.06)** In progress -> Complete: lint+format are now configured and green in CI
+  (closing the exact gap open since WP12/2026-09-17). Caveat kept in the tracker note: the 2
+  skipped tests are Cloudmersive's live-scanner module, which skips without a key/reachable setup
+  CI doesn't provide -- this green run is not a live-scanner pass.
+- **#121 (SDLC G3.07)** In progress -> Complete: CI run history is genuinely retained on GitHub
+  Actions now, not just a local run.
+- **#126 (SDLC G3.12)** stays In progress: IPA01-IPA05 logged as a second, separate open-findings
+  set alongside the original BGP-F0x set. Still no single merged deviation register with owner/
+  commit/test-ID/closure-date columns -- that gap is what keeps this In progress.
+- **#125 (SDLC G3.11)** stays In progress: IPA05's README-staleness finding added to notes; README
+  itself is not yet corrected.
+- **#99 (SDLC G1.08)** downgraded Complete -> In progress: IPA01's WP-identifier drift is a real
+  break in the REQ-to-WP traceability chain for the WP13+ increments, confirmed above by grep, not
+  just asserted by the document.
+- **PM Gate 4.04 (#43)** and **PM Gate 4.07 (#46)**, plus **SDLC G4.06 (#133)** and **SDLC G4.19
+  (#146)**: all Not started -> In progress. BGP-HR-001 explicitly names itself as PM Gate 4
+  supporting evidence, and the PR-level author/reviewer separation (SageCarter98 authoring,
+  MiltonBello15/kenAddme approving, verified live) is real, partial evidence for these items. None
+  marked Complete -- each still has a real, stated gap (e.g. #46 needs all work packages accepted,
+  not just PRs 3-7; #133 needs owner/retest-status fields these two documents don't carry).
+
+**Not touched by this pass**: the rest of the PM track (still 0%; these two documents don't speak
+to PM Gates 1-3/5-7), SDLC G4 durability (IPA04 is explicitly release-blocking and remains
+genuinely unaddressed -- two review-evidence documents cannot close it), and #122 (SBOM/licence
+inventory -- neither document adds evidence there).
+
 ## Rules for updating this tracker as work proceeds
 
 1. Draft candidate evidence matches, then **verify each one against the actual
