@@ -29,7 +29,7 @@ existing alone). No row here is a gate decision.
 | IPA03 | `decide_submit` (`backend/app/webapp/router.py` line 578) generates a fresh `uuid.uuid4()` idempotency key on every submission instead of preserving a stable request identity, so a lost response cannot be safely recovered by resubmitting (REQ-035) | High (release-relevant) | 2026-09-22 (same document) | None yet | N/A | N/A | Open | pending |
 | IPA04 | Decision durability (DEC05) remains unimplemented; no independent fault/recovery/usability/accessibility/security assurance has been performed | High (explicitly release-blocking) | 2026-09-22 (same document) | None — needs named decision owners (DEC05/08/11) and real assurance activity, not a code fix | N/A | N/A | Open | pending |
 | IPA05 | `README.md` claimed linting was unconfigured (stale since PR#5 added Ruff to CI, 2026-09-20) and listed "No frontend" under known gaps (stale since WP11/WP13, 2026-09-20/21) | Medium (documentation) | 2026-09-22 (same document) | `5e00405` (`README.md`) | Not reviewed by Milton | N/A (documentation) — grep-confirmed both claims are removed and replaced with the accurate current state, including honest open sub-findings (IPA02/03/04) | Closed | 2026-09-24 |
-| REQ-020 validation gap | REQ-020 ("Validate not-applicable classifications against rules and class floor") has no implementation anywhere in `backend/app/` -- grep-confirmed zero occurrences of any not-applicable-vs-class-floor check. Found while filling the xlsx Requirements sheet per-item, not by the original TR03 pass, which had marked the broader "Unverified exclusions" finding Pass on the strength of REQ-021 alone. | Medium (traceability/requirements gap, not a security defect) | 2026-09-24 (per-requirement verification of `docs/blueprint/Build_Governance_Platform_Implementation_Tracker_v0.2_Approved.xlsx`) | None yet | N/A | N/A (documentation/gap-finding, not a code fix) | Open | pending |
+| REQ-020 validation gap | **Superseded same day, see resolution below.** Initial finding claimed REQ-020 had no implementation anywhere in `backend/app/`, based on grepping the literal string "Not applicable" -- the wrong search. The real mechanism is `ExceptionRecord` (authority/scope/expiry-checked), and `test_exception_excuses_a_hard_blocker_and_revocation_reinstates_it` already proved most of REQ-020's actual verify text. | Medium (was: traceability gap; corrected: test-coverage gap only) | 2026-09-24 | `backend/tests/test_decisions.py` (2 new tests, no production code changed) | Not reviewed by Milton | Both new tests independently verified to fail when the behavior they check is removed (temporarily broke `_exception_is_currently_valid`'s expiry check and the exception-scoping query, confirmed each test failed, reverted -- `git diff` on `decisions.py` is empty) | Closed | 2026-09-24 |
 
 **Still open, honestly, per the source reviews' own language** (not claimed
 closed anywhere in this register):
@@ -44,6 +44,6 @@ closed anywhere in this register):
   idempotency-key/recovery-flow implementation; IPA04 needs named decision
   owners for DEC05/08/11 plus real independent assurance work. Do not close
   any of the three without that underlying work actually happening first.
-- **REQ-020 validation gap**: genuinely unbuilt, not just unreviewed. Needs
-  an actual not-applicable-vs-class-floor validation implementation in
-  `app/rule_engine.py` or `app/routers/decisions.py` before this can close.
+- ~~REQ-020 validation gap~~ -- Closed 2026-09-24. See the corrected row above:
+  this was a misdiagnosis (searched for the wrong terminology), not a real
+  code gap. The actual gap was 2 missing tests, now added.

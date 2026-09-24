@@ -1283,6 +1283,72 @@ independent review of `docs/wp_identifier_mapping.md` and actually fixing
 the handful of gaps this pass found or reconfirmed (REQ-020, REQ-035,
 REQ-038, REQ-024), not further transcription work.
 
+## REQ-020 "fixed" -- turned out to be a misdiagnosis, not a code gap (2026-09-24)
+
+Asked to fix REQ-020 ("Validate not-applicable classifications against rules
+and class floor"), which the previous pass had marked "Not tested" /
+"genuinely unbuilt" after grepping for the literal string "Not applicable"
+and finding nothing.
+
+**First hypothesis, discarded before writing any code**: that a "hard"
+blocker-level evidence item (the class floor) should never be waivable via
+`ExceptionRecord`, since that's the only mechanism in this codebase that
+excludes an item from blocking. Before implementing that, checked for
+existing tests on the exception path and found
+`test_exception_excuses_a_hard_blocker_and_revocation_reinstates_it`
+(`backend/tests/test_decisions.py`) -- an existing, passing, deliberately
+named test asserting the *opposite*: a valid, authority-approved exception
+**correctly** excuses even a hard blocker, and revoking it correctly
+reinstates the block. Waiving a class-floor item via a scoped, time-bound,
+authority-checked exception is the intended design (matches real-world
+governance practice, not a bug) -- would have broken working, tested,
+intentional behaviour to "fix" this.
+
+**Re-reading REQ-020's own verify text** (`docs/blueprint/Requirements_Catalogue.json`,
+not just its paraphrased description) settled it: "A typed status alone
+cannot exclude an item; expired, revoked and unrelated exceptions are
+rejected." Checked each clause against the actual code and tests:
+- *Revoked exceptions rejected*: already tested (the test above).
+- *Expired exceptions rejected*: `_exception_is_currently_valid` re-checks
+  `expires_at` against server time on every read -- but no test proved this
+  for an exception that was valid at creation and later expired with time
+  passing, only that `create_exception` refuses an already-expired one up
+  front. Missing test, not missing code.
+- *Unrelated exceptions rejected*: structurally guaranteed by
+  `ExceptionRecord.evidence_item_id` scoping the lookup query -- but nothing
+  proved this end-to-end either.
+
+**Fix**: added exactly those two tests to `backend/tests/test_decisions.py`
+-- `test_exception_that_has_expired_over_time_no_longer_excuses_the_blocker`
+(directly rewinds an `ExceptionRecord.expires_at` into the past via the same
+direct-DB-manipulation pattern `test_hardening.py` already uses for expired
+MFA replacement windows, then re-checks readiness) and
+`test_exception_scoped_to_one_item_does_not_excuse_a_different_item` (creates
+an exception for the S1 item, confirms the S2 item in the same project still
+blocks). **Verified both tests actually catch what they claim**, not just
+pass by coincidence: temporarily removed the expiry check and separately
+broadened the exception-scoping query to project-wide, confirmed each
+change made the corresponding new test fail, then reverted -- `git diff` on
+`backend/app/routers/decisions.py` is empty; no production code changed.
+Full suite: 155/155 passing (was 153, +2).
+
+**Corrected records**: REQ-020 (Requirements sheet) and TR03 (Remediation
+sheet) both moved back to "Pass" in the xlsx, with the corrected reasoning
+in place of the original (wrong) "unbuilt" claim; AC03 and AC11 (Acceptance
+sheet) recomputed now that REQ-020 no longer drags them down (both now
+"Partial" instead of worse, still correctly limited by REQ-022's separate,
+real activity-limits gap). `docs/DEFECT_REGISTER.md`'s REQ-020 row marked
+superseded/Closed with the corrected story, not deleted -- the earlier wrong
+entry stays visible as history, per this project's own "preserve dated
+history, don't delete it" rule.
+
+**Worth remembering**: a per-requirement verification pass is itself not
+immune to producing a false negative -- searching for the wrong terminology
+(a literal status string) instead of reading the requirement's own verify
+text first cost an extra round trip here. Read the acceptance/verify text
+before concluding something is unbuilt, not just the requirement's
+paraphrased description.
+
 ## Rules for updating this tracker as work proceeds
 
 1. Draft candidate evidence matches, then **verify each one against the actual

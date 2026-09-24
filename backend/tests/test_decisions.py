@@ -436,6 +436,82 @@ def test_exception_excuses_a_hard_blocker_and_revocation_reinstates_it(client):
     )
 
 
+def test_exception_scoped_to_one_item_does_not_excuse_a_different_item(client):
+    """REQ-020's own verify text: '...unrelated exceptions are rejected.'
+    Structurally guaranteed by ExceptionRecord.evidence_item_id scoping the
+    lookup in _compute_readiness -- this proves it end-to-end rather than
+    trusting the query shape alone."""
+    tenant_id, created, admin_id, _approver_id = _setup_project_with_second_approver(client)
+    project_id = created["project"]["id"]
+    s1_occurrence_id = next(o["id"] for o in created["occurrences"] if o["gate_id"] == "S1")
+    s2_occurrence_id = next(o["id"] for o in created["occurrences"] if o["gate_id"] == "S2")
+    s1_item_id = next(e["id"] for e in created["evidence_items"] if e["gate_id"] == "S1")
+    s2_item_id = next(e["id"] for e in created["evidence_items"] if e["gate_id"] == "S2")
+
+    now = datetime.now(timezone.utc)
+    exc = client.post(
+        f"/orgs/{tenant_id}/evidence/{s1_item_id}/exceptions",
+        json={
+            "reason": "Vendor doc pending, low risk",
+            "owner_user_id": admin_id,
+            "starts_at": now.isoformat(),
+            "expires_at": (now + timedelta(days=30)).isoformat(),
+        },
+    )
+    assert exc.status_code == 201, exc.text
+
+    s1_preview = client.post(f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={})
+    assert s1_preview.json()["hard_blockers"] == [], "the exception's own item is correctly excused"
+
+    s2_preview = client.post(f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s2_occurrence_id}/preview", json={})
+    assert s2_item_id in s2_preview.json()["hard_blockers"], (
+        "an exception scoped to a different evidence item must never excuse this one"
+    )
+
+
+def test_exception_that_has_expired_over_time_no_longer_excuses_the_blocker(client):
+    """REQ-020's own verify text: 'expired... exceptions are rejected.'
+    create_exception already refuses an exception that is expired at
+    CREATION time -- this proves the other half, that _exception_is_currently_valid
+    re-checks expiry live against server time on every readiness read, not
+    just once when the exception was granted. Same direct-DB-manipulation
+    pattern as test_hardening.py's expired-pending-MFA-replacement test."""
+    from app.db import get_db
+    from app.main import app
+    from app.models import ExceptionRecord
+
+    tenant_id, created, admin_id, _approver_id = _setup_project_with_second_approver(client)
+    project_id = created["project"]["id"]
+    s1_occurrence_id = next(o["id"] for o in created["occurrences"] if o["gate_id"] == "S1")
+    s1_item_id = next(e["id"] for e in created["evidence_items"] if e["gate_id"] == "S1")
+
+    now = datetime.now(timezone.utc)
+    exc = client.post(
+        f"/orgs/{tenant_id}/evidence/{s1_item_id}/exceptions",
+        json={
+            "reason": "Vendor doc pending, low risk",
+            "owner_user_id": admin_id,
+            "starts_at": (now - timedelta(days=2)).isoformat(),
+            "expires_at": (now + timedelta(days=30)).isoformat(),
+        },
+    )
+    assert exc.status_code == 201, exc.text
+
+    still_valid = client.post(f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={})
+    assert still_valid.json()["hard_blockers"] == [], "the exception is genuinely valid right now"
+
+    db = next(app.dependency_overrides[get_db]())
+    record = db.query(ExceptionRecord).filter(ExceptionRecord.id == exc.json()["id"]).one()
+    record.expires_at = now - timedelta(days=1)  # time has now passed it, without revoking it
+    db.commit()
+
+    after_expiry = client.post(f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={})
+    assert s1_item_id in after_expiry.json()["hard_blockers"], (
+        "an exception past its expires_at must stop excusing the blocker even though status is still 'active' "
+        "-- status alone must never be trusted (REQ-020)"
+    )
+
+
 def test_conditional_approval_requires_owner_and_future_deadline(client):
     tenant_id, created, admin_id, approver_id = _setup_project_with_second_approver(client)
     project_id = created["project"]["id"]
