@@ -1176,6 +1176,58 @@ progress, not overcounting it):
   architecture diagram or operational runbook -- but the prior note ("no
   separate API reference exists") was simply wrong.
 
+## Approved xlsx companion tracker filled: Work packages, Decisions, Remediation (2026-09-24)
+
+`docs/blueprint/Build_Governance_Platform_Implementation_Tracker_v0.2_Approved.xlsx`
+has sat with every execution-status column blank since its 2026-09-15 baseline
+(flagged in tracker item #99's evidence). Asked to update it; scoped with the
+user to the 3 sheets with solid, already-verified evidence (Work packages,
+Decisions, Remediation -- 33 rows) rather than the 58-row Requirements and
+23-row Acceptance sheets, which need genuine per-item `TST-XXX` test
+verification, not transcription -- left blank for a dedicated future pass
+rather than filled carelessly.
+
+**Work packages (14 rows).** WP01-WP10 and WP12/WP14 filled with real
+Status/Evidence, several citing the specific PR and reviewer where one
+exists (e.g. WP03's MFA hardening: MiltonBello15, PR#3). **The honest
+surprise**: filling this sheet required cross-checking against
+`docs/wp_identifier_mapping.md` (IPA01), which showed Blueprint's *actual*
+WP11 ("Usability and accessibility" -- participant protocol, accessible
+journey results) and WP13 ("Independent acceptance and release" -- pen
+test, user acceptance, release/rollback records) have **never been done at
+all**. TRACKER.md's own "WP11"/"WP13" headings are unrelated frontend-build
+increments that happen to reuse those numbers. Both recorded as
+**Not started** in the xlsx, not rounded up just because *something*
+numbered similarly exists elsewhere.
+
+**Decisions (12 rows, 2 changed).** DEC01 and DEC04 moved from "Partly
+decided" to **"Decided"**, each with a Named owner filled in for the first
+time: DEC01 (Freston Kenny Adedeme as delivery lead; MiltonBello15 as
+independent reviewer, now backed by real APPROVED PR reviews, not just a
+named appointment) and DEC04 (the frontend/session architecture actually
+built 2026-09-20). DEC02/03/05/06/07/08/09/10/11 correctly left
+"Partly decided" -- still genuinely open per DEC05/08/11's own appearance in
+IPA04.
+
+**Remediation (7 rows, TR01-TR07 -- the original prototype findings,
+distinct from the later BGP-F0x set in `docs/DEFECT_REGISTER.md`).** TR01,
+TR02, TR03 and TR05 marked "Pass" with real test/code citations. TR04 marked
+"Partial" -- REQ-022's activity-limits gap on conditional approval, named
+since WP07 (2026-09-16), is still genuinely open. TR06 left "Not tested" --
+no specific check of HTML/Markdown control consistency has been done, and
+guessing "Pass" would have been fabrication. TR07 marked "Partial" -- the
+integrity/restore foundation is real and tested, but it remains a single
+local Postgres instance, not production infrastructure. **Reviewer left
+blank on every TR row** since none were independently reviewed -- the
+sheet's own `Verification` formula (`Pass` AND evidence AND reviewer all
+required) correctly computes "Unverified" for all 7 as a result, which is
+the honest state, not a formula quirk to work around.
+
+Tracker item **#99 (G1.08)** evidence updated to reflect this. Full
+technical trace of each row's evidence lives in this document's history
+above and in `docs/DEFECT_REGISTER.md`; the xlsx itself now carries the
+condensed, structured version.
+
 ## Rules for updating this tracker as work proceeds
 
 1. Draft candidate evidence matches, then **verify each one against the actual
