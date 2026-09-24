@@ -1112,6 +1112,70 @@ to PM Gates 1-3/5-7), SDLC G4 durability (IPA04 is explicitly release-blocking a
 genuinely unaddressed -- two review-evidence documents cannot close it), and #122 (SBOM/licence
 inventory -- neither document adds evidence there).
 
+## IPA01/IPA05 closed; three tracker items corrected after finding docs/ files that existed but weren't checked (2026-09-24)
+
+Asked to "note and close the findings" of BGP-IPA-001. Checked current code/docs
+against each of the 5 findings first (none were honestly closable as first
+found) and confirmed the scope with the user: docs-only work, no new code.
+
+**IPA05 (README contradictory status) -- Closed.** `README.md` still said
+linting was unconfigured and listed "No frontend" under known gaps -- both
+stale since 2026-09-20. Fixed: removed both claims, added accurate current
+notes on the partial frontend (now cross-referencing IPA02), the decision-
+recovery gap (IPA03), the durability/assurance gap (IPA04), and a corrected,
+honest account of the BGP-F0x/follow-up fix history (see below). Grep-confirmed
+both stale strings are gone.
+
+**IPA01 (WP-identifier drift) -- documentation half closed, review half open.**
+Wrote `docs/wp_identifier_mapping.md`: for every `TRACKER.md` heading that
+reuses a Blueprint Sec.6 WP number (WP11, WP13, WP14, plus the unassigned
+WP15), it records what was actually built, the true Blueprint anchor, the
+real requirement IDs, the authorization reference, and the acceptance
+evidence. **Checking the Blueprint's WP table directly (not just
+TRACKER.md's headings) found the drift is worse than BGP-IPA-001 itself
+said**: Blueprint WP11 ("Usability and accessibility") is also
+number-shadowed by the frontend-build increment TRACKER.md calls "WP11" --
+BGP-IPA-001 only named WP13/14/15. Like every other AI-drafted document in
+this project, the mapping is not independently reviewed yet -- tracker item
+#99 stays "In progress," not "Complete."
+
+**IPA02, IPA03, IPA04 -- stay open, correctly.** None of these three can be
+closed by a documentation pass: IPA02 needs DEC06/DEC07/DEC12 resolved
+before the missing UI can be built; IPA03 needs an actual stable-idempotency-
+key/recovery-flow implementation (`decide_submit` still generates a fresh
+`uuid.uuid4()` on every call, reconfirmed this session); IPA04 needs named
+decision owners for DEC05/DEC08/DEC11 plus real independent assurance work
+that no agent session can perform on its own. Recorded as open rows in
+`docs/DEFECT_REGISTER.md` alongside IPA01/IPA05, not silently dropped.
+
+**Three tracker items corrected** after this pass turned up real `docs/`
+files from commit `92dda7e` (PR#5, 2026-09-19, reviewed and approved by both
+MiltonBello15 and kenAddme) that a prior backfill session (2026-09-22) never
+checked for -- the same class of miss the evidence-honesty discipline exists
+to catch, just running in the other direction this time (undercounting real
+progress, not overcounting it):
+
+- **#126 (G3.12)**: `docs/DEFECT_REGISTER.md` already existed since
+  2026-09-19 -- a real structured register (ID/severity/discovered/fix-
+  commit/reviewer/test-evidence/status/closure-date) covering all 5 BGP-F0x
+  findings and their 6 follow-up-review fixes. Spot-checked 2026-09-24:
+  migration `0014_org_bootstrap_rls_fix.py` and every cited test function
+  exist and pass (12/12 targeted, 1/1 app-level concurrency, **full suite
+  153/153 against real Postgres**, run this session). Moved Not-actually-
+  In-progress -> **Complete**; the 5 new IPA0x rows were added to the same
+  register (Open/Submitted-for-review/Closed as appropriate, matching the
+  paragraphs above).
+- **#122 (G3.08)**: `docs/dependency_licence_inventory.md` already existed
+  (pip-licenses-generated, honestly caveated UNKNOWN-license entries,
+  psycopg2-binary's LGPL flagged). Stays In progress correctly -- no SBOM
+  format, no CI enforcement -- but the evidence citation was stale and is
+  now corrected.
+- **#125 (G3.11)**: `docs/api-reference.md` already existed, pointing at the
+  live OpenAPI schema (`GET /docs`/`/redoc`) plus a regenerable
+  `docs/openapi.json` snapshot. Stays In progress correctly -- still no
+  architecture diagram or operational runbook -- but the prior note ("no
+  separate API reference exists") was simply wrong.
+
 ## Rules for updating this tracker as work proceeds
 
 1. Draft candidate evidence matches, then **verify each one against the actual
