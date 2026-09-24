@@ -1228,6 +1228,61 @@ technical trace of each row's evidence lives in this document's history
 above and in `docs/DEFECT_REGISTER.md`; the xlsx itself now carries the
 condensed, structured version.
 
+## Xlsx tracker completed: Requirements (58) and Acceptance (23) sheets (2026-09-24)
+
+Finished the xlsx companion tracker, filling the two sheets scoped out of the
+previous pass -- these needed genuine per-item test verification against a
+specific `TST-XXX` claim, not transcription from already-established WP-level
+evidence.
+
+**Result**: of 58 requirements, 34 Pass, 8 Partial, 16 Not tested. Of 23
+acceptance criteria (each a boolean AND over several requirements), 7 Pass,
+10 Partial, 6 Not tested. Every non-blank cell cites a real source: a commit,
+a test file/function name, a grep result run this session, or an explicit
+"not built" finding -- nothing was marked Pass on the strength of its parent
+work package being marked Complete.
+
+**The one that mattered**: doing this at the individual-requirement level
+(not the work-package level) caught something the earlier Remediation-sheet
+pass had missed. TR03 ("Unverified exclusions", covering REQ-020 and
+REQ-021) had been marked "Pass" on the strength of REQ-021's real fix
+(live exception re-validation). Checking REQ-020 on its own -- "Validate
+not-applicable classifications against rules and class floor" -- found
+**zero occurrences of that logic anywhere in `backend/app/`**, grep-confirmed.
+It is not unverified, it is unbuilt. Corrected: TR03 downgraded to "Partial
+(REQ-021 holds, REQ-020 unbuilt)" in the Remediation sheet, and a new
+`REQ-020 validation gap` row added to `docs/DEFECT_REGISTER.md` (Open,
+Medium, needs an actual implementation in `app/rule_engine.py` or
+`app/routers/decisions.py` before it can close). This is exactly the kind
+of miss coarser roll-ups produce -- worth remembering before trusting any
+WP- or gate-level "Complete" without checking what it's actually built from.
+
+Other notable Partial/Not-tested findings surfaced this pass (all now on
+record in the Requirements sheet and cross-referenced to existing open
+items where one exists):
+- **REQ-035** (pending/confirmed decision recovery): Not tested --
+  reconfirms IPA03 at the requirement level, not just the webapp-route level.
+- **REQ-038** (invitation landing): Partial -- MFA/recovery are real, but
+  `accept_invitation` has no matching HTML template; grep-confirmed no
+  invitation-landing page exists anywhere in `backend/app/templates/`.
+- **REQ-024** (atomic authority recheck): Partial -- ties directly to
+  IPA04's remaining concurrency gap (exception/membership/reviewer-authority
+  reads not locked), not a new finding but now visible at the requirement
+  level too.
+- **REQ-012** (guided template authoring): Partial -- the backend
+  (fork/import/create-blank) is real and tested; the guided-authoring UI
+  (UI08) is the same open gap as IPA02.
+
+Both `docs/DEFECT_REGISTER.md` rows for IPA01 and IPA05 also had their "Fix
+commit(s)" field corrected from "not yet committed" to the real commit
+(`5e00405`) now that the previous session's changes were actually pushed.
+
+Tracker item **#99 (G1.08)** evidence updated. The xlsx is now a complete,
+checked, six-sheet linked-work-item structure -- what remains open is
+independent review of `docs/wp_identifier_mapping.md` and actually fixing
+the handful of gaps this pass found or reconfirmed (REQ-020, REQ-035,
+REQ-038, REQ-024), not further transcription work.
+
 ## Rules for updating this tracker as work proceeds
 
 1. Draft candidate evidence matches, then **verify each one against the actual
