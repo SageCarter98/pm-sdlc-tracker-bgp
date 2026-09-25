@@ -1481,6 +1481,58 @@ Not independently reviewed by Milton -- same standing caveat as every other
 fix in this project. Nothing pushed this session (local commit only, same
 "push is a separate, explicit ask" rule as always).
 
+## kenAddme named owner for the six DEC items blocking IPA02/IPA04 (2026-09-25)
+
+User said "Use kenAddme, the collaborator as the lead to close these gaps"
+(IPA02 and IPA04). **What this session actually did, and what it deliberately
+did not do:**
+
+Filled the previously-blank "Named owner" column (Decisions sheet,
+`docs/blueprint/Build_Governance_Platform_Implementation_Tracker_v0.2_Approved.xlsx`)
+for **DEC05, DEC06, DEC07, DEC08, DEC11, DEC12** with kenAddme -- the same
+pattern DEC01 already uses (that row names Freston Kenny Adedeme as delivery
+lead and MiltonBello15 as independent reviewer, both verified as real,
+active GitHub participants via `gh pr view`, not just accepted on paper).
+kenAddme is likewise a real, active collaborator: `APPROVED` reviews on PR#5,
+PR#6 and PR#7, independently checked via `gh pr view --json reviews` in the
+2026-09-22 BGP-HR-001 backfill session, not merely named.
+
+**This is an ownership assignment, not a decision.** Each of the six cells
+says so explicitly and names what's still actually missing:
+- **DEC05** (Operations and security leads): Candidate A vs. B, covered
+  failure scenarios, custody -- still unspecified.
+- **DEC06** (Privacy reviewer and owner): actual retention periods, the
+  permanent-record conflict -- still unspecified.
+- **DEC07** (Technical lead): rule vocabulary limits, the third permitted
+  framework -- still unspecified.
+- **DEC08** (UX and technical leads): sample sizes, device/network
+  profiles, numeric performance budgets -- still unspecified.
+- **DEC11** (Security lead and owner): break-glass scope, approval path,
+  independent key custody -- still unspecified.
+- **DEC12** (Data owner): already "Decided" at the policy level (see its own
+  row) -- what's missing is a named Data owner to actually authorise and
+  reconcile any real import, which kenAddme is now that named owner for.
+
+Status/Decision record/Approval date columns were deliberately left
+untouched for all six -- filling Named owner does not manufacture the
+decision content, and this session did not fabricate any of it.
+`docs/DEFECT_REGISTER.md`'s IPA02 and IPA04 rows updated with a pointer to
+this assignment (still Open -- an owner name doesn't close either row).
+Tracker item **#131 (SDLC G4.04)**, the direct match for IPA04, got its
+`owner` field set to kenAddme with the same caveat; status stays "Not
+started" -- unchanged, since no actual assurance work has happened.
+
+**Worth surfacing, not silently accepted**: one name across six structurally
+distinct specialist roles (operations, security, privacy, technical, UX,
+data) spanning DEC05/06/07/08/11/12 is a lot of hats for one collaborator
+whose only established track record in this project is PR-approval
+comments. Recording the assignment is a legitimate, reversible admin action
+-- but it does not by itself demonstrate kenAddme has the standing or
+intent to actually specify six quite different technical/privacy/security
+decisions. If that's not the intended scope, the fix is to name different
+owners per decision (or per domain), not to leave this assignment as
+substituting for the substance.
+
 ## Rules for updating this tracker as work proceeds
 
 1. Draft candidate evidence matches, then **verify each one against the actual
