@@ -28,6 +28,7 @@
 {% if preview.permitted_outcomes %}
 <form method="post" action="/ui/orgs/{{ tenant_id }}/projects/{{ project_id }}/occurrences/{{ occurrence.id }}/decide" novalidate>
   <input type="hidden" name="manifest_digest" value="{{ preview.manifest_digest }}">
+  <input type="hidden" name="idempotency_key" value="{{ idempotency_key }}">
 
   <fieldset>
     <legend>Outcome</legend>

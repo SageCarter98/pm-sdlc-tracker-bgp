@@ -1349,6 +1349,138 @@ text first cost an extra round trip here. Read the acceptance/verify text
 before concluding something is unbuilt, not just the requirement's
 paraphrased description.
 
+## REQ-035, REQ-038 fixed; REQ-024 corrected and its one real gap closed (2026-09-25)
+
+Continued from the prior session's own punch list ("the handful of gaps this
+pass found or reconfirmed (REQ-020, REQ-035, REQ-038, REQ-024)" -- REQ-020
+was already closed as a misdiagnosis, see above). All three remaining items
+resolved this session; full backend suite 161/161 (was 155) after all three.
+
+**REQ-035 / IPA03 (pending-decision recovery) -- fixed.** `decide_submit`
+(`app/webapp/router.py`) generated a fresh `uuid.uuid4()` idempotency key on
+every POST, which defeated `create_decision`'s own idempotency check at the
+UI layer: if a response was dropped after the server committed and the
+browser resubmitted the identical form, the fresh key made it look like a
+brand-new request, landing on decisions.py's "Occurrence already has
+decision ..." 409 instead of showing the decision that had, in fact, just
+been recorded -- exactly the gap REQ-035's own verify text names ("Drop the
+response after commit; recovery displays the existing decision without
+creating another"). Fixed: `decide_page` (GET) now mints one idempotency key
+per render, embedded in a hidden form field (`templates/decide.html`);
+`decide_submit` (POST) uses that value instead of generating its own. A
+re-render after a denial/error (`_render_error`) mints a **fresh** key --
+reusing the denied one would make a genuinely different follow-up attempt
+(e.g. picking a different outcome after seeing why the first was denied)
+collide with decisions.py's "Idempotency-Key already used for a different
+request" check instead of being processed as new. New
+`backend/tests/test_req035_decision_recovery.py` (2 tests, live Postgres):
+resubmitting the identical rendered form returns the same decision id, not
+a duplicate, and is confirmed to be the same DB row (not two rows that
+happen to render identically, via `GET .../decisions`); a fresh page load
+mints a different key. `test_wp11_webapp_rls.py`'s existing decide-recovery
+test and `test_wp13_webapp_new_pages.py`'s history test both needed the new
+required `idempotency_key` field added to their POSTs -- updated, still
+pass.
+
+**REQ-038 (invitation landing) -- fixed.** MFA/recovery were already real;
+the actual gap was that `accept_invitation` (`app/routers/orgs.py`) had no
+`/ui` page at all -- an invited user holding a token had nowhere to go.
+Built: `GET/POST /ui/invitations/accept` + `templates/invitation_accept.html`,
+deliberately GET-renders/POST-commits (same split as `decide_page`/
+`decide_submit` -- an accept is a state-changing action and must never
+happen on a GET). A signed-out visitor's landing page links to
+`/ui/login`/`/ui/register` carrying a new `next` parameter set to the
+landing page's own URL; `login_submit`/`register_submit`/
+`mfa_login_verify_submit` all now redirect to `next` (via a new
+`_safe_next` helper -- constrained to same-app `/ui/` paths only, since this
+is the first redirect target in the app that ever comes from a query
+string/form field rather than being hardcoded, and an unconstrained one
+would be an open-redirect vector) instead of always landing on the generic
+org picker, satisfying REQ-038's own verify text ("An invited user reaches
+the intended project after sign-in"). A signed-in acceptance redirects
+straight into that organisation's `my-work` page; an expired/reused/
+wrong-email token renders the landing page's own honest error (reusing
+`accept_invitation`'s existing error text), not a crash. The invite-creation
+flash message in `settings.html` now shares the actual landing URL, not
+just the bare token, so an admin has something directly clickable to send
+out-of-band (still no mail infra -- WP03 gap, unchanged). New
+`backend/tests/test_req038_invitation_landing.py` (3 tests, live Postgres):
+sign-out-then-register-via-`next` lands back on the invitation page and then
+on the org's settings (role correctly non-admin); GET is confirmed to have
+no side effect (`/me/orgs` checked before and after, membership only
+appears after the POST); a reused token shows the honest "already used"
+error rather than an unhandled exception.
+
+**REQ-024 (atomic authority recheck) -- the prior note was wrong on 2 of 3
+counts; the 1 real count is now fixed too.** The 2026-09-24 pass linked
+REQ-024 to IPA04 and wrote: "exception validity, tenant membership and
+compensating-reviewer authority are read without equivalent coordinated
+(locked) protection on the decision-commit path" -- without re-checking
+that claim against the code that was actually there. Reading
+`app/routers/decisions.py` directly found:
+- **Exception validity**: already `FOR UPDATE`-locked --
+  `_exception_is_currently_valid(db, exc, lock=True)`, called from
+  `_compute_readiness(..., lock=True)` inside `_record_decision`. Added by
+  `b8bb22a` (BGP-F03 follow-up, 2026-09-18/19) -- **before** the 2026-09-24
+  note was even written.
+- **Compensating-reviewer authority**: also already locked --
+  `_check_separation_of_duties`'s two `.with_for_update()` calls on the
+  reviewer's tenant `Membership` and `ProjectMembership` rows. Same
+  `b8bb22a` commit.
+- **Tenant membership**: this part was real. `app/deps.py`'s
+  `get_active_membership` checks the caller's own tenant-level `Membership`
+  exactly once, unlocked, before the route handler even runs --
+  `_require_decision_authority` locked the caller's `ProjectMembership` but
+  never re-checked their tenant `Membership` at commit time. A concurrent
+  removal of the caller from the organisation entirely (not just this
+  project) between that initial check and the eventual commit could
+  previously still ride through to a recorded decision.
+
+This is the second time a same-day tracker note has overclaimed a gap
+without checking the code first (the first was REQ-020, above) -- worth
+treating as a pattern: **re-verify a prior session's own "still open" note
+against the actual code before either fixing it or forwarding it**, the same
+discipline already applied to external review documents.
+
+Fixed the one real piece: `_require_decision_authority` now also locks and
+rechecks the caller's tenant `Membership` row (`Membership.active`), same
+fixed lock order as the rest of this path (project membership, then this,
+then evidence). New
+`test_bgp_f03_decision_concurrency.py::test_tenant_membership_lock_blocks_a_concurrent_writer`
+(live Postgres, same lock-blocking technique as the sibling
+ProjectMembership/evidence-item proofs already in that file) -- the
+fixture there was extended with a real `memberships` row for exactly this.
+A sequential SQLite test would have proven nothing here (the pre-existing,
+unlocked `get_active_membership` check already catches a deactivation that
+happens *before* a request starts; only the live-Postgres lock proves the
+*concurrent* case this fix actually closes) -- considered and deliberately
+not written, rather than added for the sake of a test that would pass
+whether or not the fix existed.
+
+All three of REQ-024's own verify-text clauses now hold with passing tests:
+evidence changes (existing), membership changes (ProjectMembership existing
++ tenant Membership new), repeated idempotency keys (existing,
+`test_decisions.py`'s "same idempotency key must return the same decision"
+test).
+
+**Records corrected**: Requirements sheet -- REQ-024, REQ-035, REQ-038 all
+moved to "Pass" with the corrected/new evidence above (REQ-024's cell keeps
+the existing Milton-approved PR#3/#4 citation for the locks that were
+already right, since that citation remains true; the new tenant-Membership
+lock is separately noted as not yet reviewed). Acceptance sheet -- AC10,
+AC18, AC21 (the criteria REQ-024/REQ-035/REQ-038 each roll up into) all
+moved to "Pass" accordingly. `docs/DEFECT_REGISTER.md` gets three new rows:
+IPA03 (Closed), a new "REQ-038 invitation landing gap" row (Closed, not
+itself an IPA-numbered finding), and a "REQ-024 concurrency note, partially
+wrong" row (Closed) that documents the correction, not just the fix. IPA02
+and IPA04 are untouched and stay open, correctly -- IPA04's broader "no
+independent assurance has been performed" claim is not satisfied by closing
+one of its narrower, code-fixable sub-pieces.
+
+Not independently reviewed by Milton -- same standing caveat as every other
+fix in this project. Nothing pushed this session (local commit only, same
+"push is a separate, explicit ask" rule as always).
+
 ## Rules for updating this tracker as work proceeds
 
 1. Draft candidate evidence matches, then **verify each one against the actual

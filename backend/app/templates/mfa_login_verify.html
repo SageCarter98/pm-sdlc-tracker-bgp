@@ -4,6 +4,7 @@
 <h1>Enter your verification code</h1>
 <p>Open your authenticator app and enter the 6-digit code it shows for this account.</p>
 <form method="post" action="/ui/mfa/login-verify" novalidate>
+  <input type="hidden" name="next" value="{{ next or '' }}">
   <div class="field">
     <label for="code">6-digit code</label>
     <input type="text" id="code" name="code" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" required autofocus>

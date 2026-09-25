@@ -48,6 +48,7 @@ pytestmark = pytest.mark.skipif(not POSTGRES_AVAILABLE, reason="live Postgres wi
 @pytest.fixture()
 def seeded_project():
     tenant_id, user_id = str(uuid.uuid4()), str(uuid.uuid4())
+    membership_id = str(uuid.uuid4())
     template_id, version_id = str(uuid.uuid4()), str(uuid.uuid4())
     project_id, occurrence_id, item_id, pm_id = (
         str(uuid.uuid4()),
@@ -68,6 +69,12 @@ def seeded_project():
             {"id": user_id, "email": f"{user_id}@example.com"},
         )
         conn.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": tenant_id})
+        conn.execute(
+            text(
+                "INSERT INTO memberships (id, tenant_id, user_id, role, active, created_at) VALUES (:id, :tid, :uid, 'approver', true, now())"
+            ),
+            {"id": membership_id, "tid": tenant_id, "uid": user_id},
+        )
         conn.execute(
             text("INSERT INTO templates (id, tenant_id, name, created_at) VALUES (:id, :tid, 'T', now())"),
             {"id": template_id, "tid": tenant_id},
@@ -119,6 +126,7 @@ def seeded_project():
         "occurrence_id": occurrence_id,
         "item_id": item_id,
         "pm_id": pm_id,
+        "membership_id": membership_id,
         "root_decision_id": root_decision_id,
     }
 
@@ -131,6 +139,7 @@ def seeded_project():
         conn.execute(text("DELETE FROM projects WHERE id = :id"), {"id": project_id})
         conn.execute(text("DELETE FROM template_versions WHERE id = :id"), {"id": version_id})
         conn.execute(text("DELETE FROM templates WHERE id = :id"), {"id": template_id})
+        conn.execute(text("DELETE FROM memberships WHERE id = :id"), {"id": membership_id})
         conn.execute(text("DELETE FROM users WHERE id = :id"), {"id": user_id})
         conn.execute(text("DELETE FROM tenants WHERE id = :id"), {"id": tenant_id})
 
@@ -188,6 +197,37 @@ def test_project_membership_lock_blocks_a_concurrent_writer(seeded_project):
     with _app_engine.begin() as conn_c:
         conn_c.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_id"]})
         conn_c.execute(text("UPDATE project_memberships SET role = 'contributor' WHERE id = :id"), {"id": t["pm_id"]})
+
+
+def test_tenant_membership_lock_blocks_a_concurrent_writer(seeded_project):
+    """REQ-024/BGP-IPA-001 IPA04: _require_decision_authority now also locks
+    the caller's tenant-level Membership row FOR UPDATE (not just their
+    ProjectMembership) -- app/deps.py's get_active_membership only ever
+    checked this once, unlocked, before the handler ran, so a concurrent
+    removal from the organisation entirely could previously ride through to
+    a committed decision undetected. Same lock-blocking proof as the
+    ProjectMembership test above, targeting `memberships` instead."""
+    t = seeded_project
+    conn_a = _app_engine.connect()
+    txn_a = conn_a.begin()
+    conn_a.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_id"]})
+    conn_a.execute(text("SELECT * FROM memberships WHERE id = :id FOR UPDATE"), {"id": t["membership_id"]})
+
+    try:
+        with pytest.raises(OperationalError, match="lock"):
+            with _app_engine.begin() as conn_b:
+                conn_b.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_id"]})
+                conn_b.execute(text("SET LOCAL lock_timeout = '300ms'"))
+                conn_b.execute(
+                    text("UPDATE memberships SET active = false WHERE id = :id"), {"id": t["membership_id"]}
+                )
+    finally:
+        txn_a.rollback()
+        conn_a.close()
+
+    with _app_engine.begin() as conn_c:
+        conn_c.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_id"]})
+        conn_c.execute(text("UPDATE memberships SET active = false WHERE id = :id"), {"id": t["membership_id"]})
 
 
 def test_second_root_decision_for_same_occurrence_rejected_at_db_level(seeded_project):

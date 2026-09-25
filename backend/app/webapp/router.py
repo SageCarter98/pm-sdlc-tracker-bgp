@@ -3,6 +3,7 @@ below calls the same functions app/routers/*.py's JSON endpoints call --
 see that module's docstring for why."""
 
 import uuid
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, Request, UploadFile
 from fastapi.responses import RedirectResponse
@@ -61,6 +62,18 @@ def _find_gate(schema, gate_id: str):
     return next((g for g in schema.gates if g.gate_id == gate_id), None)
 
 
+def _safe_next(next: str) -> str:
+    """REQ-038: an invited user reaches the intended project after sign-in,
+    not a generic org picker -- but `next` is the first redirect target in
+    this app that ever comes from a query string / form field instead of
+    being hardcoded, so it must be constrained to this app's own /ui/ pages
+    or it becomes an open-redirect vector. Anything else (empty, absolute,
+    protocol-relative '//host/...') falls back to the existing default."""
+    if next and next.startswith("/ui/") and not next.startswith("//"):
+        return next
+    return "/ui/orgs"
+
+
 router = APIRouter(prefix="/ui", tags=["webapp"])
 templates = Jinja2Templates(directory="app/templates")
 
@@ -76,8 +89,8 @@ def _render(request: Request, name: str, **context):
 
 
 @router.get("/login")
-def login_form(request: Request):
-    return _render(request, "login.html")
+def login_form(request: Request, next: str = ""):
+    return _render(request, "login.html", next=next)
 
 
 @router.post("/login")
@@ -85,30 +98,33 @@ def login_submit(
     request: Request,
     email: str = Form(...),
     password: str = Form(...),
+    next: str = Form(""),
     db: Session = Depends(get_db),
 ):
     from fastapi import HTTPException
 
-    resp = RedirectResponse(url="/ui/orgs", status_code=303)
+    resp = RedirectResponse(url=_safe_next(next), status_code=303)
     try:
         result = auth_router.login(auth_router.LoginRequest(email=email, password=password), resp, db)
     except HTTPException as exc:
-        return _render(request, "login.html", errors=[exc.detail], email=email)
+        return _render(request, "login.html", errors=[exc.detail], email=email, next=next)
     if result.get("mfa_required"):
-        resp.headers["location"] = "/ui/mfa/login-verify"
+        resp.headers["location"] = (
+            f"/ui/mfa/login-verify?next={quote(next, safe='')}" if next else "/ui/mfa/login-verify"
+        )
     return resp
 
 
 @router.get("/mfa/login-verify")
-def mfa_login_verify_form(request: Request):
-    return _render(request, "mfa_login_verify.html")
+def mfa_login_verify_form(request: Request, next: str = ""):
+    return _render(request, "mfa_login_verify.html", next=next)
 
 
 @router.post("/mfa/login-verify")
-def mfa_login_verify_submit(request: Request, code: str = Form(...), db: Session = Depends(get_db)):
+def mfa_login_verify_submit(request: Request, code: str = Form(...), next: str = Form(""), db: Session = Depends(get_db)):
     from fastapi import HTTPException
 
-    resp = RedirectResponse(url="/ui/orgs", status_code=303)
+    resp = RedirectResponse(url=_safe_next(next), status_code=303)
     preauth_cookie = request.cookies.get(mfa_router.PREAUTH_SESSION_COOKIE)
     try:
         mfa_router.login_verify(
@@ -118,13 +134,13 @@ def mfa_login_verify_submit(request: Request, code: str = Form(...), db: Session
             bgp_preauth=preauth_cookie,
         )
     except HTTPException as exc:
-        return _render(request, "mfa_login_verify.html", errors=[exc.detail])
+        return _render(request, "mfa_login_verify.html", errors=[exc.detail], next=next)
     return resp
 
 
 @router.get("/register")
-def register_form(request: Request):
-    return _render(request, "register.html")
+def register_form(request: Request, next: str = ""):
+    return _render(request, "register.html", next=next)
 
 
 @router.post("/register")
@@ -133,6 +149,7 @@ def register_submit(
     email: str = Form(...),
     password: str = Form(...),
     confirm_password: str = Form(...),
+    next: str = Form(""),
     db: Session = Depends(get_db),
 ):
     from fastapi import HTTPException
@@ -143,15 +160,18 @@ def register_submit(
             "register.html",
             errors=["The two passwords you entered do not match."],
             email=email,
+            next=next,
         )
     try:
         auth_router.register(auth_router.RegisterRequest(email=email, password=password), db)
     except HTTPException as exc:
-        return _render(request, "register.html", errors=[exc.detail], email=email)
-    resp = RedirectResponse(url="/ui/orgs", status_code=303)
+        return _render(request, "register.html", errors=[exc.detail], email=email, next=next)
+    resp = RedirectResponse(url=_safe_next(next), status_code=303)
     login_result = auth_router.login(auth_router.LoginRequest(email=email, password=password), resp, db)
     if login_result.get("mfa_required"):  # pragma: no cover -- a brand-new account never has MFA enabled yet
-        resp.headers["location"] = "/ui/mfa/login-verify"
+        resp.headers["location"] = (
+            f"/ui/mfa/login-verify?next={quote(next, safe='')}" if next else "/ui/mfa/login-verify"
+        )
     return resp
 
 
@@ -209,6 +229,49 @@ def mfa_enroll_verify_submit(request: Request, code: str = Form(...), db: Sessio
     for cookie_header in resp.headers.getlist("set-cookie"):
         rendered.headers.append("set-cookie", cookie_header)
     return rendered
+
+
+# ------------------------------------------------------- Invitation landing
+
+
+@router.get("/invitations/accept")
+def invitation_accept_page(request: Request, token: str, db: Session = Depends(get_db)):
+    """REQ-038: the essential invited-user journey. Deliberately GET-only
+    for rendering, never accepting on GET (an accept is a state-changing
+    action -- see decide_page/decide_submit's own GET-preview/POST-commit
+    split for the same reasoning) -- if not signed in yet, this renders a
+    landing page whose sign-in/register links carry `next` back to this
+    exact URL (see _safe_next) so completing sign-in returns the user here
+    automatically instead of dropping them at the generic org picker."""
+    user = page_current_user(request, db)
+    next_url = f"/ui/invitations/accept?token={token}"
+    return _render(request, "invitation_accept.html", current_user=user, token=token, next=next_url)
+
+
+@router.post("/invitations/accept")
+def invitation_accept_submit(request: Request, token: str = Form(...), db: Session = Depends(get_db)):
+    from fastapi import HTTPException
+
+    user = page_current_user(request, db)
+    next_url = f"/ui/invitations/accept?token={token}"
+    if user is None:
+        return RedirectResponse(f"/ui/login?next={next_url}", status_code=303)
+    try:
+        membership = orgs_router.accept_invitation(
+            orgs_router.AcceptInvitationRequest(token=token), user=user, db=db
+        )
+    except HTTPException as exc:
+        return _render(
+            request,
+            "invitation_accept.html",
+            current_user=user,
+            token=token,
+            next=next_url,
+            errors=[exc.detail],
+        )
+    # REQ-038: reaches the intended project (its organisation's own work
+    # list) after sign-in, not a generic landing page.
+    return RedirectResponse(f"/ui/orgs/{membership.tenant_id}/my-work", status_code=303)
 
 
 # --------------------------------------------------------------- Org picker
@@ -502,6 +565,7 @@ def decide_page(
         project_id=project_id,
         occurrence=occurrence,
         preview=preview,
+        idempotency_key=str(uuid.uuid4()),
     )
 
 
@@ -513,6 +577,7 @@ def decide_submit(
     occurrence_id: str,
     outcome: str = Form(...),
     manifest_digest: str = Form(...),
+    idempotency_key: str = Form(...),
     condition_items: str = Form(""),
     condition_owner_user_id: str = Form(""),
     condition_deadline: str = Form(""),
@@ -559,6 +624,13 @@ def decide_submit(
             occurrence=occurrence,
             preview=preview,
             errors=[str(detail)],
+            # REQ-035/IPA03: a fresh key here, not the one that just failed --
+            # this is a re-rendered form the user may resubmit with genuinely
+            # different content (e.g. a different outcome after a denial), and
+            # reusing the failed key would make that legitimate new attempt
+            # collide with the denied one ("Idempotency-Key already used for a
+            # different request") instead of being processed as new.
+            idempotency_key=str(uuid.uuid4()),
         )
 
     try:
@@ -575,7 +647,18 @@ def decide_submit(
             db=db,
             user=mfa_gated_user,
             mfa_verified=mfa_verified,
-            idempotency_key=str(uuid.uuid4()),
+            # REQ-035/IPA03: this key comes from the rendered form (a hidden
+            # field set once per decide.html render, see decide_page/
+            # _render_error above), not a fresh uuid generated on every POST.
+            # A fresh-every-call key defeated create_decision's own
+            # idempotency check at the UI layer: if the response is dropped
+            # after the server commits and the browser resubmits the SAME
+            # rendered form, it now replays the SAME key, so
+            # decisions.py's existing-record match returns the decision
+            # already recorded instead of racing into the "already decided"
+            # 409 (which decide_submit could only have shown as a confusing
+            # error, not the actual outcome).
+            idempotency_key=idempotency_key,
         )
     except HTTPException as exc:
         return _render_error(exc.detail)
@@ -823,5 +906,13 @@ def settings_invite_submit(
         membership=membership,
         members=_admin_members(db, tenant_id, membership),
         is_admin=True,
-        flash=f"Invitation created for {email}. Token (share out-of-band, no mail infra in this prototype): {invite.token}",
+        # REQ-038: share the actual landing URL, not just the bare token --
+        # no mail infra exists in this prototype (WP03 gap, tracked), so an
+        # admin still has to copy this out-of-band, but the recipient now
+        # gets a link straight to the invitation_accept page instead of
+        # needing to know its URL shape themselves.
+        flash=(
+            f"Invitation created for {email}. Share this link out-of-band (no mail infra in this "
+            f"prototype): /ui/invitations/accept?token={invite.token}"
+        ),
     )

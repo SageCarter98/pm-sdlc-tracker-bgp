@@ -446,6 +446,25 @@ def _require_decision_authority(db: Session, project_id: str, user: User, mfa_ve
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Not a member of this project")
     if pm.role not in DECISION_AUTHORITY_ROLES:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Role does not permit recording decisions")
+    # REQ-024/BGP-IPA-001 IPA04: app/deps.py's get_active_membership only
+    # ever checks the caller's ORG-level (tenant) Membership once, unlocked,
+    # before this handler runs -- unlike the exception approver's and the
+    # compensating reviewer's tenant Membership rows, which _record_decision
+    # already re-locks fresh at commit time (see _exception_is_currently_valid
+    # and _check_separation_of_duties). Without this, a concurrent removal of
+    # the caller from the organisation entirely (not just this project) could
+    # still ride through to a committed decision. Locked in the same fixed
+    # order as everywhere else on this path (project membership, then this,
+    # then evidence -- see _compute_readiness's docstring), so two concurrent
+    # decision-committing transactions still only ever wait on each other.
+    tenant_membership = (
+        db.query(Membership)
+        .filter(Membership.tenant_id == pm.tenant_id, Membership.user_id == user.id, Membership.active.is_(True))
+        .with_for_update()
+        .one_or_none()
+    )
+    if tenant_membership is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "No active membership in this organisation")
     # BGP-F01: session-bound, same reasoning as app/deps.py's require_mfa --
     # user.mfa_enabled alone (an account-level flag) is not evidence this
     # session ever completed a second-factor check.

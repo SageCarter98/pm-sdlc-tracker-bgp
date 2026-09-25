@@ -147,8 +147,9 @@ def test_decide_page_recovers_cleanly_after_a_denied_decision(ui_client):
     decide_url = f"/ui/orgs/{tenant_id}/projects/{project_id}/occurrences/{occurrence_id}/decide"
     page = ui_client.get(decide_url)
     digest = page.text.split('name="manifest_digest" value="')[1].split('"')[0]
+    key = page.text.split('name="idempotency_key" value="')[1].split('"')[0]
 
-    resp = ui_client.post(decide_url, data={"outcome": "Approve", "manifest_digest": digest})
+    resp = ui_client.post(decide_url, data={"outcome": "Approve", "manifest_digest": digest, "idempotency_key": key})
     assert resp.status_code == 200, resp.text
     assert "There is a problem" in resp.text
     assert "compensating review" in resp.text, (
@@ -156,7 +157,10 @@ def test_decide_page_recovers_cleanly_after_a_denied_decision(ui_client):
     )
 
     # And the page must still be genuinely usable afterward -- a fresh,
-    # permitted outcome succeeds through the same route.
-    resp2 = ui_client.post(decide_url, data={"outcome": "Hold", "manifest_digest": digest})
+    # permitted outcome succeeds through the same route. The re-rendered
+    # error page carries its own fresh idempotency_key (REQ-035/IPA03) --
+    # reusing the denied one would collide as "used for a different request".
+    key2 = resp.text.split('name="idempotency_key" value="')[1].split('"')[0]
+    resp2 = ui_client.post(decide_url, data={"outcome": "Hold", "manifest_digest": digest, "idempotency_key": key2})
     assert resp2.status_code == 200, resp2.text
     assert "Decision recorded" in resp2.text
