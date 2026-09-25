@@ -497,7 +497,9 @@ def test_exception_that_has_expired_over_time_no_longer_excuses_the_blocker(clie
     )
     assert exc.status_code == 201, exc.text
 
-    still_valid = client.post(f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={})
+    still_valid = client.post(
+        f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={}
+    )
     assert still_valid.json()["hard_blockers"] == [], "the exception is genuinely valid right now"
 
     db = next(app.dependency_overrides[get_db]())
@@ -505,7 +507,9 @@ def test_exception_that_has_expired_over_time_no_longer_excuses_the_blocker(clie
     record.expires_at = now - timedelta(days=1)  # time has now passed it, without revoking it
     db.commit()
 
-    after_expiry = client.post(f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={})
+    after_expiry = client.post(
+        f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={}
+    )
     assert s1_item_id in after_expiry.json()["hard_blockers"], (
         "an exception past its expires_at must stop excusing the blocker even though status is still 'active' "
         "-- status alone must never be trusted (REQ-020)"

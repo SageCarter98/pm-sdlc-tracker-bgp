@@ -218,9 +218,7 @@ def test_tenant_membership_lock_blocks_a_concurrent_writer(seeded_project):
             with _app_engine.begin() as conn_b:
                 conn_b.execute(text("SET LOCAL app.tenant_id = :tid"), {"tid": t["tenant_id"]})
                 conn_b.execute(text("SET LOCAL lock_timeout = '300ms'"))
-                conn_b.execute(
-                    text("UPDATE memberships SET active = false WHERE id = :id"), {"id": t["membership_id"]}
-                )
+                conn_b.execute(text("UPDATE memberships SET active = false WHERE id = :id"), {"id": t["membership_id"]})
     finally:
         txn_a.rollback()
         conn_a.close()

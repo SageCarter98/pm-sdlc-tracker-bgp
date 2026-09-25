@@ -121,7 +121,9 @@ def mfa_login_verify_form(request: Request, next: str = ""):
 
 
 @router.post("/mfa/login-verify")
-def mfa_login_verify_submit(request: Request, code: str = Form(...), next: str = Form(""), db: Session = Depends(get_db)):
+def mfa_login_verify_submit(
+    request: Request, code: str = Form(...), next: str = Form(""), db: Session = Depends(get_db)
+):
     from fastapi import HTTPException
 
     resp = RedirectResponse(url=_safe_next(next), status_code=303)
@@ -257,9 +259,7 @@ def invitation_accept_submit(request: Request, token: str = Form(...), db: Sessi
     if user is None:
         return RedirectResponse(f"/ui/login?next={next_url}", status_code=303)
     try:
-        membership = orgs_router.accept_invitation(
-            orgs_router.AcceptInvitationRequest(token=token), user=user, db=db
-        )
+        membership = orgs_router.accept_invitation(orgs_router.AcceptInvitationRequest(token=token), user=user, db=db)
     except HTTPException as exc:
         return _render(
             request,
