@@ -1533,6 +1533,64 @@ decisions. If that's not the intended scope, the fix is to name different
 owners per decision (or per domain), not to leave this assignment as
 substituting for the substance.
 
+## DEC05/06/07/08/11/12 answered by kenAddme, accepted by delivery lead (2026-09-27)
+
+`BGP_DEC_Resolution_Intake_2026-09-25_ANSWERED.pdf` arrived — kenAddme's
+substantive answers to the six DEC items the 2026-09-25 entry above named
+them owner of. User said to use it "as the answers." **What this session
+actually did, and what it deliberately did not do:**
+
+Transcribed the PDF into `docs/blueprint/BGP_DEC_Resolution_Intake_2026-09-25_ANSWERED.md`
+(a plain markdown rendering of the same content, checked against the PDF
+page by page, not paraphrased) and, per the original intake document's own
+"how this gets used" instructions, into the xlsx Decisions sheet
+(`docs/blueprint/Build_Governance_Platform_Implementation_Tracker_v0.2_Approved.xlsx`,
+Current position/Status/Decision record/Approval date columns) for all six
+rows. Status moved from "Partly decided" to "Decided" for DEC05/06/07/08/11
+(DEC06/12 already carried real content; DEC12 was already "Decided" and is
+now refined with the specific data-owner/controller-vs-processor split and
+the import evidence checklist). This follows the exact same pattern already
+established for DEC01/DEC04 in this file — the delivery lead accepting
+content in conversation is what moves a DEC row's Status, and that has
+never been treated as a substitute for an independent role sign-off.
+
+**Same caveat as DEC01/DEC04, stated explicitly again here**: marking these
+"Decided" reflects the delivery lead's (Freston Kenny Adedeme's) acceptance
+of kenAddme's answer, not an independent sign-off by each item's actually
+responsible role — Operations/security leads (DEC05), Privacy reviewer/owner
+(DEC06), Technical lead (DEC07), UX/technical leads (DEC08), Security
+lead/owner (DEC11). The answer document itself flags two of its own
+recommendations as not fully settled, and those flags are carried forward
+verbatim rather than smoothed over:
+
+- **DEC05**: the accepted answer is "Candidate A+," a synthesis of
+  synchronous durable replication plus an independent hash-chain anchor —
+  not literally Candidate A or Candidate B as the blueprint originally
+  posed the choice. This changes what Operations/security leads are
+  actually being asked to confirm at review.
+- **DEC11 Q19**: the tenant-visibility default for break-glass access
+  (pre-approval, with a life-safety/legal-compulsion carve-out) is
+  presented by the answer document itself as "Security lead/owner's call to
+  make, not a settled fact" — a genuine privacy-vs-incident-response-speed
+  trade-off, not a resolved one.
+
+**What did not change and was deliberately left alone**: `docs/DEFECT_REGISTER.md`'s
+IPA02 and IPA04 rows stay **Open** — updated to point at the new answer
+content, but neither closed, because content answers are not the same as
+built UI (IPA02: UI08/UI09/membership-revocation still don't exist) or
+performed assurance work (IPA04: the durability mechanism isn't
+implemented, and no WCAG audit/usability sessions/independent security
+review/restore drill against the new numeric targets has happened). Tracker
+item **#131** (SDLC G4.04, security/privacy/performance/accessibility/
+resilience testing) stays "Not started" — content answers are not test
+evidence. **No `tracker_cli.py gate` action was taken and none of this
+substitutes for one** — same rule as every other DEC/ownership update in
+this file.
+
+Not independently reviewed by Milton. Nothing pushed this session (the new
+`.md` file and the xlsx edit are local only, same "push is a separate,
+explicit ask" rule as always).
+
 ## Rules for updating this tracker as work proceeds
 
 1. Draft candidate evidence matches, then **verify each one against the actual
