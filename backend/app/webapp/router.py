@@ -686,6 +686,30 @@ def _admin_members(db: Session, tenant_id: str, membership, exclude_user_id: str
     return [m for m in rows if m.active and m.user_id != exclude_user_id]
 
 
+def _access_review_rows(db: Session, tenant_id: str, membership):
+    """Settings' own membership table needs the full audit trail (active
+    AND revoked) -- unlike _admin_members' active-only, self-excluding list
+    used for project_new's member picker, this must keep showing a row after
+    it's revoked (REQ-047's access-review point is confirming past
+    revocations actually took effect, not hiding the evidence of them)."""
+    if Role(membership.role) is not Role.TENANT_ADMINISTRATOR:
+        return []
+    return orgs_router.access_review(tenant_id, db=db, _membership=membership)
+
+
+def _render_settings(request: Request, db: Session, tenant_id: str, user, membership, **extra):
+    return _render(
+        request,
+        "settings.html",
+        current_user=user,
+        tenant_id=tenant_id,
+        membership=membership,
+        members=_access_review_rows(db, tenant_id, membership),
+        is_admin=Role(membership.role) is Role.TENANT_ADMINISTRATOR,
+        **extra,
+    )
+
+
 @router.get("/orgs/{tenant_id}/projects/new")
 def project_new_form(request: Request, tenant_id: str, db: Session = Depends(get_db)):
     guard = _require_page_membership(request, db, tenant_id)
@@ -848,7 +872,7 @@ def settings_page(request: Request, tenant_id: str, db: Session = Depends(get_db
         current_user=user,
         tenant_id=tenant_id,
         membership=membership,
-        members=_admin_members(db, tenant_id, membership),
+        members=_access_review_rows(db, tenant_id, membership),
         is_admin=Role(membership.role) is Role.TENANT_ADMINISTRATOR,
     )
 
@@ -870,16 +894,7 @@ def settings_invite_submit(
 
     def _render_settings_error(detail: str):
         _reset_tenant_context(db, tenant_id)
-        return _render(
-            request,
-            "settings.html",
-            current_user=user,
-            tenant_id=tenant_id,
-            membership=membership,
-            members=_admin_members(db, tenant_id, membership),
-            is_admin=Role(membership.role) is Role.TENANT_ADMINISTRATOR,
-            errors=[detail],
-        )
+        return _render_settings(request, db, tenant_id, user, membership, errors=[detail])
 
     try:
         require_role(Role.TENANT_ADMINISTRATOR)(membership=membership)
@@ -898,14 +913,13 @@ def settings_invite_submit(
     except HTTPException as exc:
         return _render_settings_error(exc.detail)
 
-    return _render(
+    _reset_tenant_context(db, tenant_id)
+    return _render_settings(
         request,
-        "settings.html",
-        current_user=user,
-        tenant_id=tenant_id,
-        membership=membership,
-        members=_admin_members(db, tenant_id, membership),
-        is_admin=True,
+        db,
+        tenant_id,
+        user,
+        membership,
         # REQ-038: share the actual landing URL, not just the bare token --
         # no mail infra exists in this prototype (WP03 gap, tracked), so an
         # admin still has to copy this out-of-band, but the recipient now
@@ -916,3 +930,68 @@ def settings_invite_submit(
             f"prototype): /ui/invitations/accept?token={invite.token}"
         ),
     )
+
+
+@router.post("/orgs/{tenant_id}/settings/memberships/{membership_id}/revoke")
+def settings_revoke_submit(request: Request, tenant_id: str, membership_id: str, db: Session = Depends(get_db)):
+    """IPA02: the UI counterpart to orgs.py's revoke_membership -- settings.html
+    used to say no such control existed at all."""
+    from fastapi import HTTPException
+
+    guard = _require_page_membership(request, db, tenant_id)
+    if isinstance(guard, RedirectResponse):
+        return guard
+    user, membership = guard
+
+    try:
+        require_role(Role.TENANT_ADMINISTRATOR)(membership=membership)
+    except HTTPException as exc:
+        return _render_settings(request, db, tenant_id, user, membership, errors=[exc.detail])
+
+    try:
+        orgs_router.revoke_membership(tenant_id, membership_id, db=db, actor=membership)
+    except HTTPException as exc:
+        _reset_tenant_context(db, tenant_id)
+        return _render_settings(request, db, tenant_id, user, membership, errors=[exc.detail])
+
+    _reset_tenant_context(db, tenant_id)
+    return _render_settings(request, db, tenant_id, user, membership, flash="Membership revoked.")
+
+
+@router.post("/orgs/{tenant_id}/settings/memberships/{membership_id}/role")
+def settings_role_submit(
+    request: Request,
+    tenant_id: str,
+    membership_id: str,
+    role: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    """IPA02: the UI counterpart to orgs.py's change_membership_role -- same
+    gap settings_revoke_submit closes for revocation."""
+    from fastapi import HTTPException
+
+    guard = _require_page_membership(request, db, tenant_id)
+    if isinstance(guard, RedirectResponse):
+        return guard
+    user, membership = guard
+
+    try:
+        require_role(Role.TENANT_ADMINISTRATOR)(membership=membership)
+    except HTTPException as exc:
+        return _render_settings(request, db, tenant_id, user, membership, errors=[exc.detail])
+
+    try:
+        role_enum = Role(role)
+    except ValueError:
+        return _render_settings(request, db, tenant_id, user, membership, errors=["Unrecognised role."])
+
+    try:
+        orgs_router.change_membership_role(
+            tenant_id, membership_id, orgs_router.RoleChangeRequest(role=role_enum), db=db, actor=membership
+        )
+    except HTTPException as exc:
+        _reset_tenant_context(db, tenant_id)
+        return _render_settings(request, db, tenant_id, user, membership, errors=[exc.detail])
+
+    _reset_tenant_context(db, tenant_id)
+    return _render_settings(request, db, tenant_id, user, membership, flash="Role updated.")

@@ -222,6 +222,7 @@ def approval_gate_check(tenant_id: str, user: User = Depends(require_mfa)) -> di
 
 
 class AccessReviewEntryOut(BaseModel):
+    membership_id: str
     user_id: str
     email: str
     role: str
@@ -252,6 +253,127 @@ def access_review(
         .all()
     )
     return [
-        AccessReviewEntryOut(user_id=u.id, email=u.email, role=m.role, active=m.active, member_since=m.created_at)
+        AccessReviewEntryOut(
+            membership_id=m.id, user_id=u.id, email=u.email, role=m.role, active=m.active, member_since=m.created_at
+        )
         for m, u in rows
     ]
+
+
+class RoleChangeRequest(BaseModel):
+    role: Role
+
+
+def _get_membership_or_404(db: Session, tenant_id: str, membership_id: str) -> Membership:
+    membership = (
+        db.query(Membership).filter(Membership.id == membership_id, Membership.tenant_id == tenant_id).one_or_none()
+    )
+    if membership is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Membership not found")
+    return membership
+
+
+def _active_tenant_administrator_count(db: Session, tenant_id: str, exclude_membership_id: str) -> int:
+    return (
+        db.query(Membership)
+        .filter(
+            Membership.tenant_id == tenant_id,
+            Membership.role == Role.TENANT_ADMINISTRATOR.value,
+            Membership.active.is_(True),
+            Membership.id != exclude_membership_id,
+        )
+        .count()
+    )
+
+
+def _membership_out(db: Session, membership: Membership) -> AccessReviewEntryOut:
+    user = db.get(User, membership.user_id)
+    return AccessReviewEntryOut(
+        membership_id=membership.id,
+        user_id=membership.user_id,
+        email=user.email,
+        role=membership.role,
+        active=membership.active,
+        member_since=membership.created_at,
+    )
+
+
+@router.post("/orgs/{tenant_id}/memberships/{membership_id}/role", response_model=AccessReviewEntryOut)
+def change_membership_role(
+    tenant_id: str,
+    membership_id: str,
+    payload: RoleChangeRequest,
+    db: Session = Depends(get_db),
+    actor: Membership = Depends(require_role(Role.TENANT_ADMINISTRATOR)),
+) -> AccessReviewEntryOut:
+    """UI10/FE-014: role changes are a tenant_administrator-only operation
+    (docs/DEFECT_REGISTER.md IPA02 -- previously unbuilt). Never allowed to
+    leave a tenant with zero active administrators: nobody would be left who
+    could ever undo it, invite anyone else, or run the next access review."""
+    target = _get_membership_or_404(db, tenant_id, membership_id)
+    if not target.active:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Cannot change the role of a revoked membership")
+
+    old_role = target.role
+    if (
+        old_role == Role.TENANT_ADMINISTRATOR.value
+        and payload.role is not Role.TENANT_ADMINISTRATOR
+        and _active_tenant_administrator_count(db, tenant_id, exclude_membership_id=target.id) == 0
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Cannot change this member's role: they are the only active tenant administrator",
+        )
+
+    target.role = payload.role.value
+    log_security_event(
+        db,
+        "membership_role_changed",
+        user_id=actor.user_id,
+        tenant_id=tenant_id,
+        detail={
+            "membership_id": target.id,
+            "target_user_id": target.user_id,
+            "old_role": old_role,
+            "new_role": target.role,
+        },
+    )
+    db.commit()
+    return _membership_out(db, target)
+
+
+@router.post("/orgs/{tenant_id}/memberships/{membership_id}/revoke", response_model=AccessReviewEntryOut)
+def revoke_membership(
+    tenant_id: str,
+    membership_id: str,
+    db: Session = Depends(get_db),
+    actor: Membership = Depends(require_role(Role.TENANT_ADMINISTRATOR)),
+) -> AccessReviewEntryOut:
+    """UI10/FE-014 (docs/DEFECT_REGISTER.md IPA02 -- previously unbuilt).
+    Revocation never deletes the row -- same pattern as REQ-021's exception
+    revoke -- so access-review's own 'includes inactive memberships too'
+    claim stays true after a real revocation happens through this endpoint,
+    not just when a row is seeded inactive directly in a test."""
+    target = _get_membership_or_404(db, tenant_id, membership_id)
+    if not target.active:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Already revoked")
+
+    if (
+        target.role == Role.TENANT_ADMINISTRATOR.value
+        and _active_tenant_administrator_count(db, tenant_id, exclude_membership_id=target.id) == 0
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Cannot revoke this member: they are the only active tenant administrator",
+        )
+
+    target.active = False
+    log_security_event(
+        db,
+        "membership_revoked",
+        user_id=actor.user_id,
+        tenant_id=tenant_id,
+        detail={"membership_id": target.id, "target_user_id": target.user_id, "role": target.role},
+    )
+    db.commit()
+    return _membership_out(db, target)
