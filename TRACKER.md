@@ -844,11 +844,14 @@ as-is into a same-origin, no-build-step, no-external-CDN frontend (DEC04).
      (`/ui/orgs/{tenant_id}/settings`) — own profile/MFA status for anyone;
      tenant administrators additionally see `orgs_router.access_review`'s
      full roster and a form posting to the existing `create_invitation`.
-     **Real, honestly-flagged gap**: there is no revoke-membership or
-     change-role endpoint anywhere in `orgs.py` yet, so no such control was
-     added to the page — the template says so directly rather than faking
-     one. FE-017 ("removed membership invalidates stale actions") is
-     therefore still only partially covered by this project.
+     **Gap closed 2026-09-28** (commit `6842447`): `orgs.py` now has
+     `POST /orgs/{tenant_id}/memberships/{membership_id}/role` and
+     `.../revoke`, both `require_role(Role.TENANT_ADMINISTRATOR)`-gated and
+     refused (409) if they would leave the tenant with zero active
+     administrators; `settings.html` exposes them as inline per-row forms.
+     FE-017 ("removed membership invalidates stale actions") is now covered
+     by this project's own revoke path, not just by relying on some other
+     membership change happening elsewhere.
    - Every direct call into a role-gated router function
      (`Depends(require_role(...))`) had its role check explicitly
      re-invoked in the webapp layer (e.g.
@@ -863,7 +866,9 @@ as-is into a same-origin, no-build-step, no-external-CDN frontend (DEC04).
    disposal, import provenance), both still open. This matches WP11's own
    stated scope boundary; FE-APR-001 lists all ten screens as "approved"
    but explicitly disclaims inventing decisions FE-APR-001 itself didn't
-   resolve.
+   resolve. (Membership revocation/role-change, the third item this section
+   used to group with UI08/UI09, was built 2026-09-28 — see the WP13-15
+   entry below; it did not depend on any open DEC.)
 
 **Tests**: `test_wp13_webapp_new_pages.py`, same live-Postgres-only pattern
 as `test_wp11_webapp_rls.py` — project creation happy path and a rejected-
@@ -1577,19 +1582,91 @@ verbatim rather than smoothed over:
 **What did not change and was deliberately left alone**: `docs/DEFECT_REGISTER.md`'s
 IPA02 and IPA04 rows stay **Open** — updated to point at the new answer
 content, but neither closed, because content answers are not the same as
-built UI (IPA02: UI08/UI09/membership-revocation still don't exist) or
-performed assurance work (IPA04: the durability mechanism isn't
-implemented, and no WCAG audit/usability sessions/independent security
-review/restore drill against the new numeric targets has happened). Tracker
-item **#131** (SDLC G4.04, security/privacy/performance/accessibility/
-resilience testing) stays "Not started" — content answers are not test
-evidence. **No `tracker_cli.py gate` action was taken and none of this
-substitutes for one** — same rule as every other DEC/ownership update in
-this file.
+built UI (IPA02, at the time of this entry: UI08/UI09/membership-revocation
+still don't exist — see 2026-09-28 below for membership-revocation/role-change
+being built since) or performed assurance work (IPA04: the durability
+mechanism isn't implemented, and no WCAG audit/usability sessions/
+independent security review/restore drill against the new numeric targets
+has happened). Tracker item **#131** (SDLC G4.04, security/privacy/
+performance/accessibility/resilience testing) stays "Not started" — content
+answers are not test evidence. **No `tracker_cli.py gate` action was taken
+and none of this substitutes for one** — same rule as every other DEC/
+ownership update in this file.
 
 Not independently reviewed by Milton. Nothing pushed this session (the new
 `.md` file and the xlsx edit are local only, same "push is a separate,
 explicit ask" rule as always).
+
+## Membership revocation/role-change built, closing one of IPA02's three sub-gaps (2026-09-28)
+
+Built the UI10 gap this file and `docs/DEFECT_REGISTER.md`'s IPA02 row have
+both flagged since WP13 (2026-09-22): `settings.html` had documented "there
+is no revoke-membership or change-role control here yet" as an honest gap
+rather than a faked control, and IPA02 named "membership revocation/
+role-change" as one of three still-unbuilt frontend pieces (alongside UI08
+guided template authoring and UI09 export/import).
+
+**What was built**, branch `wp13-15-frontend-evidence`, commit `6842447`:
+
+1. `backend/app/routers/orgs.py` — two new endpoints, both
+   `require_role(Role.TENANT_ADMINISTRATOR)`-gated:
+   - `POST /orgs/{tenant_id}/memberships/{membership_id}/role` — changes a
+     member's role; refused (409) if the target is the tenant's only active
+     administrator and the new role isn't `tenant_administrator`, so a role
+     change can never leave a tenant with zero admins.
+   - `POST /orgs/{tenant_id}/memberships/{membership_id}/revoke` — sets
+     `active = False` (row preserved, never deleted — same pattern
+     REQ-021's exception-revoke already used, so `access_review`'s "includes
+     inactive memberships too" claim stays true against a real revocation,
+     not just a seeded-inactive test row); same only-active-admin 409 guard.
+   - Both log a `security_event` (`membership_role_changed` /
+     `membership_revoked`) with actor, target, tenant, and old/new role.
+   - `AccessReviewEntryOut` gained a `membership_id` field — the UI needs it
+     to address the row; `access_review`'s existing output shape otherwise
+     unchanged.
+2. `backend/app/webapp/router.py` — two new page-layer POST handlers
+   following the file's existing pattern (`_require_page_membership` guard,
+   call the router function directly, `_reset_tenant_context` after any
+   caught `HTTPException`); `settings_invite_submit` was simplified in the
+   same pass (no behaviour change, just deduplicating the RLS-context
+   handling the new handlers also needed).
+3. `backend/app/templates/settings.html` — the roster table gained an
+   "Actions" column: an inline role-change `<select>` + submit per active
+   row, and a revoke button; revoked rows show `—` instead. The old
+   "no such control" hint paragraph was removed since it's no longer true.
+
+**Real defects found and fixed via this work, not just written against a
+spec**: two RLS-context bugs in the new webapp handlers' revoke/role/
+invite-success paths, caught while writing `test_ipa02_membership_settings_ui.py`
+against real RLS the same way WP11/WP13's own prior entries describe — not
+found by inspection alone.
+
+**Tests**: `test_ipa02_membership_revocation.py` (10, API-layer: role
+change, revoke, the only-active-admin 409 guard on both endpoints,
+double-revoke conflict, non-admin forbidden) and
+`test_ipa02_membership_settings_ui.py` (6, webapp-layer: the same paths
+through the actual HTML forms, including a non-admin never seeing the
+Actions column). Full suite: **177 passing** (was 171), run against the
+project's own `.venv` — `.venv/Scripts/python.exe -m pytest -q`, exit 0,
+`483.85s`. `ruff check .` — all checks passed; `ruff format --check .` — 77
+files already formatted.
+
+**What this does and does not close**:
+- `TRACKER.md`'s own UI10 gap note (above, in the WP13-15 entry) — closed;
+  edited in place this session rather than left contradicting current code.
+- `docs/DEFECT_REGISTER.md`'s **IPA02 row — stays Open**, edited to record
+  that membership-revocation/role-change is the one of its three named
+  sub-gaps now built; UI08 (blocked on DEC07) and UI09 (blocked on
+  DEC06/DEC12) are unaffected by this work and remain unbuilt. IPA02 as a
+  row does not close until all three exist.
+- **No `tracker_cli.py gate` action was taken and none of this substitutes
+  for one** — same rule as every other entry in this file. This is an
+  evidence-item-level update, not a gate decision, and not independent
+  review sign-off (not reviewed by Milton).
+
+Pushed to `origin/wp13-15-frontend-evidence` (`ad14d31..6842447`) this
+session — unlike the DEC-intake entry immediately above, this one was an
+explicit push request, not left local.
 
 ## Rules for updating this tracker as work proceeds
 
