@@ -470,6 +470,27 @@ def get_export(
     return ExportJobOut.from_job(job)
 
 
+class ExportJobSummaryOut(BaseModel):
+    id: str
+    status: str
+    format_version: int
+    archive_digest: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+@router.get("/orgs/{tenant_id}/exports", response_model=list[ExportJobSummaryOut])
+def list_exports(
+    tenant_id: str, db: Session = Depends(get_db), _membership: Membership = Depends(get_active_membership)
+) -> list[ExportJob]:
+    """REQ-031: own-data export history always available. Summary only --
+    no archive_json -- a tenant's archive can be large and this list is not
+    the place a caller needs the full content; GET .../exports/{id} still
+    returns that in full."""
+    return db.query(ExportJob).filter(ExportJob.tenant_id == tenant_id).order_by(ExportJob.created_at.desc()).all()
+
+
 class ValidateImportRequest(BaseModel):
     archive: dict
 
@@ -492,6 +513,18 @@ def get_import(
     if job is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Import job not found")
     return ImportJobOut.model_validate(job)
+
+
+@router.get("/orgs/{tenant_id}/imports", response_model=list[ImportJobOut])
+def list_imports(
+    tenant_id: str, db: Session = Depends(get_db), _membership: Membership = Depends(get_active_membership)
+) -> list[ImportJob]:
+    """Same gate as get_import (any active member) -- validate/commit stay
+    tenant_administrator-only, this is read-only history visibility. Unlike
+    list_exports, the full validation/commit report is included per row
+    (not excluded like exports' archive_json) -- those reports are small
+    counts/errors summaries, not a full tenant data dump."""
+    return db.query(ImportJob).filter(ImportJob.tenant_id == tenant_id).order_by(ImportJob.created_at.desc()).all()
 
 
 def _match_actor(db: Session, tenant_id: str, email: str | None) -> User | None:

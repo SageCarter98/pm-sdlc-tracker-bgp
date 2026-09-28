@@ -2,10 +2,11 @@
 below calls the same functions app/routers/*.py's JSON endpoints call --
 see that module's docstring for why."""
 
+import json
 import uuid
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, Form, Request, Response, UploadFile
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import text
@@ -18,6 +19,7 @@ from app.routers import attachments as attachments_router
 from app.routers import auth as auth_router
 from app.routers import decisions as decisions_router
 from app.routers import drafts as drafts_router
+from app.routers import exports as exports_router
 from app.routers import integrity as integrity_router
 from app.routers import mfa as mfa_router
 from app.routers import orgs as orgs_router
@@ -995,3 +997,162 @@ def settings_role_submit(
 
     _reset_tenant_context(db, tenant_id)
     return _render_settings(request, db, tenant_id, user, membership, flash="Role updated.")
+
+
+# --------------------------------------------------------- Export & import
+
+
+def _render_export_import(request: Request, db: Session, tenant_id: str, user, membership, **extra):
+    return _render(
+        request,
+        "export_import.html",
+        current_user=user,
+        tenant_id=tenant_id,
+        membership=membership,
+        is_admin=Role(membership.role) is Role.TENANT_ADMINISTRATOR,
+        exports=exports_router.list_exports(tenant_id, db=db, _membership=membership),
+        imports=exports_router.list_imports(tenant_id, db=db, _membership=membership),
+        **extra,
+    )
+
+
+@router.get("/orgs/{tenant_id}/export-import")
+def export_import_page(request: Request, tenant_id: str, db: Session = Depends(get_db)):
+    guard = _require_page_membership(request, db, tenant_id)
+    if isinstance(guard, RedirectResponse):
+        return guard
+    user, membership = guard
+    return _render_export_import(request, db, tenant_id, user, membership)
+
+
+@router.post("/orgs/{tenant_id}/export-import/exports")
+def export_import_create_export(request: Request, tenant_id: str, db: Session = Depends(get_db)):
+    """REQ-031: any active member, no role gate -- same as exports.py's own
+    create_export."""
+    guard = _require_page_membership(request, db, tenant_id)
+    if isinstance(guard, RedirectResponse):
+        return guard
+    user, membership = guard
+
+    exports_router.create_export(tenant_id, db=db, membership=membership)
+    _reset_tenant_context(db, tenant_id)
+    return _render_export_import(request, db, tenant_id, user, membership, flash="Export created.")
+
+
+@router.get("/orgs/{tenant_id}/export-import/exports/{job_id}/download")
+def export_import_download(request: Request, tenant_id: str, job_id: str, db: Session = Depends(get_db)):
+    from fastapi import HTTPException
+
+    guard = _require_page_membership(request, db, tenant_id)
+    if isinstance(guard, RedirectResponse):
+        return guard
+    user, membership = guard
+
+    try:
+        job = exports_router.get_export(tenant_id, job_id, db=db, _membership=membership)
+    except HTTPException as exc:
+        return _render_export_import(
+            request,
+            db,
+            tenant_id,
+            user,
+            membership,
+            errors=[exc.detail if isinstance(exc.detail, str) else str(exc.detail)],
+        )
+
+    return Response(
+        content=json.dumps(job.archive, indent=2, default=str),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="bgp-export-{tenant_id}-{job.id}.json"'},
+    )
+
+
+@router.post("/orgs/{tenant_id}/export-import/imports/validate")
+async def export_import_validate_submit(
+    request: Request,
+    tenant_id: str,
+    archive_text: str = Form(""),
+    archive_file: UploadFile | None = None,
+    db: Session = Depends(get_db),
+):
+    """FE-070: validated in quarantine (exports.py's validate_import creates
+    an ImportJob row, nothing live) before any commit is possible."""
+    from fastapi import HTTPException
+
+    guard = _require_page_membership(request, db, tenant_id)
+    if isinstance(guard, RedirectResponse):
+        return guard
+    user, membership = guard
+
+    try:
+        require_role(Role.TENANT_ADMINISTRATOR)(membership=membership)
+    except HTTPException as exc:
+        return _render_export_import(request, db, tenant_id, user, membership, errors=[exc.detail])
+
+    raw: str | None = None
+    if archive_file is not None and archive_file.filename:
+        raw = (await archive_file.read()).decode("utf-8", errors="replace")
+    elif archive_text.strip():
+        raw = archive_text
+
+    if not raw:
+        return _render_export_import(
+            request,
+            db,
+            tenant_id,
+            user,
+            membership,
+            errors=["Choose an archive file or paste archive JSON to validate."],
+        )
+
+    try:
+        archive = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return _render_export_import(request, db, tenant_id, user, membership, errors=[f"Not valid JSON: {exc}"])
+    if not isinstance(archive, dict):
+        return _render_export_import(
+            request, db, tenant_id, user, membership, errors=["Archive must be a JSON object."]
+        )
+
+    exports_router.validate_import(
+        tenant_id, exports_router.ValidateImportRequest(archive=archive), db=db, membership=membership
+    )
+    _reset_tenant_context(db, tenant_id)
+    return _render_export_import(
+        request, db, tenant_id, user, membership, flash="Archive validated -- see the report below before committing."
+    )
+
+
+@router.post("/orgs/{tenant_id}/export-import/imports/{job_id}/commit")
+def export_import_commit_submit(request: Request, tenant_id: str, job_id: str, db: Session = Depends(get_db)):
+    """FE-072: explicit, separate commit action -- never implied by
+    validation alone."""
+    from fastapi import HTTPException
+
+    guard = _require_page_membership(request, db, tenant_id)
+    if isinstance(guard, RedirectResponse):
+        return guard
+    user, membership = guard
+
+    try:
+        require_role(Role.TENANT_ADMINISTRATOR)(membership=membership)
+    except HTTPException as exc:
+        return _render_export_import(request, db, tenant_id, user, membership, errors=[exc.detail])
+
+    try:
+        exports_router.commit_import(tenant_id, job_id, db=db, membership=membership)
+    except HTTPException as exc:
+        _reset_tenant_context(db, tenant_id)
+        return _render_export_import(
+            request,
+            db,
+            tenant_id,
+            user,
+            membership,
+            errors=[exc.detail if isinstance(exc.detail, str) else str(exc.detail)],
+        )
+
+    _reset_tenant_context(db, tenant_id)
+    return _render_export_import(
+        request, db, tenant_id, user, membership, flash="Import committed -- see the reconciliation report below."
+    )

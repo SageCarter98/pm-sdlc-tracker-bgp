@@ -1668,6 +1668,98 @@ Pushed to `origin/wp13-15-frontend-evidence` (`ad14d31..6842447`) this
 session — unlike the DEC-intake entry immediately above, this one was an
 explicit push request, not left local.
 
+## UI09 export/import built, closing a second of IPA02's three sub-gaps (2026-09-28)
+
+Same session as the membership-revocation entry above; user said "go on with
+it, finish it" after being shown the remaining IPA02 candidates. UI09
+(export/import) was picked over UI08 (template authoring) as the more
+contained build -- it wraps `app/routers/exports.py`'s existing
+create_export/validate_import/commit_import, which WP09/BGP-F04 already
+built and hardened; UI08 is a real rule-builder UI, not just forms over an
+existing endpoint.
+
+**What was built**, branch `wp13-15-frontend-evidence`:
+
+1. `backend/app/routers/exports.py` -- two new read-only list endpoints
+   that did not exist before (only get-by-id existed): `GET
+   /orgs/{tenant_id}/exports` (any active member, matching create_export's
+   own gate; summary shape only -- `archive_digest` etc, never the full
+   `archive_json`, since a tenant's whole archive is not what a history list
+   needs) and `GET /orgs/{tenant_id}/imports` (same gate as the existing
+   get_import -- any active member, not admin-only; reuses `ImportJobOut` as
+   its own response shape since validation/commit reports are small
+   counts/errors, not a full data dump, so there was no reason to strip them
+   out the way exports' archive is stripped).
+2. `backend/app/webapp/router.py` -- new `/ui/orgs/{tenant_id}/export-import`
+   page plus four action routes (create export, download an export as a
+   file, validate an import from a pasted textarea or an uploaded file,
+   commit a validated import), following the exact same pattern as every
+   other page in this file (`_require_page_membership` guard, explicit
+   `require_role(...)()` re-invocation for admin-only actions, `_reset_
+   tenant_context` after every mutating call including the SUCCESS path --
+   `db.commit()` ends the `SET LOCAL` scope the same way a caught
+   exception's rollback does, so this was needed even where nothing failed).
+   Download streams the archive as `application/json` with a
+   `Content-Disposition: attachment` header built from the existing
+   `get_export` JSON function, not a new storage mechanism.
+3. `backend/app/templates/export_import.html` (new) + a new "Export &
+   import" link in `base.html`'s primary nav. Honestly labelled, not
+   glossed over: FE-068's queued/processing/expired states don't exist to
+   show (exports are synchronous in this prototype, no background worker,
+   same WP01 scope limit noted since WP09) and FE-073/FE-074's retention/
+   legal-hold/disposal controls are deliberately absent (DEC06 has an
+   accepted design but no built enforcement mechanism -- see IPA04; FE-074's
+   own rule is that no such control precedes that). FE-071's unmapped-actor
+   explanation and FE-072's explicit, separate commit step are both shown
+   inline in the validation/commit report display.
+
+**Verified two ways, not just by the test suite**: 6 new tests
+(`test_ui09_export_import.py`, live-Postgres-only, same pattern as the
+membership-revocation tests) covering the create/download round trip, both
+input methods (pasted text and an uploaded file), admin-only gating on
+validate/commit, a malformed-JSON paste showing an honest parse error
+instead of a raw 500, and a non-admin seeing export history but not the
+import form. Full suite: **183 passing** (was 177). Ruff clean and
+formatted. Separately, a real HTTP walkthrough against a running dev server
+(`uvicorn`, port 8000) exercised the whole flow twice -- once via curl
+(register, create org, create export, download and verify its
+`manifest.source_tenant_id`, validate a pasted archive into a second org,
+commit it, confirm the malformed-JSON error path and the nav link) while
+the `claude-in-chrome` browser extension was not yet connected, then again
+through the actual rendered browser once it connected: registered, created
+an org, clicked through the nav link, created an export, downloaded it,
+pasted an archive via an in-page `fetch` (same session cookies) into the
+textarea, validated, expanded the validation report inline (FE-071 text
+visible), committed, and expanded the reconciliation report (FE-072,
+`.manifest-summary` counts table) -- all rendered correctly, same visual
+language as the rest of the app, no console errors observed. This is the
+same "verify via a live browser walkthrough, not just TestClient" discipline
+WP11/WP13's own entries describe, and it did not surface a bug this time
+(unlike WP11/WP13, which each found one) -- stated honestly rather than
+implying every walkthrough finds something.
+
+**Incidental finding, not itself part of this build**: DEC07 (rule
+vocabulary/third framework -- UI08's own named content blocker) was already
+moved to "Decided" on 2026-09-27 (see that dated entry above), alongside
+DEC06/DEC08/DEC11/DEC12 -- it was simply never revisited when picking which
+UI09/UI08 gap to build next. This means UI08's remaining blocker, same as
+UI09's was before this session, is now **only the build itself**, not an
+open decision -- worth knowing before assuming UI08 needs another decision
+round before it can start.
+
+**What this does and does not close**:
+- `docs/DEFECT_REGISTER.md`'s **IPA02 row -- stays Open**. Two of its three
+  named sub-gaps (membership-revocation/role-change, export/import) are now
+  built; UI08 (guided template authoring) is the one remaining piece, and
+  it is unaffected by this session's work.
+- **No `tracker_cli.py gate` action was taken** -- same rule as every other
+  entry in this file. Not independently reviewed by Milton.
+
+Not pushed as of this entry -- this session's commit/push requests have so
+far been separate, explicit asks each time (see the membership-revocation
+entry above), and this UI09 work had not yet had one at the time this entry
+was written.
+
 ## Rules for updating this tracker as work proceeds
 
 1. Draft candidate evidence matches, then **verify each one against the actual
