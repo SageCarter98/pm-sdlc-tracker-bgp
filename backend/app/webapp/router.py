@@ -87,6 +87,34 @@ def _render(request: Request, name: str, **context):
     return templates.TemplateResponse(request, name, context)
 
 
+def _describe_condition(cond: dict | None) -> str:
+    """UI08: a rule's `conditions` is Sec.5.5 structured data (rule_engine.py's
+    Condition), not a string -- this renders it as plain language so a
+    template author reads "what this means" without parsing JSON, same
+    philosophy as decisions.py's own blocker_explanations."""
+    if not cond:
+        # None (never set on this rule) or Jinja's Undefined (the schema
+        # dict has no "conditions" key at all -- true for every rule built
+        # without a condition, since the add-rule handler below only sets
+        # the key when a condition was actually configured) both mean the
+        # same thing here: this rule has no condition.
+        return "Always required (no condition)"
+    op = cond.get("op")
+    if op == "eq":
+        return f"{cond.get('fact')} = {cond.get('value')!r}"
+    if op == "in":
+        return f"{cond.get('fact')} is one of {cond.get('value')!r}"
+    if op in ("all", "any"):
+        parts = [_describe_condition(c) for c in cond.get("conditions") or []]
+        joiner = " AND " if op == "all" else " OR "
+        return "(" + joiner.join(parts) + ")"
+    return "Unrecognised condition shape -- edit via Advanced JSON"
+
+
+templates.env.globals["describe_condition"] = _describe_condition
+templates.env.filters["tojson"] = lambda value, indent=2: json.dumps(value, indent=indent, default=str)
+
+
 # ---------------------------------------------------------------- Login/MFA
 
 
@@ -1155,4 +1183,682 @@ def export_import_commit_submit(request: Request, tenant_id: str, job_id: str, d
     _reset_tenant_context(db, tenant_id)
     return _render_export_import(
         request, db, tenant_id, user, membership, flash="Import committed -- see the reconciliation report below."
+    )
+
+
+# ------------------------------------------------- UI08: guided template authoring
+
+
+def _parse_csv(value: str) -> list[str]:
+    return [v.strip() for v in value.split(",") if v.strip()]
+
+
+def _clone_schema(schema_json: dict) -> dict:
+    """Every guided edit below mutates a fresh copy, never the ORM-tracked
+    dict in place -- update_draft always receives a brand-new object, the
+    same way every other caller of it (Advanced JSON, the JSON API) does."""
+    return json.loads(json.dumps(schema_json))
+
+
+def _build_condition(rows: list[tuple[str, str, str]], combinator: str) -> dict | None:
+    """UI08's guided condition builder, bounded on purpose: up to 3 flat
+    eq/in tests, optionally wrapped in one level of all/any. Sec.5.5's full
+    vocabulary allows deeper nesting (up to MAX_CONDITION_DEPTH); reaching
+    for that from a plain HTML form (DEC04: no SPA, no client-side
+    condition tree) is what the Advanced JSON box below is for -- this
+    covers the common case without hand-edited JSON, not every case."""
+    leaves: list[dict] = []
+    for fact, op, value in rows:
+        fact = fact.strip()
+        if not fact or op not in ("eq", "in"):
+            continue
+        if op == "eq":
+            leaves.append({"op": "eq", "fact": fact, "value": value.strip()})
+        else:
+            leaves.append({"op": "in", "fact": fact, "value": _parse_csv(value)})
+    if not leaves:
+        return None
+    if combinator in ("all", "any") and len(leaves) > 1:
+        return {"op": combinator, "conditions": leaves}
+    return leaves[0]
+
+
+def _render_template_list(request: Request, db: Session, tenant_id: str, user, membership, **extra):
+    rows = []
+    for t in templates_router.list_templates(tenant_id, db=db, _membership=membership):
+        versions = templates_router.list_template_versions(tenant_id, t.id, db=db, _membership=membership)
+        rows.append({"template": t, "latest": versions[-1] if versions else None})
+    return _render(
+        request,
+        "templates_list.html",
+        current_user=user,
+        tenant_id=tenant_id,
+        rows=rows,
+        can_author=Role(membership.role) in (Role.TENANT_ADMINISTRATOR, Role.APPROVER),
+        **extra,
+    )
+
+
+@router.get("/orgs/{tenant_id}/templates")
+def templates_list_page(request: Request, tenant_id: str, db: Session = Depends(get_db)):
+    guard = _require_page_membership(request, db, tenant_id)
+    if isinstance(guard, RedirectResponse):
+        return guard
+    user, membership = guard
+    return _render_template_list(request, db, tenant_id, user, membership)
+
+
+@router.post("/orgs/{tenant_id}/templates")
+def templates_create_submit(request: Request, tenant_id: str, name: str = Form(...), db: Session = Depends(get_db)):
+    """REQ-012/AC08: blank guided creation -- no JSON typed by the caller at
+    all, same as create_template's own blank-default path."""
+    from fastapi import HTTPException
+
+    guard = _require_page_membership(request, db, tenant_id)
+    if isinstance(guard, RedirectResponse):
+        return guard
+    user, membership = guard
+
+    try:
+        require_role(Role.TENANT_ADMINISTRATOR, Role.APPROVER)(membership=membership)
+    except HTTPException as exc:
+        return _render_template_list(request, db, tenant_id, user, membership, errors=[exc.detail])
+
+    try:
+        version = templates_router.create_template(
+            tenant_id, templates_router.CreateTemplateRequest(name=name, schema_json=None), db=db, membership=membership
+        )
+    except HTTPException as exc:
+        _reset_tenant_context(db, tenant_id)
+        return _render_template_list(
+            request,
+            db,
+            tenant_id,
+            user,
+            membership,
+            errors=[exc.detail if isinstance(exc.detail, str) else str(exc.detail)],
+        )
+
+    _reset_tenant_context(db, tenant_id)
+    return RedirectResponse(
+        f"/ui/orgs/{tenant_id}/templates/{version.template_id}/versions/{version.id}", status_code=303
+    )
+
+
+@router.post("/orgs/{tenant_id}/templates/import")
+def templates_import_submit(
+    request: Request, tenant_id: str, name: str = Form(...), schema_text: str = Form(...), db: Session = Depends(get_db)
+):
+    from fastapi import HTTPException
+
+    guard = _require_page_membership(request, db, tenant_id)
+    if isinstance(guard, RedirectResponse):
+        return guard
+    user, membership = guard
+
+    try:
+        require_role(Role.TENANT_ADMINISTRATOR, Role.APPROVER)(membership=membership)
+    except HTTPException as exc:
+        return _render_template_list(request, db, tenant_id, user, membership, errors=[exc.detail])
+
+    try:
+        schema_json = json.loads(schema_text)
+    except json.JSONDecodeError as exc:
+        return _render_template_list(request, db, tenant_id, user, membership, errors=[f"Not valid JSON: {exc}"])
+
+    try:
+        version = templates_router.import_template(
+            tenant_id,
+            templates_router.ImportTemplateRequest(name=name, schema_json=schema_json),
+            db=db,
+            membership=membership,
+        )
+    except HTTPException as exc:
+        _reset_tenant_context(db, tenant_id)
+        detail = exc.detail
+        errors = detail["errors"] if isinstance(detail, dict) and "errors" in detail else [str(detail)]
+        return _render_template_list(request, db, tenant_id, user, membership, errors=errors)
+
+    _reset_tenant_context(db, tenant_id)
+    return RedirectResponse(
+        f"/ui/orgs/{tenant_id}/templates/{version.template_id}/versions/{version.id}", status_code=303
+    )
+
+
+@router.post("/orgs/{tenant_id}/templates/{template_id}/versions/{version_id}/fork")
+def templates_fork_submit(
+    request: Request, tenant_id: str, template_id: str, version_id: str, db: Session = Depends(get_db)
+):
+    from fastapi import HTTPException
+
+    guard = _require_page_membership(request, db, tenant_id)
+    if isinstance(guard, RedirectResponse):
+        return guard
+    user, membership = guard
+
+    try:
+        require_role(Role.TENANT_ADMINISTRATOR, Role.APPROVER)(membership=membership)
+    except HTTPException as exc:
+        return _render_template_list(request, db, tenant_id, user, membership, errors=[exc.detail])
+
+    try:
+        new_version = templates_router.fork_template(tenant_id, template_id, version_id, db=db, membership=membership)
+    except HTTPException as exc:
+        _reset_tenant_context(db, tenant_id)
+        return _render_template_list(
+            request,
+            db,
+            tenant_id,
+            user,
+            membership,
+            errors=[exc.detail if isinstance(exc.detail, str) else str(exc.detail)],
+        )
+
+    _reset_tenant_context(db, tenant_id)
+    return RedirectResponse(
+        f"/ui/orgs/{tenant_id}/templates/{new_version.template_id}/versions/{new_version.id}", status_code=303
+    )
+
+
+def _render_template_editor(
+    request: Request, db: Session, tenant_id: str, template_id: str, version_id: str, user, membership, **extra
+):
+    from fastapi import HTTPException
+
+    try:
+        template = templates_router._get_owned_template_or_404(db, tenant_id, template_id)
+        version = templates_router.get_template_version(
+            tenant_id, template_id, version_id, db=db, _membership=membership
+        )
+    except HTTPException as exc:
+        return _render_template_list(
+            request,
+            db,
+            tenant_id,
+            user,
+            membership,
+            errors=[exc.detail if isinstance(exc.detail, str) else str(exc.detail)],
+        )
+    versions = templates_router.list_template_versions(tenant_id, template_id, db=db, _membership=membership)
+    is_admin_or_approver = Role(membership.role) in (Role.TENANT_ADMINISTRATOR, Role.APPROVER)
+    return _render(
+        request,
+        "template_editor.html",
+        current_user=user,
+        tenant_id=tenant_id,
+        template=template,
+        version=version,
+        versions=versions,
+        can_author=is_admin_or_approver,
+        is_editable=(version.status == "draft" and is_admin_or_approver),
+        can_publish=(version.status == "draft" and Role(membership.role) is Role.TENANT_ADMINISTRATOR),
+        **extra,
+    )
+
+
+@router.get("/orgs/{tenant_id}/templates/{template_id}/versions/{version_id}")
+def template_editor_page(
+    request: Request, tenant_id: str, template_id: str, version_id: str, db: Session = Depends(get_db)
+):
+    guard = _require_page_membership(request, db, tenant_id)
+    if isinstance(guard, RedirectResponse):
+        return guard
+    user, membership = guard
+    return _render_template_editor(request, db, tenant_id, template_id, version_id, user, membership)
+
+
+def _require_editable_draft(db: Session, tenant_id: str, template_id: str, version_id: str, membership):
+    """Shared precondition for every guided-mutation route below: must be
+    this tenant's own template (not a shared starter -- _require_own_template),
+    and REQ-011 immutability means a published version is never a mutation
+    target, guided or otherwise. Raises HTTPException the caller already
+    knows how to turn into an error render."""
+    from fastapi import HTTPException, status
+
+    template = templates_router._get_owned_template_or_404(db, tenant_id, template_id)
+    templates_router._require_own_template(template, tenant_id)
+    version = templates_router.get_template_version(tenant_id, template_id, version_id, db=db, _membership=membership)
+    if version.status == "published":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Published versions are immutable (REQ-011) -- fork this version to make changes."
+        )
+    return template, version
+
+
+@router.post("/orgs/{tenant_id}/templates/{template_id}/versions/{version_id}/metadata")
+def template_metadata_submit(
+    request: Request,
+    tenant_id: str,
+    template_id: str,
+    version_id: str,
+    tracks: str = Form(...),
+    classes: str = Form(...),
+    roles: str = Form(...),
+    statuses: str = Form(...),
+    decision_outcomes: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    from fastapi import HTTPException
+
+    guard = _require_page_membership(request, db, tenant_id)
+    if isinstance(guard, RedirectResponse):
+        return guard
+    user, membership = guard
+
+    try:
+        require_role(Role.TENANT_ADMINISTRATOR, Role.APPROVER)(membership=membership)
+        _, version = _require_editable_draft(db, tenant_id, template_id, version_id, membership)
+    except HTTPException as exc:
+        return _render_template_editor(
+            request,
+            db,
+            tenant_id,
+            template_id,
+            version_id,
+            user,
+            membership,
+            errors=[exc.detail if isinstance(exc.detail, str) else str(exc.detail)],
+        )
+
+    schema = _clone_schema(version.schema_json)
+    schema["tracks"] = _parse_csv(tracks)
+    schema["classes"] = _parse_csv(classes)
+    schema["roles"] = _parse_csv(roles)
+    schema["statuses"] = _parse_csv(statuses)
+    schema["decision_outcomes"] = _parse_csv(decision_outcomes)
+
+    try:
+        templates_router.update_draft(
+            tenant_id,
+            template_id,
+            version_id,
+            templates_router.UpdateDraftRequest(schema_json=schema),
+            db=db,
+            membership=membership,
+        )
+    except HTTPException as exc:
+        _reset_tenant_context(db, tenant_id)
+        detail = exc.detail
+        errors = detail["errors"] if isinstance(detail, dict) and "errors" in detail else [str(detail)]
+        return _render_template_editor(request, db, tenant_id, template_id, version_id, user, membership, errors=errors)
+
+    _reset_tenant_context(db, tenant_id)
+    return _render_template_editor(
+        request, db, tenant_id, template_id, version_id, user, membership, flash="Template metadata updated."
+    )
+
+
+@router.post("/orgs/{tenant_id}/templates/{template_id}/versions/{version_id}/gates")
+def template_add_gate_submit(
+    request: Request,
+    tenant_id: str,
+    template_id: str,
+    version_id: str,
+    gate_id: str = Form(...),
+    name: str = Form(...),
+    sequence: int = Form(...),
+    class_ids: list[str] = Form(default=[]),
+    db: Session = Depends(get_db),
+):
+    from fastapi import HTTPException
+
+    guard = _require_page_membership(request, db, tenant_id)
+    if isinstance(guard, RedirectResponse):
+        return guard
+    user, membership = guard
+
+    try:
+        require_role(Role.TENANT_ADMINISTRATOR, Role.APPROVER)(membership=membership)
+        _, version = _require_editable_draft(db, tenant_id, template_id, version_id, membership)
+    except HTTPException as exc:
+        return _render_template_editor(
+            request,
+            db,
+            tenant_id,
+            template_id,
+            version_id,
+            user,
+            membership,
+            errors=[exc.detail if isinstance(exc.detail, str) else str(exc.detail)],
+        )
+
+    schema = _clone_schema(version.schema_json)
+    schema["gates"].append(
+        {"gate_id": gate_id, "name": name, "sequence": sequence, "class_ids": class_ids, "rules": []}
+    )
+
+    try:
+        templates_router.update_draft(
+            tenant_id,
+            template_id,
+            version_id,
+            templates_router.UpdateDraftRequest(schema_json=schema),
+            db=db,
+            membership=membership,
+        )
+    except HTTPException as exc:
+        _reset_tenant_context(db, tenant_id)
+        detail = exc.detail
+        errors = detail["errors"] if isinstance(detail, dict) and "errors" in detail else [str(detail)]
+        return _render_template_editor(request, db, tenant_id, template_id, version_id, user, membership, errors=errors)
+
+    _reset_tenant_context(db, tenant_id)
+    return _render_template_editor(
+        request, db, tenant_id, template_id, version_id, user, membership, flash=f"Gate '{gate_id}' added."
+    )
+
+
+@router.post("/orgs/{tenant_id}/templates/{template_id}/versions/{version_id}/gates/{gate_id}/remove")
+def template_remove_gate_submit(
+    request: Request, tenant_id: str, template_id: str, version_id: str, gate_id: str, db: Session = Depends(get_db)
+):
+    from fastapi import HTTPException
+
+    guard = _require_page_membership(request, db, tenant_id)
+    if isinstance(guard, RedirectResponse):
+        return guard
+    user, membership = guard
+
+    try:
+        require_role(Role.TENANT_ADMINISTRATOR, Role.APPROVER)(membership=membership)
+        _, version = _require_editable_draft(db, tenant_id, template_id, version_id, membership)
+    except HTTPException as exc:
+        return _render_template_editor(
+            request,
+            db,
+            tenant_id,
+            template_id,
+            version_id,
+            user,
+            membership,
+            errors=[exc.detail if isinstance(exc.detail, str) else str(exc.detail)],
+        )
+
+    schema = _clone_schema(version.schema_json)
+    schema["gates"] = [g for g in schema["gates"] if g["gate_id"] != gate_id]
+
+    try:
+        templates_router.update_draft(
+            tenant_id,
+            template_id,
+            version_id,
+            templates_router.UpdateDraftRequest(schema_json=schema),
+            db=db,
+            membership=membership,
+        )
+    except HTTPException as exc:
+        _reset_tenant_context(db, tenant_id)
+        detail = exc.detail
+        errors = detail["errors"] if isinstance(detail, dict) and "errors" in detail else [str(detail)]
+        return _render_template_editor(request, db, tenant_id, template_id, version_id, user, membership, errors=errors)
+
+    _reset_tenant_context(db, tenant_id)
+    return _render_template_editor(
+        request, db, tenant_id, template_id, version_id, user, membership, flash=f"Gate '{gate_id}' removed."
+    )
+
+
+@router.post("/orgs/{tenant_id}/templates/{template_id}/versions/{version_id}/gates/{gate_id}/rules")
+def template_add_rule_submit(
+    request: Request,
+    tenant_id: str,
+    template_id: str,
+    version_id: str,
+    gate_id: str,
+    rule_id: str = Form(...),
+    class_ids: list[str] = Form(default=[]),
+    occurrence_type: str = Form(...),
+    evidence_kind: str = Form(...),
+    permitted_role_ids: list[str] = Form(default=[]),
+    blocker_level: str = Form(...),
+    guidance: str = Form(""),
+    evidence_example: str = Form(""),
+    cond_combinator: str = Form("single"),
+    cond1_fact: str = Form(""),
+    cond1_op: str = Form(""),
+    cond1_value: str = Form(""),
+    cond2_fact: str = Form(""),
+    cond2_op: str = Form(""),
+    cond2_value: str = Form(""),
+    cond3_fact: str = Form(""),
+    cond3_op: str = Form(""),
+    cond3_value: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    from fastapi import HTTPException
+
+    guard = _require_page_membership(request, db, tenant_id)
+    if isinstance(guard, RedirectResponse):
+        return guard
+    user, membership = guard
+
+    try:
+        require_role(Role.TENANT_ADMINISTRATOR, Role.APPROVER)(membership=membership)
+        _, version = _require_editable_draft(db, tenant_id, template_id, version_id, membership)
+    except HTTPException as exc:
+        return _render_template_editor(
+            request,
+            db,
+            tenant_id,
+            template_id,
+            version_id,
+            user,
+            membership,
+            errors=[exc.detail if isinstance(exc.detail, str) else str(exc.detail)],
+        )
+
+    schema = _clone_schema(version.schema_json)
+    gate = next((g for g in schema["gates"] if g["gate_id"] == gate_id), None)
+    if gate is None:
+        return _render_template_editor(
+            request, db, tenant_id, template_id, version_id, user, membership, errors=[f"Gate '{gate_id}' not found."]
+        )
+
+    conditions = _build_condition(
+        [(cond1_fact, cond1_op, cond1_value), (cond2_fact, cond2_op, cond2_value), (cond3_fact, cond3_op, cond3_value)],
+        cond_combinator,
+    )
+    new_rule = {
+        "version": 1,
+        "rule_id": rule_id,
+        "class_ids": class_ids,
+        "occurrence_type": occurrence_type,
+        "evidence_kind": evidence_kind,
+        "permitted_role_ids": permitted_role_ids,
+        "blocker_level": blocker_level,
+        "guidance": guidance or None,
+        "evidence_example": evidence_example or None,
+    }
+    if conditions is not None:
+        new_rule["conditions"] = conditions
+    gate.setdefault("rules", []).append(new_rule)
+
+    try:
+        templates_router.update_draft(
+            tenant_id,
+            template_id,
+            version_id,
+            templates_router.UpdateDraftRequest(schema_json=schema),
+            db=db,
+            membership=membership,
+        )
+    except HTTPException as exc:
+        _reset_tenant_context(db, tenant_id)
+        detail = exc.detail
+        errors = detail["errors"] if isinstance(detail, dict) and "errors" in detail else [str(detail)]
+        return _render_template_editor(request, db, tenant_id, template_id, version_id, user, membership, errors=errors)
+
+    _reset_tenant_context(db, tenant_id)
+    return _render_template_editor(
+        request,
+        db,
+        tenant_id,
+        template_id,
+        version_id,
+        user,
+        membership,
+        flash=f"Rule '{rule_id}' added to gate '{gate_id}'.",
+    )
+
+
+@router.post("/orgs/{tenant_id}/templates/{template_id}/versions/{version_id}/gates/{gate_id}/rules/{rule_id}/remove")
+def template_remove_rule_submit(
+    request: Request,
+    tenant_id: str,
+    template_id: str,
+    version_id: str,
+    gate_id: str,
+    rule_id: str,
+    db: Session = Depends(get_db),
+):
+    from fastapi import HTTPException
+
+    guard = _require_page_membership(request, db, tenant_id)
+    if isinstance(guard, RedirectResponse):
+        return guard
+    user, membership = guard
+
+    try:
+        require_role(Role.TENANT_ADMINISTRATOR, Role.APPROVER)(membership=membership)
+        _, version = _require_editable_draft(db, tenant_id, template_id, version_id, membership)
+    except HTTPException as exc:
+        return _render_template_editor(
+            request,
+            db,
+            tenant_id,
+            template_id,
+            version_id,
+            user,
+            membership,
+            errors=[exc.detail if isinstance(exc.detail, str) else str(exc.detail)],
+        )
+
+    schema = _clone_schema(version.schema_json)
+    gate = next((g for g in schema["gates"] if g["gate_id"] == gate_id), None)
+    if gate is None:
+        return _render_template_editor(
+            request, db, tenant_id, template_id, version_id, user, membership, errors=[f"Gate '{gate_id}' not found."]
+        )
+    gate["rules"] = [r for r in gate.get("rules", []) if r["rule_id"] != rule_id]
+
+    try:
+        templates_router.update_draft(
+            tenant_id,
+            template_id,
+            version_id,
+            templates_router.UpdateDraftRequest(schema_json=schema),
+            db=db,
+            membership=membership,
+        )
+    except HTTPException as exc:
+        _reset_tenant_context(db, tenant_id)
+        detail = exc.detail
+        errors = detail["errors"] if isinstance(detail, dict) and "errors" in detail else [str(detail)]
+        return _render_template_editor(request, db, tenant_id, template_id, version_id, user, membership, errors=errors)
+
+    _reset_tenant_context(db, tenant_id)
+    return _render_template_editor(
+        request, db, tenant_id, template_id, version_id, user, membership, flash=f"Rule '{rule_id}' removed."
+    )
+
+
+@router.post("/orgs/{tenant_id}/templates/{template_id}/versions/{version_id}/raw")
+def template_raw_edit_submit(
+    request: Request,
+    tenant_id: str,
+    template_id: str,
+    version_id: str,
+    schema_text: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    """The escape hatch: full nested all/any conditions, applicability, or
+    any other schema shape the guided forms above don't cover. Still goes
+    through update_draft's real validation -- never a bypass, just a
+    different input method for the same validated write."""
+    from fastapi import HTTPException
+
+    guard = _require_page_membership(request, db, tenant_id)
+    if isinstance(guard, RedirectResponse):
+        return guard
+    user, membership = guard
+
+    try:
+        require_role(Role.TENANT_ADMINISTRATOR, Role.APPROVER)(membership=membership)
+        _require_editable_draft(db, tenant_id, template_id, version_id, membership)
+    except HTTPException as exc:
+        return _render_template_editor(
+            request,
+            db,
+            tenant_id,
+            template_id,
+            version_id,
+            user,
+            membership,
+            errors=[exc.detail if isinstance(exc.detail, str) else str(exc.detail)],
+        )
+
+    try:
+        schema_json = json.loads(schema_text)
+    except json.JSONDecodeError as exc:
+        return _render_template_editor(
+            request, db, tenant_id, template_id, version_id, user, membership, errors=[f"Not valid JSON: {exc}"]
+        )
+
+    try:
+        templates_router.update_draft(
+            tenant_id,
+            template_id,
+            version_id,
+            templates_router.UpdateDraftRequest(schema_json=schema_json),
+            db=db,
+            membership=membership,
+        )
+    except HTTPException as exc:
+        _reset_tenant_context(db, tenant_id)
+        detail = exc.detail
+        errors = detail["errors"] if isinstance(detail, dict) and "errors" in detail else [str(detail)]
+        return _render_template_editor(request, db, tenant_id, template_id, version_id, user, membership, errors=errors)
+
+    _reset_tenant_context(db, tenant_id)
+    return _render_template_editor(
+        request, db, tenant_id, template_id, version_id, user, membership, flash="Schema replaced via Advanced JSON."
+    )
+
+
+@router.post("/orgs/{tenant_id}/templates/{template_id}/versions/{version_id}/publish")
+def template_publish_submit(
+    request: Request, tenant_id: str, template_id: str, version_id: str, db: Session = Depends(get_db)
+):
+    from fastapi import HTTPException
+
+    guard = _require_page_membership(request, db, tenant_id)
+    if isinstance(guard, RedirectResponse):
+        return guard
+    user, membership = guard
+
+    try:
+        require_role(Role.TENANT_ADMINISTRATOR)(membership=membership)
+    except HTTPException as exc:
+        return _render_template_editor(
+            request, db, tenant_id, template_id, version_id, user, membership, errors=[exc.detail]
+        )
+
+    try:
+        templates_router.publish_version(tenant_id, template_id, version_id, db=db, membership=membership)
+    except HTTPException as exc:
+        _reset_tenant_context(db, tenant_id)
+        detail = exc.detail
+        errors = detail["errors"] if isinstance(detail, dict) and "errors" in detail else [str(detail)]
+        return _render_template_editor(request, db, tenant_id, template_id, version_id, user, membership, errors=errors)
+
+    _reset_tenant_context(db, tenant_id)
+    return _render_template_editor(
+        request,
+        db,
+        tenant_id,
+        template_id,
+        version_id,
+        user,
+        membership,
+        flash="Published. This version is now immutable (REQ-011) and available as a project starter.",
     )

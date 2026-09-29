@@ -131,6 +131,25 @@ def list_published_versions(
     return out
 
 
+@router.get("/{template_id}/versions", response_model=list[TemplateVersionOut])
+def list_template_versions(
+    tenant_id: str,
+    template_id: str,
+    db: Session = Depends(get_db),
+    _membership: Membership = Depends(get_active_membership),
+) -> list[TemplateVersion]:
+    """UI08: only get-by-id existed before -- the guided authoring page
+    needs a template's full version history (which draft is current, which
+    versions are already published) to render its list/editor pages."""
+    template = _get_owned_template_or_404(db, tenant_id, template_id)
+    return (
+        db.query(TemplateVersion)
+        .filter(TemplateVersion.template_id == template.id)
+        .order_by(TemplateVersion.version_number)
+        .all()
+    )
+
+
 @router.post("", response_model=TemplateVersionOut, status_code=status.HTTP_201_CREATED)
 def create_template(
     tenant_id: str,

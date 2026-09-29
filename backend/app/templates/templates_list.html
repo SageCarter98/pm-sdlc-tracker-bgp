@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Templates{% endblock %}
+{% block content %}
+<h1>Templates</h1>
+<p class="hint">UI08: create a blank draft, fork an existing template (your own or a shared starter), or import a JSON archive — then edit it with guided forms, no hand-written JSON required for the common case.</p>
+
+{% if rows %}
+<table>
+  <thead>
+    <tr><th scope="col">Name</th><th scope="col">Owner</th><th scope="col">Latest version</th><th scope="col">Status</th><th scope="col">Actions</th></tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr>
+      <td data-label="Name">{{ row.template.name }}</td>
+      <td data-label="Owner">{{ "Shared starter" if row.template.tenant_id is none else "This organisation" }}</td>
+      <td data-label="Latest version">
+        {% if row.latest %}v{{ row.latest.version_number }}{% else %}—{% endif %}
+      </td>
+      <td data-label="Status">
+        {% if row.latest %}
+        <span class="pill {{ 'pill--success' if row.latest.status == 'published' else 'pill--warning' }}">{{ row.latest.status }}</span>
+        {% else %}
+        <span class="hint">—</span>
+        {% endif %}
+      </td>
+      <td data-label="Actions">
+        {% if row.latest %}
+        <a href="/ui/orgs/{{ tenant_id }}/templates/{{ row.template.id }}/versions/{{ row.latest.id }}">Open</a>
+        {% if can_author %}
+        <form method="post" action="/ui/orgs/{{ tenant_id }}/templates/{{ row.template.id }}/versions/{{ row.latest.id }}/fork" class="inline-form">
+          <button type="submit">Fork</button>
+        </form>
+        {% endif %}
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No templates visible yet.</p>
+{% endif %}
+
+{% if can_author %}
+<h2>Create a new draft</h2>
+<form method="post" action="/ui/orgs/{{ tenant_id }}/templates" novalidate>
+  <div class="field">
+    <label for="name">Template name</label>
+    <input type="text" id="name" name="name" required>
+  </div>
+  <p class="hint">Starts as a blank draft (one track, one class, two roles, two statuses) — edit every part of it with guided forms on the next page.</p>
+  <button type="submit">Create blank draft</button>
+</form>
+
+<h2>Import an archive</h2>
+<p class="hint">For a template already authored elsewhere as JSON (Sec.5.5 schema shape). Still fully validated on the way in — an invalid archive is rejected with the specific field that failed, not a single opaque error.</p>
+<form method="post" action="/ui/orgs/{{ tenant_id }}/templates/import" novalidate>
+  <div class="field">
+    <label for="import_name">Template name</label>
+    <input type="text" id="import_name" name="name" required>
+  </div>
+  <div class="field">
+    <label for="schema_text">Schema JSON</label>
+    <textarea id="schema_text" name="schema_text" rows="6" required></textarea>
+  </div>
+  <button type="submit">Import</button>
+</form>
+{% endif %}
+
+<p><a href="/ui/orgs/{{ tenant_id }}/my-work">Back to My work</a></p>
+{% endblock %}

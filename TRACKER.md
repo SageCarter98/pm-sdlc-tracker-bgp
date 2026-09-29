@@ -1758,9 +1758,112 @@ round before it can start.
 Not pushed as of this entry -- this session's commit/push requests have so
 far been separate, explicit asks each time (see the membership-revocation
 entry above), and this UI09 work had not yet had one at the time this entry
-was written.
+was written. **Update**: user then said "yes, commit and push it" -- committed
+`dc4ae11` and pushed to `origin/wp13-15-frontend-evidence` (`2d0a27e..dc4ae11`)
+later the same session.
 
-## Rules for updating this tracker as work proceeds
+## UI08 guided template authoring built, closing IPA02's last sub-gap (2026-09-28)
+
+Same session again; user said "go on and build it" after the UI09 push.
+UI08 is the last of IPA02's three named sub-gaps (guided template authoring,
+UI09 export/import, membership revocation/role-change) -- the other two both
+closed earlier this session.
+
+**Scoping decision, made explicit before writing any code**: `app/rule_
+engine.py` still implements only the pre-DEC07 vocabulary (eq/in/all/any,
+depth 5) -- its own docstring says "DEC07 ... is still open", which is now
+stale (DEC07 was Decided 2026-09-27, see that entry above: adds `not`,
+`gte`/`lte`, `count(...)`; tightens to a 200-node cap, a hard evaluation
+timeout, and a `vocabulary_version` stamp per template version). Implementing
+DEC07's actual vocabulary additions is real backend work, separate from and
+larger than "build the UI08 page" -- conflating the two would have meant
+either silently shipping a guided UI that claims to support a vocabulary the
+engine doesn't actually have, or quietly expanding scope into rule-engine
+changes nobody asked for this session. Built UI08 against the vocabulary the
+engine **actually implements today** (eq/in/all/any) and flagged the DEC07
+implementation gap here instead of touching rule_engine.py at all.
+
+**What was built**, branch `wp13-15-frontend-evidence`, not yet committed as
+of this entry:
+
+1. `backend/app/routers/templates.py` -- one new read-only endpoint, `GET
+   /orgs/{tenant_id}/templates/{template_id}/versions` (only get-by-id
+   existed before; the guided page needs a template's full version history
+   to show which draft is current and which versions are already published).
+2. `backend/app/webapp/router.py` -- a `/ui/orgs/{tenant_id}/templates` list
+   page (create blank / import JSON / fork, per REQ-012) and a
+   `/ui/orgs/{tenant_id}/templates/{template_id}/versions/{version_id}`
+   guided editor: structured forms for classification (tracks/classes/
+   roles/statuses/decision_outcomes), add/remove gate, add/remove rule --
+   with permitted-role and applicable-class pickers sourced from the
+   template's own declared roles/classes (checkboxes, not free-typed
+   strings, so a rule can't reference an undeclared role or class), and a
+   bounded guided condition builder (up to 3 flat eq/in tests, optionally
+   combined with one level of AND/OR) that covers the vocabulary's common
+   case without hand-written JSON. None of this is a new mutation path --
+   every guided action fetches the current draft's schema, mutates a cloned
+   copy in Python, and calls the SAME `update_draft` the JSON API and the
+   Advanced JSON box both use, so guided edits get exactly the same Sec.5.5
+   validation as everything else, never a shortcut around it.
+3. **Deliberate scope boundary, not an oversight**: the guided condition
+   builder does not expose `applicability` (a rule's separate, rarer
+   "does this rule even apply" field) -- grepped every fixture and test
+   schema in the repo first and found it unused anywhere, so building a
+   guided UI for a field nothing actually uses would have been speculative.
+   It is still reachable through the Advanced JSON escape hatch if ever
+   needed. Nested conditions beyond one level of AND/OR are the same --
+   Advanced JSON, not a recursive form (DEC04: no SPA, no client-side
+   condition tree; every guided action here is a plain HTML form + a full
+   page reload, same as every other webapp page in this project).
+4. `backend/app/templates/templates_list.html` and `template_editor.html`
+   (both new) + a new "Templates" nav link in `base.html`.
+
+**Two real bugs found and fixed while writing the tests, not just the
+feature itself**:
+1. `_describe_condition` (the plain-language condition renderer) crashed
+   with a Jinja `UndefinedError` for any rule with no `conditions` key at
+   all -- which is every rule built via the guided add-rule form without a
+   condition, since the handler only sets the key when a condition was
+   actually configured. Jinja's dot-access on a dict with no such key
+   returns its own `Undefined` sentinel, not Python `None`, so the
+   function's `if cond is None` check never caught it. This would also
+   have broken on any *imported or advanced-JSON* rule that simply omits
+   `conditions` (fully valid per the Pydantic model), not just guided-form
+   rules -- a real, broader gap, not a guided-UI-only edge case. Fixed by
+   checking `if not cond` instead, which is true for `None` and for
+   `Undefined` alike.
+2. A test wrongly assumed removing the only gate in a template should
+   succeed. It doesn't, and shouldn't: `TemplateSchema.gates` carries
+   `Field(min_length=1)` (a template with zero gates is meaningless), so
+   `update_draft` correctly rejects it with the same validation every other
+   path gets. This is the guided UI correctly inheriting a real invariant,
+   not a bug -- the test was corrected to add a second gate before removing
+   the first, and to separately assert the honest rejection when only one
+   gate exists.
+
+**Tests**: `test_ui08_template_authoring.py` (10, live-Postgres-only, same
+pattern as the IPA02/UI09 webapp tests) -- admin-only visibility, blank
+draft creation, guided add-gate/add-rule with both a single condition and an
+`any`-combined pair (asserted against the actual persisted `Condition` JSON
+shape, not just page text), remove-rule/remove-gate (including the
+min-gates-1 rejection above), publish making a version immutable and
+offering Fork, Advanced JSON replace plus its malformed-JSON error path,
+non-admin denial on every mutating action, and metadata update + import via
+the list page. Ruff clean and formatted.
+
+**What this does and does not close**:
+- `docs/DEFECT_REGISTER.md`'s **IPA02 row -- Closed, 2026-09-29**: all three
+  named sub-gaps are now built (membership-revocation/role-change,
+  export/import, guided template authoring), on the same "built, not just
+  answered" basis the register's other closures use (IPA03's own precedent).
+  Carried forward as a caveat, not a reopening condition: the guided UI is
+  real and validated, but rule_engine.py's DEC07 vocabulary additions
+  (`not`/`gte`/`lte`/`count`, the 200-node cap, the evaluation timeout,
+  `vocabulary_version` stamping) are NOT built. That is a separate, real gap
+  this session did not touch -- stated explicitly in the register's own row
+  so closing IPA02 is never later misread as "DEC07 is fully implemented."
+- **No `tracker_cli.py gate` action was taken.** Not independently reviewed
+  by Milton.
 
 1. Draft candidate evidence matches, then **verify each one against the actual
    file/commit/PR before writing a status**, never on a paraphrase.
