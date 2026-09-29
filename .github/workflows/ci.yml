@@ -54,6 +54,15 @@ jobs:
         run: alembic upgrade head
       - name: Run tests, including the adversarial cross-tenant suite (REQ-009)
         run: pytest -q
+      - name: Performance budget check (DEC08 -- API p95/p99 latency)
+        # DEC08's own words: "enforced in CI as a blocking budget check, not
+        # a dashboard someone reads occasionally." Already part of the full
+        # suite above (so a breach already fails the build); run again on
+        # its own so a budget breach is immediately visible by step name in
+        # the Actions UI, not buried as "some test in the suite failed" --
+        # same reasoning as Dependency/Secret scan each getting their own
+        # named step below despite conceptually being "more checks."
+        run: pytest -q tests/test_dec08_performance_budgets.py
       - name: Dependency vulnerability scan (REQ-046)
         run: |
           pip install pip-audit==2.7.3
