@@ -1865,6 +1865,68 @@ the list page. Ruff clean and formatted.
 - **No `tracker_cli.py gate` action was taken.** Not independently reviewed
   by Milton.
 
+## DEC08 API-layer latency budgets built and CI-enforced, one of IPA04's DEC08 sub-parts (2026-09-29)
+
+Same branch, next session. IPA02 is fully closed now (previous entry), so
+this moves to IPA04's remaining named pieces -- DEC08, DEC05, DEC11 -- per
+`TRACKER.md:1152`'s own framing ("IPA04 needs named decision owners for
+DEC05/DEC08/DEC11 plus real independent assurance work"). DEC08 answered
+three numeric budget families (reads, ordinary writes, decision writes) plus
+render-timing/page-weight budgets and an async export-streaming budget --
+its own words: "enforced in CI as a blocking budget check, not a dashboard
+someone reads occasionally."
+
+**Scoping decision, made explicit before writing any code**: DEC08 names
+three separate things (server-side API latency, browser render-timing/
+page-weight, and export-streaming). Only the first is buildable honestly
+right now:
+- API latency: real, measurable today via `TestClient` against live
+  Postgres -- server time at origin, excluding client network, which is
+  exactly DEC08's own stated scope for this part.
+- Render-timing (LCP/INP/CLS) and page-weight budgets need a Lighthouse-CI-
+  style harness under an emulated Fast-3G/mid-range-Android profile. This
+  project has no such tooling wired up -- a separate, larger addition, not
+  something an API test can measure.
+- Export-streaming ("must begin streaming within 2s") assumes an async
+  worker queue. `exports.py`'s own docstring says exports are synchronous in
+  this prototype (WP01's own scope limit, no worker exists) -- there is no
+  "begin streaming" moment to measure, so a check against that premise would
+  test something that doesn't exist rather than something real.
+
+Built only the first piece. Flagged, not faked, that the other two remain
+open.
+
+**What was built**, branch `wp13-15-frontend-evidence`, commit `2e9ee9e`:
+
+1. `backend/tests/test_dec08_performance_budgets.py` -- three tests, each
+   against real Postgres (skips honestly if unavailable, same as every other
+   IPA02/WP13+ webapp/API test in this suite): read budget (gate-view/
+   dashboard `my-work`, p95<=300ms/p99<=800ms, n=40 samples), ordinary-write
+   budget (evidence revision creation, p95<=500ms, n=30), decision-write
+   budget (Hold-then-supersede chain on one occurrence, exercising the real
+   idempotency-check/manifest-revalidation/coordinated-lock/append-only-
+   insert path, p95<=800ms/p99<=1.5s, n=20).
+2. `.github/workflows/ci.yml` -- a dedicated named step running just this
+   file, after the full `pytest -q` run. Same reasoning as the existing
+   Dependency/Secret-scan steps getting their own names despite being
+   conceptually "more checks already covered": a budget breach shows up by
+   step name in the Actions UI, not buried as "some test in the suite
+   failed."
+
+Ran against the actual live-Postgres setup this session (not skipped): all
+three passed on the first run, so the budgets hold today, not just in
+theory. Full suite 196/196, Ruff clean.
+
+**What this does and does not close**:
+- `docs/DEFECT_REGISTER.md`'s **IPA04 row -- stays Open.** Only one of
+  DEC08's three named sub-parts is built; DEC05's durability mechanism and
+  the independent assurance activities (WCAG audit, usability sessions,
+  independent security review, restore-drill) are untouched. Row text
+  updated to name the commit and the two still-unbuilt DEC08 sub-parts
+  explicitly, so this is never later misread as "DEC08 is done."
+- **No `tracker_cli.py gate` action was taken.** Not independently reviewed
+  by Milton.
+
 1. Draft candidate evidence matches, then **verify each one against the actual
    file/commit/PR before writing a status**, never on a paraphrase.
 2. Complete requires a specific, locatable, checked evidence reference.
