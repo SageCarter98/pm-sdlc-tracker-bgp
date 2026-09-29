@@ -464,13 +464,17 @@ class DecisionRecord(Base):
     the freshness token returned by the preview endpoint and re-submitted at
     decision time -- see decisions.py for the staleness check this defends.
 
-    Durability (Decision transaction contract step 7, blueprint Sec.5.4) is
-    explicitly NOT implemented beyond an ordinary atomic Postgres commit:
-    DEC05 (which of Candidate A/B's acknowledgement semantics to build) is
-    still an open decision, not something this pass can resolve on its own
-    authority. Do not read a 201 response from this endpoint as satisfying
-    DEC05's durability guarantee -- it only proves the local commit
-    succeeded."""
+    Durability (Decision transaction contract step 7, blueprint Sec.5.4):
+    DEC05 picked Candidate A+ (synchronous chain-link checkpoint at commit,
+    asynchronous external WORM anchor for tamper-evidence -- see
+    app/routers/decisions.py's _checkpoint_this_project and
+    app/worm_anchor.py). Built: every commit here folds its own AuditEvent
+    into a new IntegrityCheckpoint in the same transaction. Still NOT built:
+    the synchronous cross-zone/cross-region replica confirmation DEC05 also
+    names -- no multi-node Postgres infra exists in this prototype. Do not
+    read a 201 response from this endpoint as proving cross-region
+    durability -- it proves the local commit succeeded and was chain-linked,
+    nothing about replica confirmation."""
 
     __tablename__ = "decision_records"
 
@@ -648,6 +652,35 @@ class IntegrityIncident(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolved_by_user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
     resolution_note: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+
+
+class WormAnchorReceipt(Base):
+    """DEC05 G2: one row per IntegrityCheckpoint that scripts/anchor_worm.py
+    has written to the external WORM store (app/worm_anchor.py). This table
+    carries NO tamper-evidence weight of its own -- app/integrity.py's
+    verify_against_anchor() trusts the WORM store's actual file contents,
+    never this row; a wrong receipt is *detected* (digest mismatch against
+    the real anchored file), not fixed in place. Its only job is being a
+    "have I already anchored this checkpoint" cursor so anchor_worm.py can
+    skip redundant writes via a NOT EXISTS query. Deliberately a separate
+    table rather than a column on integrity_checkpoints -- see the DEC05
+    design spec (docs/superpowers/specs/2026-09-29-dec05-durability-
+    mechanism-design.md s4.2) for why a nullable column + narrow UPDATE
+    policy was rejected: a policy permissive enough to move one column from
+    NULL to non-NULL is exactly as permissive about every other column on
+    that same row, undermining integrity_checkpoints' existing
+    zero-UPDATE-ever guarantee (migration 0006_wp08_integrity.py)."""
+
+    __tablename__ = "worm_anchor_receipts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String(36), ForeignKey("tenants.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"), nullable=False)
+    checkpoint_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("integrity_checkpoints.id"), nullable=False, unique=True
+    )
+    anchor_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    anchored_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
 class ExportJob(Base):

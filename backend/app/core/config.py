@@ -59,6 +59,14 @@ class Settings(BaseSettings):
     # relative default is fine for local dev (created on first use).
     attachment_storage_root: str = "./var/attachments"
 
+    # DEC05 G2 (docs/blueprint/BGP_DEC_Resolution_Intake_2026-09-25_ANSWERED.md,
+    # Candidate A+): local stand-in for the write-once, externally-custodied
+    # anchor store app/worm_anchor.py writes hash-chain checkpoint digests
+    # to -- same "local prototype, not object storage" honesty as
+    # attachment_storage_root above. Set BGP_WORM_ANCHOR_ROOT for a real
+    # deployment.
+    worm_anchor_root: str = "./var/worm_anchor"
+
     # Not an approved numeric budget (no DEC has set one, same honest gap
     # as DEC08's performance numbers) -- a conservative placeholder so
     # Phase 1 has SOME bound rather than none. Set

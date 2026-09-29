@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.deps import get_active_membership, get_session_mfa_verified, require_mfa
-from app.integrity import has_open_incident
+from app.integrity import checkpoint_new_events, has_open_incident
 from app.models import (
     AuditEvent,
     CompensatingReview,
@@ -509,6 +509,27 @@ def preview_decision(
     )
 
 
+def _checkpoint_this_project(db: Session, tenant_id: str, project_id: str) -> None:
+    """DEC05 G1: folds every audit event committed so far (including the
+    one this same caller just added, since this runs inside the same
+    uncommitted transaction) into a new IntegrityCheckpoint -- does not
+    commit itself, so the caller's own commit makes the decision/denial
+    row, its audit event, and this chain-link atomic (DEC05's "Candidate
+    A+" synchronous acknowledgement half).
+
+    Postgres-only advisory lock, scoped to this transaction (auto-released
+    at commit/rollback): two decisions committing concurrently in the same
+    project must not both read the same "latest checkpoint" and fold from
+    it independently -- see checkpoint_new_events' own docstring. Chosen
+    over `SELECT ... FOR UPDATE` because a project's first-ever decision
+    has no existing checkpoint row to lock. Skipped on the SQLite test
+    fixture, same dialect guard already used elsewhere in this function for
+    the IntegrityError conflict-recovery path."""
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:pid))"), {"pid": project_id})
+    checkpoint_new_events(db, tenant_id, project_id)
+
+
 def _record_decision(
     db: Session,
     *,
@@ -605,6 +626,11 @@ def _record_decision(
                 sequence=_next_audit_sequence(db, project.id),
             )
         )
+        # DEC05: a denied decision's own audit event is still a gap in what
+        # the chain covers if left unfolded, regardless of whether the
+        # decision it describes succeeded (REQ-027's existing scope for
+        # "new decisions are blocked" is project-wide, not narrower).
+        _checkpoint_this_project(db, tenant_id, project.id)
         db.commit()
         raise HTTPException(http_status, reason_text)
 
@@ -684,6 +710,10 @@ def _record_decision(
                 outcome_decision_id=decision.id,
             )
         )
+        # DEC05 G1: folds this decision's own audit event into a new
+        # checkpoint in the SAME transaction -- the API's "Recorded"
+        # response (returned below) is never sent before this commits.
+        _checkpoint_this_project(db, tenant_id, project.id)
         db.commit()
     except IntegrityError:
         # BGP-F03: a concurrent request for the SAME occurrence/decision won
@@ -767,8 +797,12 @@ def create_decision(
     """Blueprint Sec.5.4 steps 1-6, 8: authenticate/MFA (dependency), resolve
     project membership and authority, idempotency check, recompute
     readiness against current state and reject stale manifests, construct
-    and append the decision atomically. Step 7 (DEC05 durability) is
-    explicitly not implemented -- see DecisionRecord's docstring."""
+    and append the decision atomically. Step 7 (DEC05 durability): the
+    synchronous chain-link checkpoint half is now built (_record_decision's
+    _checkpoint_this_project call) -- the synchronous cross-zone/cross-
+    region replica confirmation DEC05 also asks for is infra this prototype
+    doesn't have; see the DEC05 design spec's non-goals for what's still
+    honestly unbuilt."""
     project = _get_owned_project_or_404(db, tenant_id, project_id)
     membership = _require_decision_authority(db, project_id, user, mfa_verified)
     occurrence = _get_occurrence_or_404(db, project_id, occurrence_id)
