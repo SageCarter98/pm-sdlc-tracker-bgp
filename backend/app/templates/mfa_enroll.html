@@ -6,7 +6,7 @@
 
 <h2>1. Add this account to your authenticator app</h2>
 <p>If your app can scan a QR code, open <code>{{ provisioning_uri }}</code> directly in it, or choose "enter a setup key manually" and enter this code:</p>
-<p class="secret-code" aria-label="Manual entry setup key">{{ secret }}</p>
+<p class="secret-code"><span class="visually-hidden">Manual entry setup key: </span>{{ secret }}</p>
 
 <h2>2. Confirm the code your app shows</h2>
 <form method="post" action="/ui/mfa/enroll/verify" novalidate>

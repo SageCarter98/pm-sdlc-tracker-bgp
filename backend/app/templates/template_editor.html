@@ -1,0 +1,222 @@
+{% extends "base.html" %}
+{% block title %}{{ template.name }} — Template editor{% endblock %}
+{% block content %}
+<h1>{{ template.name }}</h1>
+<p>
+  Version {{ version.version_number }}
+  <span class="pill {{ 'pill--success' if version.status == 'published' else 'pill--warning' }}">{{ version.status }}</span>
+  {% if template.tenant_id is none %}<span class="hint">— shared starter</span>{% endif %}
+</p>
+
+{% if versions|length > 1 %}
+<p class="hint">Versions:
+  {% for v in versions %}{% if v.id == version.id %}<strong>v{{ v.version_number }}</strong>{% else %}<a href="/ui/orgs/{{ tenant_id }}/templates/{{ template.id }}/versions/{{ v.id }}">v{{ v.version_number }}</a>{% endif %}{{ ", " if not loop.last }}{% endfor %}
+</p>
+{% endif %}
+
+{% if version.status == "published" %}
+<p class="hint">REQ-011: published versions are immutable — any project already bound to this version keeps evaluating against exactly this schema. To change anything, fork it into a new draft (reviewing which bound projects should migrate to the new version is a separate, manual step, not automated here).</p>
+{% if can_author %}
+<form method="post" action="/ui/orgs/{{ tenant_id }}/templates/{{ template.id }}/versions/{{ version.id }}/fork">
+  <button type="submit">Fork to a new draft</button>
+</form>
+{% endif %}
+{% elif not can_author %}
+<p class="hint">You do not have permission to edit templates in this organisation (tenant administrator or approver only) — showing this draft read-only.</p>
+{% endif %}
+
+<h2>Classification</h2>
+{% if is_editable %}
+<form method="post" action="/ui/orgs/{{ tenant_id }}/templates/{{ template.id }}/versions/{{ version.id }}/metadata" novalidate>
+  <div class="field">
+    <label for="tracks">Tracks (comma-separated)</label>
+    <input type="text" id="tracks" name="tracks" value="{{ version.schema_json.tracks|join(', ') }}" required>
+  </div>
+  <div class="field">
+    <label for="classes">Classes (comma-separated)</label>
+    <input type="text" id="classes" name="classes" value="{{ version.schema_json.classes|join(', ') }}" required>
+  </div>
+  <div class="field">
+    <label for="roles">Roles (comma-separated)</label>
+    <input type="text" id="roles" name="roles" value="{{ version.schema_json.roles|join(', ') }}" required>
+  </div>
+  <div class="field">
+    <label for="statuses">Statuses (comma-separated)</label>
+    <input type="text" id="statuses" name="statuses" value="{{ version.schema_json.statuses|join(', ') }}" required>
+  </div>
+  <div class="field">
+    <label for="decision_outcomes">Decision outcomes (comma-separated)</label>
+    <input type="text" id="decision_outcomes" name="decision_outcomes" value="{{ version.schema_json.decision_outcomes|join(', ') }}" required>
+  </div>
+  <button type="submit">Save classification</button>
+</form>
+{% else %}
+<dl class="manifest-summary">
+  <dt>Tracks</dt><dd>{{ version.schema_json.tracks|join(', ') }}</dd>
+  <dt>Classes</dt><dd>{{ version.schema_json.classes|join(', ') }}</dd>
+  <dt>Roles</dt><dd>{{ version.schema_json.roles|join(', ') }}</dd>
+  <dt>Statuses</dt><dd>{{ version.schema_json.statuses|join(', ') }}</dd>
+  <dt>Decision outcomes</dt><dd>{{ version.schema_json.decision_outcomes|join(', ') }}</dd>
+</dl>
+{% endif %}
+
+<h2>Gates and rules</h2>
+{% for gate in version.schema_json.gates %}
+<h3>{{ gate.name }} <span class="mono">({{ gate.gate_id }}, sequence {{ gate.sequence }})</span></h3>
+<p class="hint">Applies to classes: {{ gate.class_ids|join(', ') }}</p>
+{% if is_editable %}
+<form method="post" action="/ui/orgs/{{ tenant_id }}/templates/{{ template.id }}/versions/{{ version.id }}/gates/{{ gate.gate_id }}/remove" class="inline-form">
+  <button type="submit">Remove gate</button>
+</form>
+{% endif %}
+
+{% if gate.rules %}
+<table>
+  <thead>
+    <tr>
+      <th scope="col">Rule</th><th scope="col">Evidence kind</th><th scope="col">Blocker</th>
+      <th scope="col">Permitted roles</th><th scope="col">Condition</th>
+      {% if is_editable %}<th scope="col">Actions</th>{% endif %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for rule in gate.rules %}
+    <tr>
+      <td data-label="Rule"><span class="mono">{{ rule.rule_id }}</span>{% if rule.guidance %}<br><span class="hint">{{ rule.guidance }}</span>{% endif %}</td>
+      <td data-label="Evidence kind">{{ rule.evidence_kind }}</td>
+      <td data-label="Blocker"><span class="status-badge" data-status="{{ 'Terminate' if rule.blocker_level == 'hard' else ('Hold' if rule.blocker_level == 'conditional' else 'Not started') }}">{{ rule.blocker_level }}</span></td>
+      <td data-label="Permitted roles">{{ rule.permitted_role_ids|join(', ') }}</td>
+      <td data-label="Condition" class="hint">{{ describe_condition(rule.conditions) }}</td>
+      {% if is_editable %}
+      <td data-label="Actions">
+        <form method="post" action="/ui/orgs/{{ tenant_id }}/templates/{{ template.id }}/versions/{{ version.id }}/gates/{{ gate.gate_id }}/rules/{{ rule.rule_id }}/remove" class="inline-form">
+          <button type="submit">Remove</button>
+        </form>
+      </td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="hint">No rules in this gate yet.</p>
+{% endif %}
+
+{% if is_editable %}
+<details class="guidance">
+  <summary>Add a rule to {{ gate.name }}</summary>
+  <form method="post" action="/ui/orgs/{{ tenant_id }}/templates/{{ template.id }}/versions/{{ version.id }}/gates/{{ gate.gate_id }}/rules" novalidate>
+    <div class="field">
+      <label for="rule_id_{{ gate.gate_id }}">Rule ID</label>
+      <input type="text" id="rule_id_{{ gate.gate_id }}" name="rule_id" required>
+    </div>
+    <div class="field">
+      <label>Applies to classes</label>
+      {% for c in version.schema_json.classes %}
+      <label><input type="checkbox" name="class_ids" value="{{ c }}"> {{ c }}</label>
+      {% endfor %}
+    </div>
+    <div class="field">
+      <label for="occurrence_type_{{ gate.gate_id }}">Occurrence type</label>
+      <input type="text" id="occurrence_type_{{ gate.gate_id }}" name="occurrence_type" value="routine" required>
+    </div>
+    <div class="field">
+      <label for="evidence_kind_{{ gate.gate_id }}">Evidence kind</label>
+      <input type="text" id="evidence_kind_{{ gate.gate_id }}" name="evidence_kind" value="document" required>
+    </div>
+    <div class="field">
+      <label>Permitted roles</label>
+      {% for r in version.schema_json.roles %}
+      <label><input type="checkbox" name="permitted_role_ids" value="{{ r }}"> {{ r }}</label>
+      {% endfor %}
+    </div>
+    <div class="field">
+      <label for="blocker_level_{{ gate.gate_id }}">Blocker level</label>
+      <select id="blocker_level_{{ gate.gate_id }}" name="blocker_level">
+        <option value="hard">Hard — blocks progression</option>
+        <option value="conditional">Conditional — allows Approve with conditions</option>
+        <option value="advisory">Advisory — never blocks</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="guidance_{{ gate.gate_id }}">Guidance (optional, shown to contributors)</label>
+      <textarea id="guidance_{{ gate.gate_id }}" name="guidance" rows="2"></textarea>
+    </div>
+    <div class="field">
+      <label for="evidence_example_{{ gate.gate_id }}">Evidence example (optional)</label>
+      <textarea id="evidence_example_{{ gate.gate_id }}" name="evidence_example" rows="2"></textarea>
+    </div>
+
+    <p class="hint">Optional condition — when is this rule required? Sec.5.5 vocabulary (equals / is one of), up to 3 tests. Leave all three blank for "always required". For nested AND-of-OR logic beyond this, use Advanced JSON below.</p>
+    <div class="field">
+      <label for="cond_combinator_{{ gate.gate_id }}">Combine the tests below as</label>
+      <select id="cond_combinator_{{ gate.gate_id }}" name="cond_combinator">
+        <option value="single">Just the first configured test</option>
+        <option value="all">ALL of the tests (AND)</option>
+        <option value="any">ANY of the tests (OR)</option>
+      </select>
+    </div>
+    {% for i in [1, 2, 3] %}
+    <div class="field">
+      <label>Test {{ i }}: fact / operator / value{{ " (comma-separated for 'is one of')" if i == 1 else "" }}</label>
+      <input type="text" name="cond{{ i }}_fact" placeholder="fact name">
+      <select name="cond{{ i }}_op">
+        <option value="">(unused)</option>
+        <option value="eq">equals</option>
+        <option value="in">is one of</option>
+      </select>
+      <input type="text" name="cond{{ i }}_value" placeholder="value">
+    </div>
+    {% endfor %}
+    <button type="submit">Add rule</button>
+  </form>
+</details>
+{% endif %}
+{% else %}
+<p>No gates yet.</p>
+{% endfor %}
+
+{% if is_editable %}
+<h2>Add a gate</h2>
+<form method="post" action="/ui/orgs/{{ tenant_id }}/templates/{{ template.id }}/versions/{{ version.id }}/gates" novalidate>
+  <div class="field">
+    <label for="gate_id">Gate ID</label>
+    <input type="text" id="gate_id" name="gate_id" required>
+  </div>
+  <div class="field">
+    <label for="gate_name">Name</label>
+    <input type="text" id="gate_name" name="name" required>
+  </div>
+  <div class="field">
+    <label for="sequence">Sequence</label>
+    <input type="number" id="sequence" name="sequence" value="{{ (version.schema_json.gates|length) + 1 }}" required>
+  </div>
+  <div class="field">
+    <label>Applies to classes</label>
+    {% for c in version.schema_json.classes %}
+    <label><input type="checkbox" name="class_ids" value="{{ c }}"> {{ c }}</label>
+    {% endfor %}
+  </div>
+  <button type="submit">Add gate</button>
+</form>
+
+<h2>Advanced: raw JSON</h2>
+<p class="hint">The escape hatch for nested AND/OR conditions, applicability, or anything else the guided forms above don't cover — still goes through the same schema validation as every other path, never a bypass.</p>
+<form method="post" action="/ui/orgs/{{ tenant_id }}/templates/{{ template.id }}/versions/{{ version.id }}/raw" novalidate>
+  <div class="field">
+    <textarea name="schema_text" rows="10">{{ version.schema_json|tojson }}</textarea>
+  </div>
+  <button type="submit">Replace schema</button>
+</form>
+
+{% if can_publish %}
+<h2>Publish</h2>
+<p class="hint">REQ-011: publishing is immutable and irreversible — there is no unpublish. A later change must be a new version (fork this one).</p>
+<form method="post" action="/ui/orgs/{{ tenant_id }}/templates/{{ template.id }}/versions/{{ version.id }}/publish">
+  <button type="submit">Publish this version</button>
+</form>
+{% endif %}
+{% endif %}
+
+<p><a href="/ui/orgs/{{ tenant_id }}/templates">Back to templates</a></p>
+{% endblock %}

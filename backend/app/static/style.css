@@ -108,6 +108,24 @@ body {
 }
 .skip-link:focus { left: 0; }
 
+/* ------------------------------------------------------ Visually hidden */
+/* For accessible-name text that must never be visible (unlike .skip-link,
+   which reveals on focus) -- e.g. labelling a value for assistive tech
+   without an aria-label on an element/role combination that doesn't
+   reliably support one. Standard clip-based technique, not display:none
+   (which screen readers also skip). */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* ------------------------------------------------------------- Focus states
    Every interactive element gets the same strong, high-contrast ring --
    never removed, never replaced by a subtler "design-y" alternative. */

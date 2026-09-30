@@ -25,7 +25,7 @@
 {% if members %}
 <table>
   <thead>
-    <tr><th scope="col">Email</th><th scope="col">Role</th><th scope="col">Status</th><th scope="col">Member since</th></tr>
+    <tr><th scope="col">Email</th><th scope="col">Role</th><th scope="col">Status</th><th scope="col">Member since</th><th scope="col">Actions</th></tr>
   </thead>
   <tbody>
     {% for m in members %}
@@ -36,6 +36,25 @@
         {% if m.active %}<span class="pill pill--success">Active</span>{% else %}<span class="pill pill--danger">Revoked</span>{% endif %}
       </td>
       <td data-label="Member since">{{ m.member_since.strftime("%Y-%m-%d") }}</td>
+      <td data-label="Actions">
+        {% if m.active %}
+        <form method="post" action="/ui/orgs/{{ tenant_id }}/settings/memberships/{{ m.membership_id }}/role" novalidate class="inline-form">
+          <select name="role" aria-label="Change role for {{ m.email }}">
+            <option value="contributor" {% if m.role == "contributor" %}selected{% endif %}>Contributor</option>
+            <option value="approver" {% if m.role == "approver" %}selected{% endif %}>Approver</option>
+            <option value="sponsor" {% if m.role == "sponsor" %}selected{% endif %}>Sponsor</option>
+            <option value="assurance_reviewer" {% if m.role == "assurance_reviewer" %}selected{% endif %}>Assurance reviewer</option>
+            <option value="tenant_administrator" {% if m.role == "tenant_administrator" %}selected{% endif %}>Tenant administrator</option>
+          </select>
+          <button type="submit">Change role</button>
+        </form>
+        <form method="post" action="/ui/orgs/{{ tenant_id }}/settings/memberships/{{ m.membership_id }}/revoke" novalidate class="inline-form">
+          <button type="submit">Revoke</button>
+        </form>
+        {% else %}
+        <span class="hint">&mdash;</span>
+        {% endif %}
+      </td>
     </tr>
     {% endfor %}
   </tbody>
@@ -64,7 +83,6 @@
   <button type="submit">Create invitation</button>
 </form>
 
-<p class="hint">There is no revoke-membership or change-role control here yet -- no such endpoint exists in the API this page calls (tracked as a gap, not built as a placeholder).</p>
 {% endif %}
 
 <p><a href="/ui/orgs/{{ tenant_id }}/my-work">Back to My work</a></p>

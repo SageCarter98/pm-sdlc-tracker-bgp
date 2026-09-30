@@ -2,7 +2,17 @@
 block new decisions). Pure application-layer logic -- runs against the
 SQLite test fixture like every other functional test; the *database-role*
 half of REQ-026 (not even bgp_owner can UPDATE/DELETE a checkpoint) is
-Postgres-only and lives in test_wp08_tenant_isolation_rls.py instead."""
+Postgres-only and lives in test_wp08_tenant_isolation_rls.py instead.
+
+DEC05 (2026-09-29) changed what the manual .../integrity/checkpoint
+endpoint below actually does day to day: app/routers/decisions.py now
+folds a decision's own audit event into a checkpoint synchronously at
+commit time, so this manual endpoint usually has nothing new left to fold
+by the time a test calls it -- see the two tests immediately below for
+where that changed an assertion. DEC05's own new mechanism (the
+synchronous chain-link, the external WORM anchor, the independent
+cross-check) is tested separately in test_dec05_durability_mechanism.py,
+live-Postgres-only."""
 
 from app.db import get_db
 from app.main import app
@@ -44,13 +54,23 @@ def _record_one_approval(client, tenant_id, created, approver_id, key="k1"):
 
 
 def test_checkpoint_and_verify_clean_when_untampered(client):
+    """DEC05 G1: _record_one_approval's decision commit already folds its
+    own audit event into a checkpoint synchronously (app/routers/
+    decisions.py's _checkpoint_this_project) -- the manual endpoint below
+    correctly has nothing left to do, proven via GET .../checkpoints
+    instead of the manual call's own (now-None) response body."""
     tenant_id, created, admin_id, approver_id = _setup_project_with_second_approver(client)
     _record_one_approval(client, tenant_id, created, approver_id)
     project_id = created["project"]["id"]
 
     checkpoint = client.post(f"/orgs/{tenant_id}/projects/{project_id}/integrity/checkpoint")
     assert checkpoint.status_code == 201, checkpoint.text
-    assert checkpoint.json()["event_count"] == 1
+    assert checkpoint.json() is None
+
+    checkpoints = client.get(f"/orgs/{tenant_id}/projects/{project_id}/integrity/checkpoints")
+    assert checkpoints.status_code == 200, checkpoints.text
+    assert len(checkpoints.json()) == 1
+    assert checkpoints.json()[0]["event_count"] == 1
 
     verify = client.post(f"/orgs/{tenant_id}/projects/{project_id}/integrity/verify")
     assert verify.status_code == 200, verify.text
@@ -59,12 +79,16 @@ def test_checkpoint_and_verify_clean_when_untampered(client):
 
 
 def test_checkpoint_is_noop_when_nothing_new(client):
+    """DEC05 G1: both calls are now a no-op -- the decision commit itself
+    already checkpointed the only audit event that exists, before either
+    of these manual calls runs at all."""
     tenant_id, created, admin_id, approver_id = _setup_project_with_second_approver(client)
     _record_one_approval(client, tenant_id, created, approver_id)
     project_id = created["project"]["id"]
 
     first = client.post(f"/orgs/{tenant_id}/projects/{project_id}/integrity/checkpoint")
     assert first.status_code == 201
+    assert first.json() is None
     second = client.post(f"/orgs/{tenant_id}/projects/{project_id}/integrity/checkpoint")
     assert second.status_code == 201
     assert second.json() is None

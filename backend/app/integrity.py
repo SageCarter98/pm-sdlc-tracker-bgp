@@ -10,7 +10,8 @@ import json
 
 from sqlalchemy.orm import Session
 
-from app.models import AuditEvent, IntegrityCheckpoint, IntegrityIncident
+from app.models import AuditEvent, IntegrityCheckpoint, IntegrityIncident, WormAnchorReceipt
+from app.worm_anchor import WormAnchorStore
 
 GENESIS_DIGEST = "0" * 64
 
@@ -38,11 +39,30 @@ def _fold_chain(prev_digest: str, events: list[AuditEvent]) -> str:
     return digest
 
 
-def take_checkpoint(db: Session, tenant_id: str, project_id: str) -> IntegrityCheckpoint | None:
-    """Folds every AuditEvent since the last checkpoint into one digest and
-    appends a new checkpoint row -- INSERT only, the row can never be
-    UPDATEd or DELETEd afterward (migration 0006_wp08_integrity.py).
+def checkpoint_new_events(db: Session, tenant_id: str, project_id: str) -> IntegrityCheckpoint | None:
+    """DEC05 G1: identical folding logic to take_checkpoint below, but does
+    NOT commit -- it only queries, folds, and db.add()s the new checkpoint,
+    leaving the commit to the caller. This is what lets
+    app/routers/decisions.py's _record_decision fold a decision's own audit
+    event into a checkpoint in the SAME transaction as the decision itself
+    (DEC05 s"Candidate A+"'s synchronous acknowledgement half), rather than
+    the old model of a separate, later, manually-triggered checkpoint.
+
+    Callers on live Postgres MUST hold
+    `pg_advisory_xact_lock(hashtext(project_id))` before calling this --
+    two concurrent callers for the SAME project would otherwise both read
+    the same "latest checkpoint" and each fold from it, producing two
+    checkpoints with overlapping sequence ranges instead of one serialized
+    chain. See app/routers/decisions.py for where that lock is taken.
+
     Returns None if there is nothing new to checkpoint."""
+    # app/db.py's SessionLocal is autoflush=False -- a caller's own
+    # just-added, not-yet-flushed AuditEvent (e.g. decisions.py's
+    # "decision_recorded"/"decision_denied" rows, added immediately before
+    # calling this) would otherwise be invisible to the query below, which
+    # runs a real SELECT against the database, not against the session's
+    # in-memory pending objects.
+    db.flush()
     latest = (
         db.query(IntegrityCheckpoint)
         .filter(IntegrityCheckpoint.project_id == project_id)
@@ -68,6 +88,15 @@ def take_checkpoint(db: Session, tenant_id: str, project_id: str) -> IntegrityCh
         chain_digest=_fold_chain(prev_digest, events),
     )
     db.add(checkpoint)
+    return checkpoint
+
+
+def take_checkpoint(db: Session, tenant_id: str, project_id: str) -> IntegrityCheckpoint | None:
+    """The pre-existing manual, admin-triggered checkpoint endpoint's
+    implementation (app/routers/integrity.py) -- unchanged in behavior
+    since DEC05: still useful for backfilling any audit events that don't
+    go through _record_decision's own synchronous checkpointing."""
+    checkpoint = checkpoint_new_events(db, tenant_id, project_id)
     db.commit()
     # No db.refresh() -- see app/db.py's SessionLocal docstring
     # (expire_on_commit=False): every field here was already set in Python
@@ -125,3 +154,53 @@ def has_open_incident(db: Session, project_id: str) -> IntegrityIncident | None:
         .filter(IntegrityIncident.project_id == project_id, IntegrityIncident.status == "open")
         .first()
     )
+
+
+def verify_against_anchor(db: Session, worm_store: WormAnchorStore, tenant_id: str, project_id: str) -> dict:
+    """DEC05 G3: cross-checks each checkpoint's DB-stored chain_digest
+    against its externally-anchored WORM copy (app/worm_anchor.py,
+    scripts/anchor_worm.py). This is the check verify_integrity() above
+    cannot do: verify_integrity re-derives a checkpoint's digest from
+    AuditEvent rows in the SAME database -- a rewrite that changes an audit
+    event's content and its own checkpoint's chain_digest together, self-
+    consistently, re-derives clean under verify_integrity every time.
+    Comparing against a copy held OUTSIDE this Postgres instance entirely is
+    what catches that (see IntegrityCheckpoint's own docstring, app/
+    models.py, and the DEC05 design spec s4.3 for the full rationale).
+
+    A checkpoint with no receipt yet (anchor_worm.py hasn't reached it) is
+    skipped, not treated as a mismatch -- anchoring is asynchronous by
+    design (DEC05's own "Candidate A+" wording: only the chain-link-at-
+    commit is synchronous). Returns {"ok", "incident", "checked_checkpoints"}
+    -- checked_checkpoints counts only checkpoints that actually had an
+    anchor to compare against."""
+    checkpoints = (
+        db.query(IntegrityCheckpoint)
+        .filter(IntegrityCheckpoint.project_id == project_id)
+        .order_by(IntegrityCheckpoint.to_sequence)
+        .all()
+    )
+    checked = 0
+    for cp in checkpoints:
+        receipt = db.query(WormAnchorReceipt).filter(WormAnchorReceipt.checkpoint_id == cp.id).one_or_none()
+        if receipt is None:
+            continue
+        checked += 1
+        anchored = json.loads(worm_store.read(receipt.anchor_key))
+        if anchored["chain_digest"] != cp.chain_digest:
+            incident = IntegrityIncident(
+                tenant_id=tenant_id,
+                project_id=project_id,
+                detail={
+                    "check": "verify_against_anchor",
+                    "checkpoint_id": cp.id,
+                    "anchor_key": receipt.anchor_key,
+                    "anchored_digest": anchored["chain_digest"],
+                    "db_digest": cp.chain_digest,
+                },
+            )
+            db.add(incident)
+            db.commit()  # No db.refresh() -- see checkpoint creation above, same reasoning.
+            return {"ok": False, "incident": incident, "checked_checkpoints": checked}
+
+    return {"ok": True, "incident": None, "checked_checkpoints": checked}

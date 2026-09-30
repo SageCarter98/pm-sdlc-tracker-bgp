@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}Export & import{% endblock %}
+{% block content %}
+<h1>Export &amp; import</h1>
+<p class="hint">REQ-030/031: a complete, open-format export is available to any active member at any time. Import is a tenant-administrator action, validated in quarantine before anything is committed live.</p>
+
+<h2>Export your organisation's data</h2>
+<form method="post" action="/ui/orgs/{{ tenant_id }}/export-import/exports">
+  <button type="submit">Create new export</button>
+</form>
+<p class="hint">FE-068, honestly: exports build and complete within this same request in this prototype -- there is no background worker yet, so no queued/processing/expired state exists to show. Nothing currently purges an old export automatically.</p>
+
+{% if exports %}
+<table>
+  <thead>
+    <tr><th scope="col">Created</th><th scope="col">Status</th><th scope="col">Format</th><th scope="col">Archive digest</th><th scope="col">Download</th></tr>
+  </thead>
+  <tbody>
+    {% for e in exports %}
+    <tr>
+      <td data-label="Created" class="mono">{{ e.created_at.strftime("%Y-%m-%d %H:%M") }} UTC</td>
+      <td data-label="Status"><span class="pill pill--success">{{ e.status }}</span></td>
+      <td data-label="Format" class="num">v{{ e.format_version }}</td>
+      <td data-label="Archive digest" class="mono">{{ e.archive_digest[:16] }}…</td>
+      <td data-label="Download"><a href="/ui/orgs/{{ tenant_id }}/export-import/exports/{{ e.id }}/download">Download JSON</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No exports yet.</p>
+{% endif %}
+
+{% if is_admin %}
+<h2>Import an archive</h2>
+<p class="hint">FE-070: an uploaded or pasted archive is checked here first (format version, per-section digests, actor matches) -- nothing becomes a live row until you separately confirm Commit on a validated import below.</p>
+<form method="post" action="/ui/orgs/{{ tenant_id }}/export-import/imports/validate" enctype="multipart/form-data" novalidate>
+  <div class="field">
+    <label for="archive_file">Archive file (.json)</label>
+    <input type="file" id="archive_file" name="archive_file" accept="application/json">
+  </div>
+  <div class="field">
+    <label for="archive_text">…or paste archive JSON</label>
+    <textarea id="archive_text" name="archive_text" rows="6"></textarea>
+  </div>
+  <button type="submit">Validate</button>
+</form>
+
+<h3>Import history</h3>
+{% if imports %}
+<table>
+  <thead>
+    <tr><th scope="col">Created</th><th scope="col">Status</th><th scope="col">Report</th><th scope="col">Actions</th></tr>
+  </thead>
+  <tbody>
+    {% for j in imports %}
+    <tr>
+      <td data-label="Created" class="mono">{{ j.created_at.strftime("%Y-%m-%d %H:%M") }} UTC</td>
+      <td data-label="Status">
+        <span class="pill {{ 'pill--success' if j.status == 'committed' else ('pill--danger' if j.status == 'rejected' else 'pill--warning') }}">{{ j.status }}</span>
+      </td>
+      <td data-label="Report">
+        {% if j.validation_report %}
+        <details class="guidance">
+          <summary>Validation report</summary>
+          <p><strong>Result:</strong> {{ "OK" if j.validation_report.ok else "Failed" }}</p>
+          {% if j.validation_report.errors %}
+          <ul>{% for e in j.validation_report.errors %}<li>{{ e }}</li>{% endfor %}</ul>
+          {% endif %}
+          <p><strong>Unmapped actors:</strong> {{ j.validation_report.unmatched_actor_count }} — FE-071: an unmapped actor receives no live login or approval rights; their historical attribution is preserved and labelled, never invented.</p>
+        </details>
+        {% endif %}
+        {% if j.commit_report %}
+        <details class="guidance">
+          <summary>Commit / reconciliation report</summary>
+          <dl class="manifest-summary">
+            {% for k, v in j.commit_report.counts.items() %}
+            <dt>{{ k }}</dt><dd class="num">{{ v }}</dd>
+            {% endfor %}
+          </dl>
+          <p><strong>Historical records preserved (not live rows):</strong>
+            {% for k, v in j.commit_report.historical_counts.items() %}{{ k }}: {{ v }}{{ ", " if not loop.last }}{% endfor %}
+          </p>
+          <p><strong>Skipped, broken historical references:</strong> {{ j.commit_report.skipped_historical_broken_references }}</p>
+          <p><strong>Unmapped actors:</strong> {{ j.commit_report.unmatched_actor_count }}</p>
+        </details>
+        {% endif %}
+        {% if not j.validation_report and not j.commit_report %}
+        <span class="hint">&mdash;</span>
+        {% endif %}
+      </td>
+      <td data-label="Actions">
+        {% if j.status == "validated" %}
+        <form method="post" action="/ui/orgs/{{ tenant_id }}/export-import/imports/{{ j.id }}/commit" class="inline-form">
+          <button type="submit">Commit</button>
+        </form>
+        {% else %}
+        <span class="hint">&mdash;</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No imports yet.</p>
+{% endif %}
+{% endif %}
+
+<p class="hint">FE-073/FE-074, honestly: retention, legal-hold and disposal controls are not shown here. DEC06 (retention/disposal policy) has an accepted design, but its enforcement mechanism is not built (tracked under IPA04) -- no such control is enabled ahead of that, per FE-074's own rule.</p>
+
+<p><a href="/ui/orgs/{{ tenant_id }}/my-work">Back to My work</a></p>
+{% endblock %}

@@ -189,9 +189,10 @@ pytest -q -k "not tenant_isolation_rls and not decision_concurrency"
 A skipped Postgres-only test is **not the same claim as a passed one** — check
 the pytest summary line for a nonzero `skipped` count, and don't read a
 "unit tests pass" run as proof the live-Postgres guarantees (RLS isolation,
-row-locking, the SELECT+INSERT-only append-only grants) actually hold. No
-linting or formatting is configured yet (tracker item #120 stays "In
-progress" for that reason).
+row-locking, the SELECT+INSERT-only append-only grants) actually hold.
+Linting and formatting (Ruff) have been configured and enforced in CI since
+2026-09-20 (tracker item #120 is Complete) — run `ruff check . && ruff
+format --check .` from `backend/` before pushing, same as CI does.
 
 ### Persistent keys (read this before using a database that survives a restart)
 
@@ -209,22 +210,44 @@ you intend to keep using.
 
 ## Known limitations
 
-- **No frontend** (DEC04 unresolved) — REQ-033's guided-form back-navigation
-  and REQ-039's timezone display/translation are frontend-only concerns this
-  backend cannot satisfy alone.
+- **Frontend is partial, not absent.** DEC04 resolved 2026-09-20 (server-rendered
+  FastAPI+Jinja2, `app/webapp/`) — 8 of 10 screens are real pages (WP11/WP13/WP14/WP15).
+  **UI08 (guided template authoring) and UI09 (export/import) remain API-only**,
+  blocked on open DEC07/DEC06/DEC12, and there is still no membership
+  revocation/role-change endpoint in `orgs.py`. Tracked as **IPA02** (High,
+  open) in `BGP_Implementation_Plan_Alignment_Findings_v1.0.docx`
+  (BGP-IPA-001, 2026-09-22).
+- **Decision recovery is incomplete.** `decide_submit`
+  (`app/webapp/router.py`) generates a fresh idempotency key on every
+  submission rather than preserving a stable request identity, so a lost
+  response cannot be safely recovered by resubmitting — REQ-035's recovery
+  flow is not met by the browser form even though the underlying JSON API's
+  idempotency handling (WP07) is correct. Tracked as **IPA03** (High, open,
+  release-relevant) in BGP-IPA-001.
 - **Decision durability** (DEC05) is unresolved — a decision commits
   atomically to this single local Postgres instance only; no
-  synchronous-replication or pending-receipt semantics exist.
+  synchronous-replication or pending-receipt semantics exist. No independent
+  release assurance (fault/recovery/usability/accessibility/security) has
+  been performed either. Tracked as **IPA04** (High, open, explicitly
+  release-blocking) in BGP-IPA-001 — this one needs named decision owners
+  and real assurance activity, not a documentation or code fix.
 - **Integrity checkpoint custody** is enforced by RLS in the same Postgres
   instance, not a genuinely separate system — see
   `app/models.py`'s `IntegrityCheckpoint` docstring for exactly what this
   does and does not prove.
 - **BGP_Development_Review_Findings_v1.0.pdf** findings BGP-F01–F04 (session-
   bound MFA, an authenticated compensating review, decision-check
-  concurrency, and export/import history preservation) are fixed as of
-  2026-09-17 — see `TRACKER.md` for each fix's detail and the tests that
-  prove it. That review, like this README, was authored by an AI agent, not
-  independently reviewed — see the Authority and scope section above.
+  concurrency, and export/import history preservation) were first remediated
+  2026-09-17, then `BGP_Follow_Up_Review_Findings_v1.0.pdf` (2026-09-18)
+  found all four still only **partially resolved** with specific remaining
+  gaps (the MFA replacement window, an ownership-based preparer bypass,
+  unlocked concurrency reads, and lost re-export provenance). A further round
+  of fixes for those exact gaps landed 2026-09-19 (commit `b8bb22a`,
+  reviewed and approved by MiltonBello15 — see `TRACKER.md` and
+  `BGP_Human_Code_Review_Approval_Record_v1.0_Approved.docx`). Whether that
+  second round actually closes the follow-up review's own findings has not
+  been checked yet — treat BGP-F01–F04 as still open until that check
+  happens, not as closed by this note.
 - No CI run has been deliberately broken (e.g. a reintroduced tenant leak,
   or a reverted lock) to prove a relevant check actually goes red, not only
   that it currently passes.

@@ -844,11 +844,14 @@ as-is into a same-origin, no-build-step, no-external-CDN frontend (DEC04).
      (`/ui/orgs/{tenant_id}/settings`) — own profile/MFA status for anyone;
      tenant administrators additionally see `orgs_router.access_review`'s
      full roster and a form posting to the existing `create_invitation`.
-     **Real, honestly-flagged gap**: there is no revoke-membership or
-     change-role endpoint anywhere in `orgs.py` yet, so no such control was
-     added to the page — the template says so directly rather than faking
-     one. FE-017 ("removed membership invalidates stale actions") is
-     therefore still only partially covered by this project.
+     **Gap closed 2026-09-28** (commit `6842447`): `orgs.py` now has
+     `POST /orgs/{tenant_id}/memberships/{membership_id}/role` and
+     `.../revoke`, both `require_role(Role.TENANT_ADMINISTRATOR)`-gated and
+     refused (409) if they would leave the tenant with zero active
+     administrators; `settings.html` exposes them as inline per-row forms.
+     FE-017 ("removed membership invalidates stale actions") is now covered
+     by this project's own revoke path, not just by relying on some other
+     membership change happening elsewhere.
    - Every direct call into a role-gated router function
      (`Depends(require_role(...))`) had its role check explicitly
      re-invoked in the webapp layer (e.g.
@@ -863,7 +866,9 @@ as-is into a same-origin, no-build-step, no-external-CDN frontend (DEC04).
    disposal, import provenance), both still open. This matches WP11's own
    stated scope boundary; FE-APR-001 lists all ten screens as "approved"
    but explicitly disclaims inventing decisions FE-APR-001 itself didn't
-   resolve.
+   resolve. (Membership revocation/role-change, the third item this section
+   used to group with UI08/UI09, was built 2026-09-28 — see the WP13-15
+   entry below; it did not depend on any open DEC.)
 
 **Tests**: `test_wp13_webapp_new_pages.py`, same live-Postgres-only pattern
 as `test_wp11_webapp_rls.py` — project creation happy path and a rejected-
@@ -1050,7 +1055,1226 @@ link with correct byte content; the earlier Phase-1-era upload (scanned
 before this key existed) correctly stayed `unavailable` rather than being
 retroactively rescanned. Full suite: 153 passing (was 150).
 
-## Rules for updating this tracker as work proceeds
+## BGP-HR-001 and BGP-IPA-001: review register widened, 5 new findings logged (2026-09-22)
+
+Two governance records landed at the repo root: `BGP_Human_Code_Review_Approval_Record_v1.0_Approved.docx`
+(BGP-HR-001) and `BGP_Implementation_Plan_Alignment_Findings_v1.0.docx` (BGP-IPA-001, an AI-assisted
+assessment against the approved blueprint, inspected commit `0b284c6fb95c`). Neither document's
+claims were taken on faith -- every material claim was independently re-checked against live
+GitHub/repo state before this tracker was touched:
+
+- `gh pr view --json reviews` for PRs 3-7 confirmed every final-head `APPROVED` review BGP-HR-001
+  cites (PR3 `b8bb22a3f384`/MiltonBello15, PR4 `ac7f0f1068ce`/MiltonBello15, PR5 `0966b1b750b9`/
+  MiltonBello15+kenAddme, PR6 `4562f299426f`/kenAddme, PR7 `fa87b817996c`/kenAddme), and confirmed
+  PR6's earlier commit `06662fe8193c` (MiltonBello15 approval + kenAddme's later-dismissed review)
+  is correctly excluded from the register, not double-counted.
+- `gh run view --job --log` on run `35670396664` / job `106565331468` confirmed BGP-IPA-001's exact
+  cited figures: `151 passed, 2 skipped, 24 warnings`, `73 files already formatted`, Ruff
+  `All checks passed!`, dependency scan and secret scan both clean.
+- Grepped `backend/app/webapp/router.py` line 578 and confirmed `decide_submit` really does
+  `idempotency_key=str(uuid.uuid4())` fresh on every call -- BGP-IPA-001's IPA03 finding is real,
+  not a documentation artefact.
+- Grepped `README.md` lines 193/212 and confirmed the "lint unconfigured" and "No frontend" claims
+  are both still there and both now stale -- IPA05 is real; **README.md itself was not fixed by
+  this pass**, only flagged (see #125 below).
+- Grepped this file's own `## WP13` / `## WP14` / `## WP15` headings and confirmed the drift IPA01
+  flags: Blueprint Sec.6 assigns WP13=independent acceptance/release and WP14=optional/paid, but
+  this file uses WP13/WP14/WP15 for frontend pages/guidance/attachments instead, with no recorded
+  mapping back to the blueprint's own numbering.
+- One thing neither document's own claims could settle: both cite `BGP-CR-001, Collaborator Review
+  Closure Record v1.0, 18 September 2026` as a historical companion file. **No such file exists
+  anywhere in this repository.** Not fabricated or assumed benign -- flagged as a real gap.
+
+**Tracker items updated** (`pm-sdlc-tracker` DB, project id 1; overall completion 8.2% -> 9.4%):
+
+- **#124 (SDLC G3.10)** stays Complete; evidence widened from PR#3/#4 only to the full PR3-7
+  register above. Still explicitly scoped -- not a standing guarantee for a future unreviewed PR.
+- **#116 (SDLC G3.02)** Not started -> Complete: PR/commit/reviewer/CI-check linkage now recorded
+  for PRs 3-7.
+- **#120 (SDLC G3.06)** In progress -> Complete: lint+format are now configured and green in CI
+  (closing the exact gap open since WP12/2026-09-17). Caveat kept in the tracker note: the 2
+  skipped tests are Cloudmersive's live-scanner module, which skips without a key/reachable setup
+  CI doesn't provide -- this green run is not a live-scanner pass.
+- **#121 (SDLC G3.07)** In progress -> Complete: CI run history is genuinely retained on GitHub
+  Actions now, not just a local run.
+- **#126 (SDLC G3.12)** stays In progress: IPA01-IPA05 logged as a second, separate open-findings
+  set alongside the original BGP-F0x set. Still no single merged deviation register with owner/
+  commit/test-ID/closure-date columns -- that gap is what keeps this In progress.
+- **#125 (SDLC G3.11)** stays In progress: IPA05's README-staleness finding added to notes; README
+  itself is not yet corrected.
+- **#99 (SDLC G1.08)** downgraded Complete -> In progress: IPA01's WP-identifier drift is a real
+  break in the REQ-to-WP traceability chain for the WP13+ increments, confirmed above by grep, not
+  just asserted by the document.
+- **PM Gate 4.04 (#43)** and **PM Gate 4.07 (#46)**, plus **SDLC G4.06 (#133)** and **SDLC G4.19
+  (#146)**: all Not started -> In progress. BGP-HR-001 explicitly names itself as PM Gate 4
+  supporting evidence, and the PR-level author/reviewer separation (SageCarter98 authoring,
+  MiltonBello15/kenAddme approving, verified live) is real, partial evidence for these items. None
+  marked Complete -- each still has a real, stated gap (e.g. #46 needs all work packages accepted,
+  not just PRs 3-7; #133 needs owner/retest-status fields these two documents don't carry).
+
+**Not touched by this pass**: the rest of the PM track (still 0%; these two documents don't speak
+to PM Gates 1-3/5-7), SDLC G4 durability (IPA04 is explicitly release-blocking and remains
+genuinely unaddressed -- two review-evidence documents cannot close it), and #122 (SBOM/licence
+inventory -- neither document adds evidence there).
+
+## IPA01/IPA05 closed; three tracker items corrected after finding docs/ files that existed but weren't checked (2026-09-24)
+
+Asked to "note and close the findings" of BGP-IPA-001. Checked current code/docs
+against each of the 5 findings first (none were honestly closable as first
+found) and confirmed the scope with the user: docs-only work, no new code.
+
+**IPA05 (README contradictory status) -- Closed.** `README.md` still said
+linting was unconfigured and listed "No frontend" under known gaps -- both
+stale since 2026-09-20. Fixed: removed both claims, added accurate current
+notes on the partial frontend (now cross-referencing IPA02), the decision-
+recovery gap (IPA03), the durability/assurance gap (IPA04), and a corrected,
+honest account of the BGP-F0x/follow-up fix history (see below). Grep-confirmed
+both stale strings are gone.
+
+**IPA01 (WP-identifier drift) -- documentation half closed, review half open.**
+Wrote `docs/wp_identifier_mapping.md`: for every `TRACKER.md` heading that
+reuses a Blueprint Sec.6 WP number (WP11, WP13, WP14, plus the unassigned
+WP15), it records what was actually built, the true Blueprint anchor, the
+real requirement IDs, the authorization reference, and the acceptance
+evidence. **Checking the Blueprint's WP table directly (not just
+TRACKER.md's headings) found the drift is worse than BGP-IPA-001 itself
+said**: Blueprint WP11 ("Usability and accessibility") is also
+number-shadowed by the frontend-build increment TRACKER.md calls "WP11" --
+BGP-IPA-001 only named WP13/14/15. Like every other AI-drafted document in
+this project, the mapping is not independently reviewed yet -- tracker item
+#99 stays "In progress," not "Complete."
+
+**IPA02, IPA03, IPA04 -- stay open, correctly.** None of these three can be
+closed by a documentation pass: IPA02 needs DEC06/DEC07/DEC12 resolved
+before the missing UI can be built; IPA03 needs an actual stable-idempotency-
+key/recovery-flow implementation (`decide_submit` still generates a fresh
+`uuid.uuid4()` on every call, reconfirmed this session); IPA04 needs named
+decision owners for DEC05/DEC08/DEC11 plus real independent assurance work
+that no agent session can perform on its own. Recorded as open rows in
+`docs/DEFECT_REGISTER.md` alongside IPA01/IPA05, not silently dropped.
+
+**Three tracker items corrected** after this pass turned up real `docs/`
+files from commit `92dda7e` (PR#5, 2026-09-19, reviewed and approved by both
+MiltonBello15 and kenAddme) that a prior backfill session (2026-09-22) never
+checked for -- the same class of miss the evidence-honesty discipline exists
+to catch, just running in the other direction this time (undercounting real
+progress, not overcounting it):
+
+- **#126 (G3.12)**: `docs/DEFECT_REGISTER.md` already existed since
+  2026-09-19 -- a real structured register (ID/severity/discovered/fix-
+  commit/reviewer/test-evidence/status/closure-date) covering all 5 BGP-F0x
+  findings and their 6 follow-up-review fixes. Spot-checked 2026-09-24:
+  migration `0014_org_bootstrap_rls_fix.py` and every cited test function
+  exist and pass (12/12 targeted, 1/1 app-level concurrency, **full suite
+  153/153 against real Postgres**, run this session). Moved Not-actually-
+  In-progress -> **Complete**; the 5 new IPA0x rows were added to the same
+  register (Open/Submitted-for-review/Closed as appropriate, matching the
+  paragraphs above).
+- **#122 (G3.08)**: `docs/dependency_licence_inventory.md` already existed
+  (pip-licenses-generated, honestly caveated UNKNOWN-license entries,
+  psycopg2-binary's LGPL flagged). Stays In progress correctly -- no SBOM
+  format, no CI enforcement -- but the evidence citation was stale and is
+  now corrected.
+- **#125 (G3.11)**: `docs/api-reference.md` already existed, pointing at the
+  live OpenAPI schema (`GET /docs`/`/redoc`) plus a regenerable
+  `docs/openapi.json` snapshot. Stays In progress correctly -- still no
+  architecture diagram or operational runbook -- but the prior note ("no
+  separate API reference exists") was simply wrong.
+
+## Approved xlsx companion tracker filled: Work packages, Decisions, Remediation (2026-09-24)
+
+`docs/blueprint/Build_Governance_Platform_Implementation_Tracker_v0.2_Approved.xlsx`
+has sat with every execution-status column blank since its 2026-09-15 baseline
+(flagged in tracker item #99's evidence). Asked to update it; scoped with the
+user to the 3 sheets with solid, already-verified evidence (Work packages,
+Decisions, Remediation -- 33 rows) rather than the 58-row Requirements and
+23-row Acceptance sheets, which need genuine per-item `TST-XXX` test
+verification, not transcription -- left blank for a dedicated future pass
+rather than filled carelessly.
+
+**Work packages (14 rows).** WP01-WP10 and WP12/WP14 filled with real
+Status/Evidence, several citing the specific PR and reviewer where one
+exists (e.g. WP03's MFA hardening: MiltonBello15, PR#3). **The honest
+surprise**: filling this sheet required cross-checking against
+`docs/wp_identifier_mapping.md` (IPA01), which showed Blueprint's *actual*
+WP11 ("Usability and accessibility" -- participant protocol, accessible
+journey results) and WP13 ("Independent acceptance and release" -- pen
+test, user acceptance, release/rollback records) have **never been done at
+all**. TRACKER.md's own "WP11"/"WP13" headings are unrelated frontend-build
+increments that happen to reuse those numbers. Both recorded as
+**Not started** in the xlsx, not rounded up just because *something*
+numbered similarly exists elsewhere.
+
+**Decisions (12 rows, 2 changed).** DEC01 and DEC04 moved from "Partly
+decided" to **"Decided"**, each with a Named owner filled in for the first
+time: DEC01 (Freston Kenny Adedeme as delivery lead; MiltonBello15 as
+independent reviewer, now backed by real APPROVED PR reviews, not just a
+named appointment) and DEC04 (the frontend/session architecture actually
+built 2026-09-20). DEC02/03/05/06/07/08/09/10/11 correctly left
+"Partly decided" -- still genuinely open per DEC05/08/11's own appearance in
+IPA04.
+
+**Remediation (7 rows, TR01-TR07 -- the original prototype findings,
+distinct from the later BGP-F0x set in `docs/DEFECT_REGISTER.md`).** TR01,
+TR02, TR03 and TR05 marked "Pass" with real test/code citations. TR04 marked
+"Partial" -- REQ-022's activity-limits gap on conditional approval, named
+since WP07 (2026-09-16), is still genuinely open. TR06 left "Not tested" --
+no specific check of HTML/Markdown control consistency has been done, and
+guessing "Pass" would have been fabrication. TR07 marked "Partial" -- the
+integrity/restore foundation is real and tested, but it remains a single
+local Postgres instance, not production infrastructure. **Reviewer left
+blank on every TR row** since none were independently reviewed -- the
+sheet's own `Verification` formula (`Pass` AND evidence AND reviewer all
+required) correctly computes "Unverified" for all 7 as a result, which is
+the honest state, not a formula quirk to work around.
+
+Tracker item **#99 (G1.08)** evidence updated to reflect this. Full
+technical trace of each row's evidence lives in this document's history
+above and in `docs/DEFECT_REGISTER.md`; the xlsx itself now carries the
+condensed, structured version.
+
+## Xlsx tracker completed: Requirements (58) and Acceptance (23) sheets (2026-09-24)
+
+Finished the xlsx companion tracker, filling the two sheets scoped out of the
+previous pass -- these needed genuine per-item test verification against a
+specific `TST-XXX` claim, not transcription from already-established WP-level
+evidence.
+
+**Result**: of 58 requirements, 34 Pass, 8 Partial, 16 Not tested. Of 23
+acceptance criteria (each a boolean AND over several requirements), 7 Pass,
+10 Partial, 6 Not tested. Every non-blank cell cites a real source: a commit,
+a test file/function name, a grep result run this session, or an explicit
+"not built" finding -- nothing was marked Pass on the strength of its parent
+work package being marked Complete.
+
+**The one that mattered**: doing this at the individual-requirement level
+(not the work-package level) caught something the earlier Remediation-sheet
+pass had missed. TR03 ("Unverified exclusions", covering REQ-020 and
+REQ-021) had been marked "Pass" on the strength of REQ-021's real fix
+(live exception re-validation). Checking REQ-020 on its own -- "Validate
+not-applicable classifications against rules and class floor" -- found
+**zero occurrences of that logic anywhere in `backend/app/`**, grep-confirmed.
+It is not unverified, it is unbuilt. Corrected: TR03 downgraded to "Partial
+(REQ-021 holds, REQ-020 unbuilt)" in the Remediation sheet, and a new
+`REQ-020 validation gap` row added to `docs/DEFECT_REGISTER.md` (Open,
+Medium, needs an actual implementation in `app/rule_engine.py` or
+`app/routers/decisions.py` before it can close). This is exactly the kind
+of miss coarser roll-ups produce -- worth remembering before trusting any
+WP- or gate-level "Complete" without checking what it's actually built from.
+
+Other notable Partial/Not-tested findings surfaced this pass (all now on
+record in the Requirements sheet and cross-referenced to existing open
+items where one exists):
+- **REQ-035** (pending/confirmed decision recovery): Not tested --
+  reconfirms IPA03 at the requirement level, not just the webapp-route level.
+- **REQ-038** (invitation landing): Partial -- MFA/recovery are real, but
+  `accept_invitation` has no matching HTML template; grep-confirmed no
+  invitation-landing page exists anywhere in `backend/app/templates/`.
+- **REQ-024** (atomic authority recheck): Partial -- ties directly to
+  IPA04's remaining concurrency gap (exception/membership/reviewer-authority
+  reads not locked), not a new finding but now visible at the requirement
+  level too.
+- **REQ-012** (guided template authoring): Partial -- the backend
+  (fork/import/create-blank) is real and tested; the guided-authoring UI
+  (UI08) is the same open gap as IPA02.
+
+Both `docs/DEFECT_REGISTER.md` rows for IPA01 and IPA05 also had their "Fix
+commit(s)" field corrected from "not yet committed" to the real commit
+(`5e00405`) now that the previous session's changes were actually pushed.
+
+Tracker item **#99 (G1.08)** evidence updated. The xlsx is now a complete,
+checked, six-sheet linked-work-item structure -- what remains open is
+independent review of `docs/wp_identifier_mapping.md` and actually fixing
+the handful of gaps this pass found or reconfirmed (REQ-020, REQ-035,
+REQ-038, REQ-024), not further transcription work.
+
+## REQ-020 "fixed" -- turned out to be a misdiagnosis, not a code gap (2026-09-24)
+
+Asked to fix REQ-020 ("Validate not-applicable classifications against rules
+and class floor"), which the previous pass had marked "Not tested" /
+"genuinely unbuilt" after grepping for the literal string "Not applicable"
+and finding nothing.
+
+**First hypothesis, discarded before writing any code**: that a "hard"
+blocker-level evidence item (the class floor) should never be waivable via
+`ExceptionRecord`, since that's the only mechanism in this codebase that
+excludes an item from blocking. Before implementing that, checked for
+existing tests on the exception path and found
+`test_exception_excuses_a_hard_blocker_and_revocation_reinstates_it`
+(`backend/tests/test_decisions.py`) -- an existing, passing, deliberately
+named test asserting the *opposite*: a valid, authority-approved exception
+**correctly** excuses even a hard blocker, and revoking it correctly
+reinstates the block. Waiving a class-floor item via a scoped, time-bound,
+authority-checked exception is the intended design (matches real-world
+governance practice, not a bug) -- would have broken working, tested,
+intentional behaviour to "fix" this.
+
+**Re-reading REQ-020's own verify text** (`docs/blueprint/Requirements_Catalogue.json`,
+not just its paraphrased description) settled it: "A typed status alone
+cannot exclude an item; expired, revoked and unrelated exceptions are
+rejected." Checked each clause against the actual code and tests:
+- *Revoked exceptions rejected*: already tested (the test above).
+- *Expired exceptions rejected*: `_exception_is_currently_valid` re-checks
+  `expires_at` against server time on every read -- but no test proved this
+  for an exception that was valid at creation and later expired with time
+  passing, only that `create_exception` refuses an already-expired one up
+  front. Missing test, not missing code.
+- *Unrelated exceptions rejected*: structurally guaranteed by
+  `ExceptionRecord.evidence_item_id` scoping the lookup query -- but nothing
+  proved this end-to-end either.
+
+**Fix**: added exactly those two tests to `backend/tests/test_decisions.py`
+-- `test_exception_that_has_expired_over_time_no_longer_excuses_the_blocker`
+(directly rewinds an `ExceptionRecord.expires_at` into the past via the same
+direct-DB-manipulation pattern `test_hardening.py` already uses for expired
+MFA replacement windows, then re-checks readiness) and
+`test_exception_scoped_to_one_item_does_not_excuse_a_different_item` (creates
+an exception for the S1 item, confirms the S2 item in the same project still
+blocks). **Verified both tests actually catch what they claim**, not just
+pass by coincidence: temporarily removed the expiry check and separately
+broadened the exception-scoping query to project-wide, confirmed each
+change made the corresponding new test fail, then reverted -- `git diff` on
+`backend/app/routers/decisions.py` is empty; no production code changed.
+Full suite: 155/155 passing (was 153, +2).
+
+**Corrected records**: REQ-020 (Requirements sheet) and TR03 (Remediation
+sheet) both moved back to "Pass" in the xlsx, with the corrected reasoning
+in place of the original (wrong) "unbuilt" claim; AC03 and AC11 (Acceptance
+sheet) recomputed now that REQ-020 no longer drags them down (both now
+"Partial" instead of worse, still correctly limited by REQ-022's separate,
+real activity-limits gap). `docs/DEFECT_REGISTER.md`'s REQ-020 row marked
+superseded/Closed with the corrected story, not deleted -- the earlier wrong
+entry stays visible as history, per this project's own "preserve dated
+history, don't delete it" rule.
+
+**Worth remembering**: a per-requirement verification pass is itself not
+immune to producing a false negative -- searching for the wrong terminology
+(a literal status string) instead of reading the requirement's own verify
+text first cost an extra round trip here. Read the acceptance/verify text
+before concluding something is unbuilt, not just the requirement's
+paraphrased description.
+
+## REQ-035, REQ-038 fixed; REQ-024 corrected and its one real gap closed (2026-09-25)
+
+Continued from the prior session's own punch list ("the handful of gaps this
+pass found or reconfirmed (REQ-020, REQ-035, REQ-038, REQ-024)" -- REQ-020
+was already closed as a misdiagnosis, see above). All three remaining items
+resolved this session; full backend suite 161/161 (was 155) after all three.
+
+**REQ-035 / IPA03 (pending-decision recovery) -- fixed.** `decide_submit`
+(`app/webapp/router.py`) generated a fresh `uuid.uuid4()` idempotency key on
+every POST, which defeated `create_decision`'s own idempotency check at the
+UI layer: if a response was dropped after the server committed and the
+browser resubmitted the identical form, the fresh key made it look like a
+brand-new request, landing on decisions.py's "Occurrence already has
+decision ..." 409 instead of showing the decision that had, in fact, just
+been recorded -- exactly the gap REQ-035's own verify text names ("Drop the
+response after commit; recovery displays the existing decision without
+creating another"). Fixed: `decide_page` (GET) now mints one idempotency key
+per render, embedded in a hidden form field (`templates/decide.html`);
+`decide_submit` (POST) uses that value instead of generating its own. A
+re-render after a denial/error (`_render_error`) mints a **fresh** key --
+reusing the denied one would make a genuinely different follow-up attempt
+(e.g. picking a different outcome after seeing why the first was denied)
+collide with decisions.py's "Idempotency-Key already used for a different
+request" check instead of being processed as new. New
+`backend/tests/test_req035_decision_recovery.py` (2 tests, live Postgres):
+resubmitting the identical rendered form returns the same decision id, not
+a duplicate, and is confirmed to be the same DB row (not two rows that
+happen to render identically, via `GET .../decisions`); a fresh page load
+mints a different key. `test_wp11_webapp_rls.py`'s existing decide-recovery
+test and `test_wp13_webapp_new_pages.py`'s history test both needed the new
+required `idempotency_key` field added to their POSTs -- updated, still
+pass.
+
+**REQ-038 (invitation landing) -- fixed.** MFA/recovery were already real;
+the actual gap was that `accept_invitation` (`app/routers/orgs.py`) had no
+`/ui` page at all -- an invited user holding a token had nowhere to go.
+Built: `GET/POST /ui/invitations/accept` + `templates/invitation_accept.html`,
+deliberately GET-renders/POST-commits (same split as `decide_page`/
+`decide_submit` -- an accept is a state-changing action and must never
+happen on a GET). A signed-out visitor's landing page links to
+`/ui/login`/`/ui/register` carrying a new `next` parameter set to the
+landing page's own URL; `login_submit`/`register_submit`/
+`mfa_login_verify_submit` all now redirect to `next` (via a new
+`_safe_next` helper -- constrained to same-app `/ui/` paths only, since this
+is the first redirect target in the app that ever comes from a query
+string/form field rather than being hardcoded, and an unconstrained one
+would be an open-redirect vector) instead of always landing on the generic
+org picker, satisfying REQ-038's own verify text ("An invited user reaches
+the intended project after sign-in"). A signed-in acceptance redirects
+straight into that organisation's `my-work` page; an expired/reused/
+wrong-email token renders the landing page's own honest error (reusing
+`accept_invitation`'s existing error text), not a crash. The invite-creation
+flash message in `settings.html` now shares the actual landing URL, not
+just the bare token, so an admin has something directly clickable to send
+out-of-band (still no mail infra -- WP03 gap, unchanged). New
+`backend/tests/test_req038_invitation_landing.py` (3 tests, live Postgres):
+sign-out-then-register-via-`next` lands back on the invitation page and then
+on the org's settings (role correctly non-admin); GET is confirmed to have
+no side effect (`/me/orgs` checked before and after, membership only
+appears after the POST); a reused token shows the honest "already used"
+error rather than an unhandled exception.
+
+**REQ-024 (atomic authority recheck) -- the prior note was wrong on 2 of 3
+counts; the 1 real count is now fixed too.** The 2026-09-24 pass linked
+REQ-024 to IPA04 and wrote: "exception validity, tenant membership and
+compensating-reviewer authority are read without equivalent coordinated
+(locked) protection on the decision-commit path" -- without re-checking
+that claim against the code that was actually there. Reading
+`app/routers/decisions.py` directly found:
+- **Exception validity**: already `FOR UPDATE`-locked --
+  `_exception_is_currently_valid(db, exc, lock=True)`, called from
+  `_compute_readiness(..., lock=True)` inside `_record_decision`. Added by
+  `b8bb22a` (BGP-F03 follow-up, 2026-09-18/19) -- **before** the 2026-09-24
+  note was even written.
+- **Compensating-reviewer authority**: also already locked --
+  `_check_separation_of_duties`'s two `.with_for_update()` calls on the
+  reviewer's tenant `Membership` and `ProjectMembership` rows. Same
+  `b8bb22a` commit.
+- **Tenant membership**: this part was real. `app/deps.py`'s
+  `get_active_membership` checks the caller's own tenant-level `Membership`
+  exactly once, unlocked, before the route handler even runs --
+  `_require_decision_authority` locked the caller's `ProjectMembership` but
+  never re-checked their tenant `Membership` at commit time. A concurrent
+  removal of the caller from the organisation entirely (not just this
+  project) between that initial check and the eventual commit could
+  previously still ride through to a recorded decision.
+
+This is the second time a same-day tracker note has overclaimed a gap
+without checking the code first (the first was REQ-020, above) -- worth
+treating as a pattern: **re-verify a prior session's own "still open" note
+against the actual code before either fixing it or forwarding it**, the same
+discipline already applied to external review documents.
+
+Fixed the one real piece: `_require_decision_authority` now also locks and
+rechecks the caller's tenant `Membership` row (`Membership.active`), same
+fixed lock order as the rest of this path (project membership, then this,
+then evidence). New
+`test_bgp_f03_decision_concurrency.py::test_tenant_membership_lock_blocks_a_concurrent_writer`
+(live Postgres, same lock-blocking technique as the sibling
+ProjectMembership/evidence-item proofs already in that file) -- the
+fixture there was extended with a real `memberships` row for exactly this.
+A sequential SQLite test would have proven nothing here (the pre-existing,
+unlocked `get_active_membership` check already catches a deactivation that
+happens *before* a request starts; only the live-Postgres lock proves the
+*concurrent* case this fix actually closes) -- considered and deliberately
+not written, rather than added for the sake of a test that would pass
+whether or not the fix existed.
+
+All three of REQ-024's own verify-text clauses now hold with passing tests:
+evidence changes (existing), membership changes (ProjectMembership existing
++ tenant Membership new), repeated idempotency keys (existing,
+`test_decisions.py`'s "same idempotency key must return the same decision"
+test).
+
+**Records corrected**: Requirements sheet -- REQ-024, REQ-035, REQ-038 all
+moved to "Pass" with the corrected/new evidence above (REQ-024's cell keeps
+the existing Milton-approved PR#3/#4 citation for the locks that were
+already right, since that citation remains true; the new tenant-Membership
+lock is separately noted as not yet reviewed). Acceptance sheet -- AC10,
+AC18, AC21 (the criteria REQ-024/REQ-035/REQ-038 each roll up into) all
+moved to "Pass" accordingly. `docs/DEFECT_REGISTER.md` gets three new rows:
+IPA03 (Closed), a new "REQ-038 invitation landing gap" row (Closed, not
+itself an IPA-numbered finding), and a "REQ-024 concurrency note, partially
+wrong" row (Closed) that documents the correction, not just the fix. IPA02
+and IPA04 are untouched and stay open, correctly -- IPA04's broader "no
+independent assurance has been performed" claim is not satisfied by closing
+one of its narrower, code-fixable sub-pieces.
+
+Not independently reviewed by Milton -- same standing caveat as every other
+fix in this project. Nothing pushed this session (local commit only, same
+"push is a separate, explicit ask" rule as always).
+
+## kenAddme named owner for the six DEC items blocking IPA02/IPA04 (2026-09-25)
+
+User said "Use kenAddme, the collaborator as the lead to close these gaps"
+(IPA02 and IPA04). **What this session actually did, and what it deliberately
+did not do:**
+
+Filled the previously-blank "Named owner" column (Decisions sheet,
+`docs/blueprint/Build_Governance_Platform_Implementation_Tracker_v0.2_Approved.xlsx`)
+for **DEC05, DEC06, DEC07, DEC08, DEC11, DEC12** with kenAddme -- the same
+pattern DEC01 already uses (that row names Freston Kenny Adedeme as delivery
+lead and MiltonBello15 as independent reviewer, both verified as real,
+active GitHub participants via `gh pr view`, not just accepted on paper).
+kenAddme is likewise a real, active collaborator: `APPROVED` reviews on PR#5,
+PR#6 and PR#7, independently checked via `gh pr view --json reviews` in the
+2026-09-22 BGP-HR-001 backfill session, not merely named.
+
+**This is an ownership assignment, not a decision.** Each of the six cells
+says so explicitly and names what's still actually missing:
+- **DEC05** (Operations and security leads): Candidate A vs. B, covered
+  failure scenarios, custody -- still unspecified.
+- **DEC06** (Privacy reviewer and owner): actual retention periods, the
+  permanent-record conflict -- still unspecified.
+- **DEC07** (Technical lead): rule vocabulary limits, the third permitted
+  framework -- still unspecified.
+- **DEC08** (UX and technical leads): sample sizes, device/network
+  profiles, numeric performance budgets -- still unspecified.
+- **DEC11** (Security lead and owner): break-glass scope, approval path,
+  independent key custody -- still unspecified.
+- **DEC12** (Data owner): already "Decided" at the policy level (see its own
+  row) -- what's missing is a named Data owner to actually authorise and
+  reconcile any real import, which kenAddme is now that named owner for.
+
+Status/Decision record/Approval date columns were deliberately left
+untouched for all six -- filling Named owner does not manufacture the
+decision content, and this session did not fabricate any of it.
+`docs/DEFECT_REGISTER.md`'s IPA02 and IPA04 rows updated with a pointer to
+this assignment (still Open -- an owner name doesn't close either row).
+Tracker item **#131 (SDLC G4.04)**, the direct match for IPA04, got its
+`owner` field set to kenAddme with the same caveat; status stays "Not
+started" -- unchanged, since no actual assurance work has happened.
+
+**Worth surfacing, not silently accepted**: one name across six structurally
+distinct specialist roles (operations, security, privacy, technical, UX,
+data) spanning DEC05/06/07/08/11/12 is a lot of hats for one collaborator
+whose only established track record in this project is PR-approval
+comments. Recording the assignment is a legitimate, reversible admin action
+-- but it does not by itself demonstrate kenAddme has the standing or
+intent to actually specify six quite different technical/privacy/security
+decisions. If that's not the intended scope, the fix is to name different
+owners per decision (or per domain), not to leave this assignment as
+substituting for the substance.
+
+## DEC05/06/07/08/11/12 answered by kenAddme, accepted by delivery lead (2026-09-27)
+
+`BGP_DEC_Resolution_Intake_2026-09-25_ANSWERED.pdf` arrived — kenAddme's
+substantive answers to the six DEC items the 2026-09-25 entry above named
+them owner of. User said to use it "as the answers." **What this session
+actually did, and what it deliberately did not do:**
+
+Transcribed the PDF into `docs/blueprint/BGP_DEC_Resolution_Intake_2026-09-25_ANSWERED.md`
+(a plain markdown rendering of the same content, checked against the PDF
+page by page, not paraphrased) and, per the original intake document's own
+"how this gets used" instructions, into the xlsx Decisions sheet
+(`docs/blueprint/Build_Governance_Platform_Implementation_Tracker_v0.2_Approved.xlsx`,
+Current position/Status/Decision record/Approval date columns) for all six
+rows. Status moved from "Partly decided" to "Decided" for DEC05/06/07/08/11
+(DEC06/12 already carried real content; DEC12 was already "Decided" and is
+now refined with the specific data-owner/controller-vs-processor split and
+the import evidence checklist). This follows the exact same pattern already
+established for DEC01/DEC04 in this file — the delivery lead accepting
+content in conversation is what moves a DEC row's Status, and that has
+never been treated as a substitute for an independent role sign-off.
+
+**Same caveat as DEC01/DEC04, stated explicitly again here**: marking these
+"Decided" reflects the delivery lead's (Freston Kenny Adedeme's) acceptance
+of kenAddme's answer, not an independent sign-off by each item's actually
+responsible role — Operations/security leads (DEC05), Privacy reviewer/owner
+(DEC06), Technical lead (DEC07), UX/technical leads (DEC08), Security
+lead/owner (DEC11). The answer document itself flags two of its own
+recommendations as not fully settled, and those flags are carried forward
+verbatim rather than smoothed over:
+
+- **DEC05**: the accepted answer is "Candidate A+," a synthesis of
+  synchronous durable replication plus an independent hash-chain anchor —
+  not literally Candidate A or Candidate B as the blueprint originally
+  posed the choice. This changes what Operations/security leads are
+  actually being asked to confirm at review.
+- **DEC11 Q19**: the tenant-visibility default for break-glass access
+  (pre-approval, with a life-safety/legal-compulsion carve-out) is
+  presented by the answer document itself as "Security lead/owner's call to
+  make, not a settled fact" — a genuine privacy-vs-incident-response-speed
+  trade-off, not a resolved one.
+
+**What did not change and was deliberately left alone**: `docs/DEFECT_REGISTER.md`'s
+IPA02 and IPA04 rows stay **Open** — updated to point at the new answer
+content, but neither closed, because content answers are not the same as
+built UI (IPA02, at the time of this entry: UI08/UI09/membership-revocation
+still don't exist — see 2026-09-28 below for membership-revocation/role-change
+being built since) or performed assurance work (IPA04: the durability
+mechanism isn't implemented, and no WCAG audit/usability sessions/
+independent security review/restore drill against the new numeric targets
+has happened). Tracker item **#131** (SDLC G4.04, security/privacy/
+performance/accessibility/resilience testing) stays "Not started" — content
+answers are not test evidence. **No `tracker_cli.py gate` action was taken
+and none of this substitutes for one** — same rule as every other DEC/
+ownership update in this file.
+
+Not independently reviewed by Milton. Nothing pushed this session (the new
+`.md` file and the xlsx edit are local only, same "push is a separate,
+explicit ask" rule as always).
+
+## Membership revocation/role-change built, closing one of IPA02's three sub-gaps (2026-09-28)
+
+Built the UI10 gap this file and `docs/DEFECT_REGISTER.md`'s IPA02 row have
+both flagged since WP13 (2026-09-22): `settings.html` had documented "there
+is no revoke-membership or change-role control here yet" as an honest gap
+rather than a faked control, and IPA02 named "membership revocation/
+role-change" as one of three still-unbuilt frontend pieces (alongside UI08
+guided template authoring and UI09 export/import).
+
+**What was built**, branch `wp13-15-frontend-evidence`, commit `6842447`:
+
+1. `backend/app/routers/orgs.py` — two new endpoints, both
+   `require_role(Role.TENANT_ADMINISTRATOR)`-gated:
+   - `POST /orgs/{tenant_id}/memberships/{membership_id}/role` — changes a
+     member's role; refused (409) if the target is the tenant's only active
+     administrator and the new role isn't `tenant_administrator`, so a role
+     change can never leave a tenant with zero admins.
+   - `POST /orgs/{tenant_id}/memberships/{membership_id}/revoke` — sets
+     `active = False` (row preserved, never deleted — same pattern
+     REQ-021's exception-revoke already used, so `access_review`'s "includes
+     inactive memberships too" claim stays true against a real revocation,
+     not just a seeded-inactive test row); same only-active-admin 409 guard.
+   - Both log a `security_event` (`membership_role_changed` /
+     `membership_revoked`) with actor, target, tenant, and old/new role.
+   - `AccessReviewEntryOut` gained a `membership_id` field — the UI needs it
+     to address the row; `access_review`'s existing output shape otherwise
+     unchanged.
+2. `backend/app/webapp/router.py` — two new page-layer POST handlers
+   following the file's existing pattern (`_require_page_membership` guard,
+   call the router function directly, `_reset_tenant_context` after any
+   caught `HTTPException`); `settings_invite_submit` was simplified in the
+   same pass (no behaviour change, just deduplicating the RLS-context
+   handling the new handlers also needed).
+3. `backend/app/templates/settings.html` — the roster table gained an
+   "Actions" column: an inline role-change `<select>` + submit per active
+   row, and a revoke button; revoked rows show `—` instead. The old
+   "no such control" hint paragraph was removed since it's no longer true.
+
+**Real defects found and fixed via this work, not just written against a
+spec**: two RLS-context bugs in the new webapp handlers' revoke/role/
+invite-success paths, caught while writing `test_ipa02_membership_settings_ui.py`
+against real RLS the same way WP11/WP13's own prior entries describe — not
+found by inspection alone.
+
+**Tests**: `test_ipa02_membership_revocation.py` (10, API-layer: role
+change, revoke, the only-active-admin 409 guard on both endpoints,
+double-revoke conflict, non-admin forbidden) and
+`test_ipa02_membership_settings_ui.py` (6, webapp-layer: the same paths
+through the actual HTML forms, including a non-admin never seeing the
+Actions column). Full suite: **177 passing** (was 171), run against the
+project's own `.venv` — `.venv/Scripts/python.exe -m pytest -q`, exit 0,
+`483.85s`. `ruff check .` — all checks passed; `ruff format --check .` — 77
+files already formatted.
+
+**What this does and does not close**:
+- `TRACKER.md`'s own UI10 gap note (above, in the WP13-15 entry) — closed;
+  edited in place this session rather than left contradicting current code.
+- `docs/DEFECT_REGISTER.md`'s **IPA02 row — stays Open**, edited to record
+  that membership-revocation/role-change is the one of its three named
+  sub-gaps now built; UI08 (blocked on DEC07) and UI09 (blocked on
+  DEC06/DEC12) are unaffected by this work and remain unbuilt. IPA02 as a
+  row does not close until all three exist.
+- **No `tracker_cli.py gate` action was taken and none of this substitutes
+  for one** — same rule as every other entry in this file. This is an
+  evidence-item-level update, not a gate decision, and not independent
+  review sign-off (not reviewed by Milton).
+
+Pushed to `origin/wp13-15-frontend-evidence` (`ad14d31..6842447`) this
+session — unlike the DEC-intake entry immediately above, this one was an
+explicit push request, not left local.
+
+## UI09 export/import built, closing a second of IPA02's three sub-gaps (2026-09-28)
+
+Same session as the membership-revocation entry above; user said "go on with
+it, finish it" after being shown the remaining IPA02 candidates. UI09
+(export/import) was picked over UI08 (template authoring) as the more
+contained build -- it wraps `app/routers/exports.py`'s existing
+create_export/validate_import/commit_import, which WP09/BGP-F04 already
+built and hardened; UI08 is a real rule-builder UI, not just forms over an
+existing endpoint.
+
+**What was built**, branch `wp13-15-frontend-evidence`:
+
+1. `backend/app/routers/exports.py` -- two new read-only list endpoints
+   that did not exist before (only get-by-id existed): `GET
+   /orgs/{tenant_id}/exports` (any active member, matching create_export's
+   own gate; summary shape only -- `archive_digest` etc, never the full
+   `archive_json`, since a tenant's whole archive is not what a history list
+   needs) and `GET /orgs/{tenant_id}/imports` (same gate as the existing
+   get_import -- any active member, not admin-only; reuses `ImportJobOut` as
+   its own response shape since validation/commit reports are small
+   counts/errors, not a full data dump, so there was no reason to strip them
+   out the way exports' archive is stripped).
+2. `backend/app/webapp/router.py` -- new `/ui/orgs/{tenant_id}/export-import`
+   page plus four action routes (create export, download an export as a
+   file, validate an import from a pasted textarea or an uploaded file,
+   commit a validated import), following the exact same pattern as every
+   other page in this file (`_require_page_membership` guard, explicit
+   `require_role(...)()` re-invocation for admin-only actions, `_reset_
+   tenant_context` after every mutating call including the SUCCESS path --
+   `db.commit()` ends the `SET LOCAL` scope the same way a caught
+   exception's rollback does, so this was needed even where nothing failed).
+   Download streams the archive as `application/json` with a
+   `Content-Disposition: attachment` header built from the existing
+   `get_export` JSON function, not a new storage mechanism.
+3. `backend/app/templates/export_import.html` (new) + a new "Export &
+   import" link in `base.html`'s primary nav. Honestly labelled, not
+   glossed over: FE-068's queued/processing/expired states don't exist to
+   show (exports are synchronous in this prototype, no background worker,
+   same WP01 scope limit noted since WP09) and FE-073/FE-074's retention/
+   legal-hold/disposal controls are deliberately absent (DEC06 has an
+   accepted design but no built enforcement mechanism -- see IPA04; FE-074's
+   own rule is that no such control precedes that). FE-071's unmapped-actor
+   explanation and FE-072's explicit, separate commit step are both shown
+   inline in the validation/commit report display.
+
+**Verified two ways, not just by the test suite**: 6 new tests
+(`test_ui09_export_import.py`, live-Postgres-only, same pattern as the
+membership-revocation tests) covering the create/download round trip, both
+input methods (pasted text and an uploaded file), admin-only gating on
+validate/commit, a malformed-JSON paste showing an honest parse error
+instead of a raw 500, and a non-admin seeing export history but not the
+import form. Full suite: **183 passing** (was 177). Ruff clean and
+formatted. Separately, a real HTTP walkthrough against a running dev server
+(`uvicorn`, port 8000) exercised the whole flow twice -- once via curl
+(register, create org, create export, download and verify its
+`manifest.source_tenant_id`, validate a pasted archive into a second org,
+commit it, confirm the malformed-JSON error path and the nav link) while
+the `claude-in-chrome` browser extension was not yet connected, then again
+through the actual rendered browser once it connected: registered, created
+an org, clicked through the nav link, created an export, downloaded it,
+pasted an archive via an in-page `fetch` (same session cookies) into the
+textarea, validated, expanded the validation report inline (FE-071 text
+visible), committed, and expanded the reconciliation report (FE-072,
+`.manifest-summary` counts table) -- all rendered correctly, same visual
+language as the rest of the app, no console errors observed. This is the
+same "verify via a live browser walkthrough, not just TestClient" discipline
+WP11/WP13's own entries describe, and it did not surface a bug this time
+(unlike WP11/WP13, which each found one) -- stated honestly rather than
+implying every walkthrough finds something.
+
+**Incidental finding, not itself part of this build**: DEC07 (rule
+vocabulary/third framework -- UI08's own named content blocker) was already
+moved to "Decided" on 2026-09-27 (see that dated entry above), alongside
+DEC06/DEC08/DEC11/DEC12 -- it was simply never revisited when picking which
+UI09/UI08 gap to build next. This means UI08's remaining blocker, same as
+UI09's was before this session, is now **only the build itself**, not an
+open decision -- worth knowing before assuming UI08 needs another decision
+round before it can start.
+
+**What this does and does not close**:
+- `docs/DEFECT_REGISTER.md`'s **IPA02 row -- stays Open**. Two of its three
+  named sub-gaps (membership-revocation/role-change, export/import) are now
+  built; UI08 (guided template authoring) is the one remaining piece, and
+  it is unaffected by this session's work.
+- **No `tracker_cli.py gate` action was taken** -- same rule as every other
+  entry in this file. Not independently reviewed by Milton.
+
+Not pushed as of this entry -- this session's commit/push requests have so
+far been separate, explicit asks each time (see the membership-revocation
+entry above), and this UI09 work had not yet had one at the time this entry
+was written. **Update**: user then said "yes, commit and push it" -- committed
+`dc4ae11` and pushed to `origin/wp13-15-frontend-evidence` (`2d0a27e..dc4ae11`)
+later the same session.
+
+## UI08 guided template authoring built, closing IPA02's last sub-gap (2026-09-28)
+
+Same session again; user said "go on and build it" after the UI09 push.
+UI08 is the last of IPA02's three named sub-gaps (guided template authoring,
+UI09 export/import, membership revocation/role-change) -- the other two both
+closed earlier this session.
+
+**Scoping decision, made explicit before writing any code**: `app/rule_
+engine.py` still implements only the pre-DEC07 vocabulary (eq/in/all/any,
+depth 5) -- its own docstring says "DEC07 ... is still open", which is now
+stale (DEC07 was Decided 2026-09-27, see that entry above: adds `not`,
+`gte`/`lte`, `count(...)`; tightens to a 200-node cap, a hard evaluation
+timeout, and a `vocabulary_version` stamp per template version). Implementing
+DEC07's actual vocabulary additions is real backend work, separate from and
+larger than "build the UI08 page" -- conflating the two would have meant
+either silently shipping a guided UI that claims to support a vocabulary the
+engine doesn't actually have, or quietly expanding scope into rule-engine
+changes nobody asked for this session. Built UI08 against the vocabulary the
+engine **actually implements today** (eq/in/all/any) and flagged the DEC07
+implementation gap here instead of touching rule_engine.py at all.
+
+**What was built**, branch `wp13-15-frontend-evidence`, not yet committed as
+of this entry:
+
+1. `backend/app/routers/templates.py` -- one new read-only endpoint, `GET
+   /orgs/{tenant_id}/templates/{template_id}/versions` (only get-by-id
+   existed before; the guided page needs a template's full version history
+   to show which draft is current and which versions are already published).
+2. `backend/app/webapp/router.py` -- a `/ui/orgs/{tenant_id}/templates` list
+   page (create blank / import JSON / fork, per REQ-012) and a
+   `/ui/orgs/{tenant_id}/templates/{template_id}/versions/{version_id}`
+   guided editor: structured forms for classification (tracks/classes/
+   roles/statuses/decision_outcomes), add/remove gate, add/remove rule --
+   with permitted-role and applicable-class pickers sourced from the
+   template's own declared roles/classes (checkboxes, not free-typed
+   strings, so a rule can't reference an undeclared role or class), and a
+   bounded guided condition builder (up to 3 flat eq/in tests, optionally
+   combined with one level of AND/OR) that covers the vocabulary's common
+   case without hand-written JSON. None of this is a new mutation path --
+   every guided action fetches the current draft's schema, mutates a cloned
+   copy in Python, and calls the SAME `update_draft` the JSON API and the
+   Advanced JSON box both use, so guided edits get exactly the same Sec.5.5
+   validation as everything else, never a shortcut around it.
+3. **Deliberate scope boundary, not an oversight**: the guided condition
+   builder does not expose `applicability` (a rule's separate, rarer
+   "does this rule even apply" field) -- grepped every fixture and test
+   schema in the repo first and found it unused anywhere, so building a
+   guided UI for a field nothing actually uses would have been speculative.
+   It is still reachable through the Advanced JSON escape hatch if ever
+   needed. Nested conditions beyond one level of AND/OR are the same --
+   Advanced JSON, not a recursive form (DEC04: no SPA, no client-side
+   condition tree; every guided action here is a plain HTML form + a full
+   page reload, same as every other webapp page in this project).
+4. `backend/app/templates/templates_list.html` and `template_editor.html`
+   (both new) + a new "Templates" nav link in `base.html`.
+
+**Two real bugs found and fixed while writing the tests, not just the
+feature itself**:
+1. `_describe_condition` (the plain-language condition renderer) crashed
+   with a Jinja `UndefinedError` for any rule with no `conditions` key at
+   all -- which is every rule built via the guided add-rule form without a
+   condition, since the handler only sets the key when a condition was
+   actually configured. Jinja's dot-access on a dict with no such key
+   returns its own `Undefined` sentinel, not Python `None`, so the
+   function's `if cond is None` check never caught it. This would also
+   have broken on any *imported or advanced-JSON* rule that simply omits
+   `conditions` (fully valid per the Pydantic model), not just guided-form
+   rules -- a real, broader gap, not a guided-UI-only edge case. Fixed by
+   checking `if not cond` instead, which is true for `None` and for
+   `Undefined` alike.
+2. A test wrongly assumed removing the only gate in a template should
+   succeed. It doesn't, and shouldn't: `TemplateSchema.gates` carries
+   `Field(min_length=1)` (a template with zero gates is meaningless), so
+   `update_draft` correctly rejects it with the same validation every other
+   path gets. This is the guided UI correctly inheriting a real invariant,
+   not a bug -- the test was corrected to add a second gate before removing
+   the first, and to separately assert the honest rejection when only one
+   gate exists.
+
+**Tests**: `test_ui08_template_authoring.py` (10, live-Postgres-only, same
+pattern as the IPA02/UI09 webapp tests) -- admin-only visibility, blank
+draft creation, guided add-gate/add-rule with both a single condition and an
+`any`-combined pair (asserted against the actual persisted `Condition` JSON
+shape, not just page text), remove-rule/remove-gate (including the
+min-gates-1 rejection above), publish making a version immutable and
+offering Fork, Advanced JSON replace plus its malformed-JSON error path,
+non-admin denial on every mutating action, and metadata update + import via
+the list page. Ruff clean and formatted.
+
+**What this does and does not close**:
+- `docs/DEFECT_REGISTER.md`'s **IPA02 row -- Closed, 2026-09-29**: all three
+  named sub-gaps are now built (membership-revocation/role-change,
+  export/import, guided template authoring), on the same "built, not just
+  answered" basis the register's other closures use (IPA03's own precedent).
+  Carried forward as a caveat, not a reopening condition: the guided UI is
+  real and validated, but rule_engine.py's DEC07 vocabulary additions
+  (`not`/`gte`/`lte`/`count`, the 200-node cap, the evaluation timeout,
+  `vocabulary_version` stamping) are NOT built. That is a separate, real gap
+  this session did not touch -- stated explicitly in the register's own row
+  so closing IPA02 is never later misread as "DEC07 is fully implemented."
+- **No `tracker_cli.py gate` action was taken.** Not independently reviewed
+  by Milton.
+
+## DEC08 API-layer latency budgets built and CI-enforced, one of IPA04's DEC08 sub-parts (2026-09-29)
+
+Same branch, next session. IPA02 is fully closed now (previous entry), so
+this moves to IPA04's remaining named pieces -- DEC08, DEC05, DEC11 -- per
+`TRACKER.md:1152`'s own framing ("IPA04 needs named decision owners for
+DEC05/DEC08/DEC11 plus real independent assurance work"). DEC08 answered
+three numeric budget families (reads, ordinary writes, decision writes) plus
+render-timing/page-weight budgets and an async export-streaming budget --
+its own words: "enforced in CI as a blocking budget check, not a dashboard
+someone reads occasionally."
+
+**Scoping decision, made explicit before writing any code**: DEC08 names
+three separate things (server-side API latency, browser render-timing/
+page-weight, and export-streaming). Only the first is buildable honestly
+right now:
+- API latency: real, measurable today via `TestClient` against live
+  Postgres -- server time at origin, excluding client network, which is
+  exactly DEC08's own stated scope for this part.
+- Render-timing (LCP/INP/CLS) and page-weight budgets need a Lighthouse-CI-
+  style harness under an emulated Fast-3G/mid-range-Android profile. This
+  project has no such tooling wired up -- a separate, larger addition, not
+  something an API test can measure.
+- Export-streaming ("must begin streaming within 2s") assumes an async
+  worker queue. `exports.py`'s own docstring says exports are synchronous in
+  this prototype (WP01's own scope limit, no worker exists) -- there is no
+  "begin streaming" moment to measure, so a check against that premise would
+  test something that doesn't exist rather than something real.
+
+Built only the first piece. Flagged, not faked, that the other two remain
+open.
+
+**What was built**, branch `wp13-15-frontend-evidence`, commit `2e9ee9e`:
+
+1. `backend/tests/test_dec08_performance_budgets.py` -- three tests, each
+   against real Postgres (skips honestly if unavailable, same as every other
+   IPA02/WP13+ webapp/API test in this suite): read budget (gate-view/
+   dashboard `my-work`, p95<=300ms/p99<=800ms, n=40 samples), ordinary-write
+   budget (evidence revision creation, p95<=500ms, n=30), decision-write
+   budget (Hold-then-supersede chain on one occurrence, exercising the real
+   idempotency-check/manifest-revalidation/coordinated-lock/append-only-
+   insert path, p95<=800ms/p99<=1.5s, n=20).
+2. `.github/workflows/ci.yml` -- a dedicated named step running just this
+   file, after the full `pytest -q` run. Same reasoning as the existing
+   Dependency/Secret-scan steps getting their own names despite being
+   conceptually "more checks already covered": a budget breach shows up by
+   step name in the Actions UI, not buried as "some test in the suite
+   failed."
+
+Ran against the actual live-Postgres setup this session (not skipped): all
+three passed on the first run, so the budgets hold today, not just in
+theory. Full suite 196/196, Ruff clean.
+
+**What this does and does not close**:
+- `docs/DEFECT_REGISTER.md`'s **IPA04 row -- stays Open.** Only one of
+  DEC08's three named sub-parts is built; DEC05's durability mechanism and
+  the independent assurance activities (WCAG audit, usability sessions,
+  independent security review, restore-drill) are untouched. Row text
+  updated to name the commit and the two still-unbuilt DEC08 sub-parts
+  explicitly, so this is never later misread as "DEC08 is done."
+- **No `tracker_cli.py gate` action was taken.** Not independently reviewed
+  by Milton.
+
+## DEC05 durability mechanism built, IPA04's DEC05 sub-part (2026-09-29)
+
+Same branch, next session. Resumed from a prior session's approved design
+(`docs/superpowers/specs/2026-09-29-dec05-durability-mechanism-design.md`) --
+that spec's own s1 first cross-referenced DEC05's five numbered sub-answers
+against what already existed in this codebase (WP08's `app/integrity.py`
+hash chain, the `bgp_backup` role, `scripts/restore_drill.py`) before
+naming what was actually missing: an app-layer synchronous chain-link at
+decision-commit time, and an external, independently-custodied anchor for
+tamper-evidence (the exact gap `IntegrityCheckpoint`'s own docstring in
+`app/models.py` already named: "Genuine independence from a rogue DBA
+needs verification material with custody OUTSIDE this Postgres instance
+entirely").
+
+**What was built**, branch `wp13-15-frontend-evidence`, commit `1a450f0`:
+
+1. **G1 -- synchronous chain-link at commit** (`app/integrity.py`'s
+   `checkpoint_new_events`, refactored out of the existing `take_checkpoint`
+   so the pre-existing manual admin endpoint is unchanged in behavior;
+   `app/routers/decisions.py`'s new `_checkpoint_this_project`, called from
+   both `_record_decision`'s success path and its `_deny` path). A decision
+   or denial's own audit event is folded into a new `IntegrityCheckpoint` in
+   the SAME transaction as the decision/denial commit -- `pg_advisory_
+   xact_lock(hashtext(project_id))` (Postgres-only, skipped on the SQLite
+   test fixture) serializes two concurrent decisions on the same project so
+   neither reads a stale "latest checkpoint."
+2. **G2 -- external WORM anchor** (`app/worm_anchor.py`'s
+   `WormAnchorStore`/`LocalWormAnchorStore`, same interface-then-swap-
+   backend shape as `app/attachment_storage.py`; `backend/scripts/
+   anchor_worm.py`, manually-run same as `restore_drill.py`; new
+   `worm_anchor_receipts` table, migration `0017_dec05_worm_anchor.py` --
+   a separate table rather than a column on `integrity_checkpoints`,
+   because a nullable-column UPDATE policy permissive enough for that one
+   column would be exactly as permissive about `chain_digest` on the same
+   row, undermining WP08's existing zero-UPDATE-ever guarantee; see the
+   design spec s4.2 and `WormAnchorReceipt`'s own docstring for the full
+   reasoning, including why this table carries no tamper-evidence weight
+   of its own).
+3. **G3/G4 -- independent verification** (`app/integrity.py`'s new
+   `verify_against_anchor`, cross-checking each checkpoint's DB-stored
+   `chain_digest` against its WORM-anchored copy; `backend/scripts/
+   verify_against_anchor.py`, run as `bgp_backup` -- reused, no new role,
+   same reasoning `restore_drill.py` already established; new scheduled
+   `.github/workflows/integrity-verify.yml`, daily cron matching DEC05
+   s4's "at least daily", plus `workflow_dispatch` -- the first time
+   `bgp_backup` runs anywhere but a developer's own machine, a real gap
+   this closes as a side effect, same precedent as DEC08's own dedicated
+   CI step).
+
+**A real bug found and fixed while building this, worth recording**:
+`app/db.py`'s `SessionLocal` is `autoflush=False` -- `checkpoint_new_events`
+queries `AuditEvent` rows with a fresh `SELECT`, which does not see a
+caller's own just-`db.add()`'d, not-yet-flushed audit event. The first
+version of this code silently checkpointed zero events on every decision
+(no error, just `checkpoint_new_events` returning `None`) until
+`test_dec05_durability_mechanism.py`'s very first test caught it. Fixed by
+an explicit `db.flush()` at the top of `checkpoint_new_events` itself, so
+every caller gets the fix rather than needing to remember it.
+
+**A second, pre-existing test that broke as a direct, expected
+consequence** (not a regression in the new code, a stale assumption in old
+test text): `test_integrity.py::test_checkpoint_and_verify_clean_when_
+untampered` asserted the manual `.../integrity/checkpoint` endpoint's own
+response had `event_count == 1` -- true before DEC05, when that endpoint
+was the only thing that ever checkpointed anything. Now the decision's own
+commit already checkpointed that event, so the manual call correctly finds
+nothing new and returns `None`. Fixed to assert the checkpoint via `GET
+.../checkpoints` instead of the now-empty manual-call response; the
+sibling no-op test updated with the same honest note. Both pass, 6/6.
+
+**Testing** (`backend/tests/test_dec05_durability_mechanism.py`, live-
+Postgres-only, 6 tests, all passing): decision commit folds its own audit
+event atomically; a denied decision's audit event is also folded; two
+decisions on different occurrences in the same project produce non-
+overlapping, independently-reverifiable checkpoints; the
+`pg_advisory_xact_lock` primitive actually blocks a second session while
+held (lock-blocking proof, same technique as `test_bgp_f03_decision_
+concurrency.py`, avoiding real-thread flakiness); `anchor_worm.py`'s core
+function anchors once and no-ops on rerun; and the test that is this
+work's actual point -- a simulated rogue-DBA rewrite (as `bgp_owner`,
+temporarily lifting `integrity_checkpoints`' normally-unconditional UPDATE
+deny via `ALTER TABLE ... NO FORCE ROW LEVEL SECURITY`, DDL rights RLS
+cannot take from a table owner) that changes an audit event's content and
+recomputes its checkpoint's `chain_digest` to match, self-consistently --
+`verify_integrity`'s same-instance re-derivation is proven blind to it
+(`ok: True`, exactly as the design predicted), while `verify_against_
+anchor`'s cross-check against the untouched external copy catches it
+(`ok: False`, opens an `IntegrityIncident`).
+
+**Verification honestly incomplete tonight**: this machine's full
+`pytest -q` suite (196+ tests) could not be run to completion -- six
+consecutive attempts (the full suite twice, a five-file targeted slice
+once, `test_decisions.py` alone three times) were killed by the harness's
+own low-memory guard, not by a test failure (`FreePhysicalMemory` sampled
+between 79 MB and 440 MB of 3.6 GB total across attempts, with `Memory
+Compression` alone holding over 1 GB). Every test that ran before each
+kill passed, with the sole exception of the one real regression above,
+found and fixed. What IS independently confirmed, each run to completion:
+`test_dec05_durability_mechanism.py` (6/6), `test_integrity.py` (6/6,
+post-fix), `ruff check .` and `ruff format --check` clean on every
+changed/new file, and the migration applying cleanly to the real dev
+database. The full-suite run is the concrete next check this session did
+not complete -- do not read "DEC05 is built" as "the full suite was
+reconfirmed green tonight."
+
+**What this does and does not close**:
+- `docs/DEFECT_REGISTER.md`'s **IPA04 row -- stays Open.** The durability
+  mechanism itself is now built (all three of G1-G4), but IPA04 also names
+  the independent fault/recovery/usability/accessibility/security
+  assurance activities (WCAG audit, usability sessions, independent
+  security review, a restore-drill against DEC05's numeric RPO/RTO
+  targets) -- none of which this or any prior session has performed, and
+  none of which an agent session can perform on its own or claim from a
+  document alone. Real cross-zone/cross-region replication (DEC05 s2/s4's
+  numeric availability targets) also remains untouched -- no multi-node
+  Postgres infrastructure exists in this prototype; named in the design
+  spec's own non-goals, not silently dropped.
+- **No `tracker_cli.py gate` action was taken.** Not independently
+  reviewed by Milton or by Operations/security leads (DEC05's own named
+  approvers) -- the delivery-lead acceptance of kenAddme's DEC05 answer
+  (2026-09-27) is not that independent sign-off, and building the
+  mechanism the answer specifies is not either.
+
+## Full suite reconfirmed, one transient failure root-caused, not a code regression (2026-09-30)
+
+Same branch, next session. Picked up exactly where the DEC05 entry above left
+off: "the full-suite run is the concrete next check this session did not
+complete." Ran it to completion this time (`pytest -q`, this repo's own
+`.venv`, live Postgres): **199 passed, 3 failed, 939.69s** -- the run
+completed instead of being OOM-killed like every attempt the prior session
+made, but not clean.
+
+All three failures were in `test_dec08_performance_budgets.py`, all budget
+misses, not errors: read p95 341ms (budget 300ms), ordinary-write p95 837ms
+(budget 500ms), decision-write p95 1095ms (budget 800ms).
+
+**Investigated per `superpowers:systematic-debugging` before touching
+anything** -- the read-budget test (`GET .../my-work`) and the ordinary-write
+test (an evidence revision) don't call any DEC05 code path at all, which
+argues against "DEC05 made the checkpoint step slow" as the sole
+explanation; only the decision-write test exercises `_checkpoint_this_project`.
+**Hypothesis**: these are transient, this specific memory-starved machine's
+own resource contention (3.6GB total RAM, `FreePhysicalMemory` at 233MB and
+falling before the run even started, `Memory Compression` alone holding
+1.4GB) landing on this particular file, not a durable latency cost DEC05
+added to the request path. **Tested minimally**: re-ran
+`test_dec08_performance_budgets.py` alone, same machine, same live Postgres,
+immediately after the full run finished (free memory had only recovered to
+289MB, so not a "machine was idle" confound) -- **3/3 passed**, comfortably,
+in 24.87s. That includes the decision-write test, the one test that
+genuinely does exercise the new checkpoint code on every iteration --
+confirming the checkpoint mechanism's real steady-state overhead does not
+by itself blow the 800ms budget.
+
+**Conclusion, not "incomplete investigation" rounded up to "fine"**: the
+failure is specific to running the entire ~200-test suite in one long-lived
+process on this severely memory-constrained dev machine, immediately
+following `test_dec05_durability_mechanism.py`'s own heavy work in the same
+run (real local-disk WORM writes, a rogue-DBA `ALTER TABLE ... NO FORCE ROW
+LEVEL SECURITY` DDL test) -- not a regression in DEC05's actual latency
+contribution to the decision-commit path. **Deliberately not "fixed"**:
+did not loosen DEC08's numeric budgets (kenAddme's own accepted answer, not
+this session's to weaken) and did not add a retry/skip to the test to paper
+over it -- the honest record is that this machine can produce a false-red
+budget check under load, which is worth knowing before ever reading a local
+full-suite red on this specific file as "the code regressed" without
+re-checking in isolation first. **Not yet known**: whether GitHub Actions'
+own runners (far more RAM than this box) would ever reproduce this inside
+`ci.yml`'s `pytest -q` step that runs before the file's dedicated step --
+untested, no CI run exists on this branch yet to check against.
+
+Ruff not re-run this session (no code changed). `docs/DEFECT_REGISTER.md`'s
+IPA04 row's evidence text updated to point here instead of calling the
+full-suite recheck "honestly incomplete" -- it is now complete, with this
+transient-failure explanation attached, not silently marked green.
+
+## Restore drill run against DEC05's actual numeric targets; a real reconciliation-reporting gap found and fixed (2026-09-30)
+
+User said "proceed with IPA04" -- of everything IPA04 still names (WCAG
+audit, usability sessions, independent security review, the restore-drill
+against DEC05's numeric RPO/RTO targets, real cross-zone/region
+replication), the restore-drill is the one piece that's concrete,
+executable, and doesn't require a human participant or an independent
+reviewer's own judgment -- `backend/scripts/restore_drill.py` already
+existed (built WP08, 2026-09-17) but its docstring still cited REQ-029's
+original 1h-RPO placeholder, written before DEC05 had an actual accepted
+answer.
+
+**Updated the script's docstring** to cite DEC05's real accepted numbers
+(RPO 0 in-region / <=5 min cross-region, RTO 8 hours, "quarterly restore
+test into a clean environment" -- DEC05's own words, this script is that
+drill) instead of the stale unresolved-REQ-029 framing, and to state
+plainly that the in-region/cross-region RPO figures need real replication
+infrastructure this single-Postgres-instance prototype doesn't have and
+this drill can't exercise either way (same non-goal already named in the
+DEC05 design spec).
+
+**Ran it for real** against live `bgp_dev`: backup 2.37s, restore 20.85s
+into a genuinely fresh database -- both trivially inside the 8h RTO
+target on this near-empty dev database (not a production-scale proof, see
+the script's own "Honest limits" section). Row counts matched across all
+16 tenant-owned tables.
+
+**Then the reconciliation step reported `MISMATCH`** on the hash-chain
+re-verification -- investigated per `superpowers:systematic-debugging`
+rather than assumed benign or silently ignored, since IPA04/DEC05 both
+treat a chain mismatch as exactly the kind of thing that must not be
+rounded past ("a chain mismatch is treated as an S1 incident, acknowledged
+within 1 hour"). Wrote a one-off read-only diagnostic script (not
+committed, scratch use only) to identify every mismatching project
+individually rather than trust the aggregate flag. **Root cause, confirmed
+by grep against the actual source, not inferred**: all 141 of the
+mismatches (out of 175 projects checked) trace to one single known
+artifact -- `backend/tests/test_wp08_tenant_isolation_rls.py`'s own raw-SQL
+fixture, which inserts an `IntegrityCheckpoint` row with
+`chain_digest='original-digest'` (not a real 64-hex-char sha256 digest,
+zero backing `AuditEvent` rows) to test the RLS policy directly, bypassing
+the real checkpoint pipeline entirely. Because that table's append-only
+guarantee means no role can ever UPDATE or DELETE such a row afterward
+(by design, `app/models.py`'s own `IntegrityCheckpoint` docstring), every
+run of that one test across every session that has ever used this shared,
+never-reset `bgp_dev` has left one more behind -- 141 of them as of today,
+confirmed to be the sole and exact explanation (zero mismatches had any
+other shape once these were excluded).
+
+**This is a real, if minor, finding in its own right, not just an
+explanation to write off**: `restore_drill.py`'s binary
+Reconciliation OK/MISMATCH signal was already permanently red on this
+database and would stay that way forever, silently swallowing any future,
+genuinely new integrity incident inside the same undifferentiated
+"MISMATCH" bucket -- exactly the false-negative risk a quarterly assurance
+drill exists to prevent. **Fixed** (not just documented): `restore_drill.py`
+now classifies each mismatching project by digest *shape* -- a real chain
+digest is always 64 lowercase hex characters (`app/integrity.py`'s own
+`hashlib.sha256(...).hexdigest()`/`GENESIS_DIGEST`), so anything else is
+provably fixture/instrumentation data regardless of which test produced it,
+not a hardcoded match against one literal string. Output now reports
+"known test-fixture artifact(s)" and "UNEXPLAINED mismatch(es)" as separate
+counts; only a nonzero unexplained count fails the drill. **Deliberately
+not attempted**: deleting or otherwise cleaning up the 141 rows -- doing so
+would require bypassing the exact append-only guarantee (FORCE RLS,
+no UPDATE/DELETE policy, not even for `bgp_owner`) that this whole
+mechanism exists to enforce, working against the system's own design
+rather than around a real problem in it.
+
+Re-ran after the fix: **0 unexplained mismatches, reported OK** -- the
+first genuinely trustworthy "Reconciliation OK" this drill has produced
+since the fixture-pollution count passed 1. Ruff clean and formatted.
+No test imports or calls this script (grep-confirmed), so this change
+carries zero risk to the test suite.
+
+**What this does and does not close**: this is the restore-drill sub-piece
+of IPA04's remaining list, done for real against DEC05's actual accepted
+target, not just the pre-DEC05 REQ-029 placeholder. **Still open as of this
+entry, named explicitly**: an automated WCAG pass (attempted again
+immediately after this entry, see below), real usability sessions
+(Blueprint Sec.4.4 protocol -- kenAddme named as reviewer immediately after
+this entry too, see below), and an independent security review -- the
+latter needs a named, competent human reviewer independent of whoever
+wrote the code (same boundary tracker item #124 has named since
+2026-09-17), which no amount of agent work substitutes for. Real
+cross-zone/cross-region replication remains a named non-goal of this
+prototype, not silently dropped. **No `tracker_cli.py gate` action taken.**
+
+## kenAddme named reviewer for usability sessions; automated WCAG pass retried and succeeded, one real fix (2026-09-30)
+
+User said "KenAddme shold be the useability sessions revewer" and, in the
+same turn, "And retry the WCAG AGAIN" -- two separate asks, handled in order.
+
+**Usability-sessions ownership**: recorded kenAddme (already the named
+owner for DEC05/06/07/08/11/12 since 2026-09-25 -- real, active,
+`APPROVED` reviews on PR#5/#6/#7 per `gh pr view`) as named reviewer for
+the Blueprint Sec.4.4 usability-testing protocol, on tracker item **#131
+(SDLC G4.04)** -- the same item IPA04's DEC05/08/11 owner assignment
+already used, since no separate usability-specific evidence item exists in
+this project's seeded checklist (only #94/G1.03, "NFRs defined" at the
+requirements stage, names "usability" as a term, and that's a different
+gate). `docs/DEFECT_REGISTER.md`'s IPA04 row and this file both updated
+with a pointer to the assignment. **Flagged, not silently accepted, same
+discipline as 2026-09-25's own note**: usability testing is yet another
+structurally distinct skill (running real sessions with real participants
+against Blueprint Sec.4.4's protocol) beyond the six DEC decisions already
+on kenAddme's plate, and beyond the PR-approval track record that
+established kenAddme as real and active -- recording the assignment is not
+the same as it having been discharged, and does not by itself demonstrate
+standing to run a usability study. Status stays "Not started"; this is an
+ownership assignment only, same as every prior one in this project.
+
+**Automated WCAG pass, retried**: the browser-based route failed exactly
+the same way it always has on this session -- Playwright MCP didn't
+connect at session start, and `claude-in-chrome` returned "extension is not
+connected" when tried again just now, not just the tab-churn WP08-era
+failure. Rather than retry the identical failing path a third time,
+switched approach: axe-core running against real server-rendered HTML via
+`jsdom` (Node.js DOM emulation, no browser needed at all) -- a standard
+technique for structural/semantic accessibility linting (the same
+mechanism `jest-axe` uses). Built real data through the JSON API (register,
+MFA-enrol two users, create an org, invite+accept an approver, publish the
+standard template, create a project with a pending decision) against the
+locally running dev server, then fetched the actual rendered HTML for
+**16 distinct real, authenticated, populated `/ui` pages** -- every page
+type in the app: login, register, MFA enrol, invitation-accept, orgs list,
+templates list + guided editor, project creation, gate dashboard, both
+roles' my-work queues, the decide page, evidence detail, history, settings,
+export/import. Ran axe-core's `wcag2a`/`wcag2aa`/`wcag21a`/`wcag21aa`/
+`wcag22aa` rule sets against each.
+
+**Honest limit of this method, stated up front, not after the fact**:
+jsdom has no real layout/paint engine, so `color-contrast` (and any other
+rule needing actual computed geometry) reports "incomplete" on every page,
+not "pass" -- this method cannot and does not claim to check contrast,
+focus-ring visibility, or responsive reflow; those still need either a
+real browser or a human. What it DOES reliably check, and what actually
+ran: alt text, form-label association, ARIA role/attribute validity,
+heading order, landmark structure, duplicate/invalid ids, link/button
+accessible names, language attributes, table headers -- real WCAG A/AA
+success criteria, just the subset a DOM-only tool can evaluate.
+
+**Result: zero violations across all 16 pages.** One real "incomplete"
+finding beyond the universal color-contrast one, investigated rather than
+dismissed: `mfa_enroll.html`'s manual-entry setup-key `<p>` carried
+`aria-label="Manual entry setup key"` on an element/role combination ARIA
+doesn't reliably support naming on (`aria-prohibited-attr`, impact
+"serious") -- meaning a screen-reader user might never hear that label,
+degrading a security-critical enrollment step. **Fixed**: replaced the
+unsupported `aria-label` with a `.visually-hidden` prefix span (new,
+generic utility class added to `app/static/style.css` -- the standard
+clip-based hidden-but-announced technique, not `display:none`, which
+screen readers also skip), same visible text, now reliably read by
+assistive tech regardless of role support. Re-scanned that page alone
+after the fix: the finding is gone; re-ran all 16 pages after: 0
+violations, 0 unexpected incomplete findings, confirmed clean.
+`grep`-confirmed no test asserts on the old markup; targeted MFA tests
+(`test_hardening.py`, `test_identity.py`, 8 tests) still pass; Ruff clean.
+
+**What this is and is not**: a real, completed, first-ever-successful
+automated accessibility pass across every current page type in this app
+(the WP11-era Playwright+axe attempt never got past a connectivity
+failure) -- not the full WCAG 2.2 AA audit IPA04 names, which per its own
+verify text also needs a manual keyboard/screen-reader walkthrough and
+zoom/reflow check (WP11's own entry already covers a partial manual pass;
+this is the automated leg specifically, done for real for the first time)
+and, for full "no open A/AA failure at release" sign-off, human judgment
+this tool cannot supply. `docs/DEFECT_REGISTER.md` updated with this as
+new evidence on the IPA04 row -- **row stays Open**: usability sessions
+and independent security review remain unperformed. Dev server and
+scratch capture/scan scripts (not committed; scratchpad-only) both cleaned
+up at the end of this work. **No `tracker_cli.py gate` action taken.**
 
 1. Draft candidate evidence matches, then **verify each one against the actual
    file/commit/PR before writing a status**, never on a paraphrase.

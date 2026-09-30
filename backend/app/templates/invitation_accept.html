@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Organisation invitation{% endblock %}
+{% block content %}
+<h1>Organisation invitation</h1>
+
+{% if not current_user %}
+<p>Sign in or create an account with the email address this invitation was sent to, then you'll return here automatically to finish joining.</p>
+<p>
+  <a href="/ui/login?next={{ next }}">Log in</a>
+  &middot;
+  <a href="/ui/register?next={{ next }}">Create an account</a>
+</p>
+{% else %}
+<p>Signed in as {{ current_user.email }}.</p>
+<form method="post" action="/ui/invitations/accept" novalidate>
+  <input type="hidden" name="token" value="{{ token }}">
+  <button type="submit">Join this organisation</button>
+</form>
+<p><a href="/ui/orgs">Not the right account? Switch organisation</a></p>
+{% endif %}
+{% endblock %}

@@ -158,7 +158,8 @@ def test_project_history_shows_a_recorded_decision_and_its_supersession(ui_clien
     decide_url = f"/ui/orgs/{tenant_id}/projects/{project_id}/occurrences/{occurrence_id}/decide"
     page = ui_client.get(decide_url)
     digest = page.text.split('name="manifest_digest" value="')[1].split('"')[0]
-    ui_client.post(decide_url, data={"outcome": "Hold", "manifest_digest": digest})
+    key = page.text.split('name="idempotency_key" value="')[1].split('"')[0]
+    ui_client.post(decide_url, data={"outcome": "Hold", "manifest_digest": digest, "idempotency_key": key})
 
     resp = ui_client.get(f"/ui/orgs/{tenant_id}/projects/{project_id}/history")
     assert resp.status_code == 200
