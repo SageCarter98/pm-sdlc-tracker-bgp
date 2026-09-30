@@ -1927,6 +1927,182 @@ theory. Full suite 196/196, Ruff clean.
 - **No `tracker_cli.py gate` action was taken.** Not independently reviewed
   by Milton.
 
+## DEC05 durability mechanism built, IPA04's DEC05 sub-part (2026-09-29)
+
+Same branch, next session. Resumed from a prior session's approved design
+(`docs/superpowers/specs/2026-09-29-dec05-durability-mechanism-design.md`) --
+that spec's own s1 first cross-referenced DEC05's five numbered sub-answers
+against what already existed in this codebase (WP08's `app/integrity.py`
+hash chain, the `bgp_backup` role, `scripts/restore_drill.py`) before
+naming what was actually missing: an app-layer synchronous chain-link at
+decision-commit time, and an external, independently-custodied anchor for
+tamper-evidence (the exact gap `IntegrityCheckpoint`'s own docstring in
+`app/models.py` already named: "Genuine independence from a rogue DBA
+needs verification material with custody OUTSIDE this Postgres instance
+entirely").
+
+**What was built**, branch `wp13-15-frontend-evidence`, commit `1a450f0`:
+
+1. **G1 -- synchronous chain-link at commit** (`app/integrity.py`'s
+   `checkpoint_new_events`, refactored out of the existing `take_checkpoint`
+   so the pre-existing manual admin endpoint is unchanged in behavior;
+   `app/routers/decisions.py`'s new `_checkpoint_this_project`, called from
+   both `_record_decision`'s success path and its `_deny` path). A decision
+   or denial's own audit event is folded into a new `IntegrityCheckpoint` in
+   the SAME transaction as the decision/denial commit -- `pg_advisory_
+   xact_lock(hashtext(project_id))` (Postgres-only, skipped on the SQLite
+   test fixture) serializes two concurrent decisions on the same project so
+   neither reads a stale "latest checkpoint."
+2. **G2 -- external WORM anchor** (`app/worm_anchor.py`'s
+   `WormAnchorStore`/`LocalWormAnchorStore`, same interface-then-swap-
+   backend shape as `app/attachment_storage.py`; `backend/scripts/
+   anchor_worm.py`, manually-run same as `restore_drill.py`; new
+   `worm_anchor_receipts` table, migration `0017_dec05_worm_anchor.py` --
+   a separate table rather than a column on `integrity_checkpoints`,
+   because a nullable-column UPDATE policy permissive enough for that one
+   column would be exactly as permissive about `chain_digest` on the same
+   row, undermining WP08's existing zero-UPDATE-ever guarantee; see the
+   design spec s4.2 and `WormAnchorReceipt`'s own docstring for the full
+   reasoning, including why this table carries no tamper-evidence weight
+   of its own).
+3. **G3/G4 -- independent verification** (`app/integrity.py`'s new
+   `verify_against_anchor`, cross-checking each checkpoint's DB-stored
+   `chain_digest` against its WORM-anchored copy; `backend/scripts/
+   verify_against_anchor.py`, run as `bgp_backup` -- reused, no new role,
+   same reasoning `restore_drill.py` already established; new scheduled
+   `.github/workflows/integrity-verify.yml`, daily cron matching DEC05
+   s4's "at least daily", plus `workflow_dispatch` -- the first time
+   `bgp_backup` runs anywhere but a developer's own machine, a real gap
+   this closes as a side effect, same precedent as DEC08's own dedicated
+   CI step).
+
+**A real bug found and fixed while building this, worth recording**:
+`app/db.py`'s `SessionLocal` is `autoflush=False` -- `checkpoint_new_events`
+queries `AuditEvent` rows with a fresh `SELECT`, which does not see a
+caller's own just-`db.add()`'d, not-yet-flushed audit event. The first
+version of this code silently checkpointed zero events on every decision
+(no error, just `checkpoint_new_events` returning `None`) until
+`test_dec05_durability_mechanism.py`'s very first test caught it. Fixed by
+an explicit `db.flush()` at the top of `checkpoint_new_events` itself, so
+every caller gets the fix rather than needing to remember it.
+
+**A second, pre-existing test that broke as a direct, expected
+consequence** (not a regression in the new code, a stale assumption in old
+test text): `test_integrity.py::test_checkpoint_and_verify_clean_when_
+untampered` asserted the manual `.../integrity/checkpoint` endpoint's own
+response had `event_count == 1` -- true before DEC05, when that endpoint
+was the only thing that ever checkpointed anything. Now the decision's own
+commit already checkpointed that event, so the manual call correctly finds
+nothing new and returns `None`. Fixed to assert the checkpoint via `GET
+.../checkpoints` instead of the now-empty manual-call response; the
+sibling no-op test updated with the same honest note. Both pass, 6/6.
+
+**Testing** (`backend/tests/test_dec05_durability_mechanism.py`, live-
+Postgres-only, 6 tests, all passing): decision commit folds its own audit
+event atomically; a denied decision's audit event is also folded; two
+decisions on different occurrences in the same project produce non-
+overlapping, independently-reverifiable checkpoints; the
+`pg_advisory_xact_lock` primitive actually blocks a second session while
+held (lock-blocking proof, same technique as `test_bgp_f03_decision_
+concurrency.py`, avoiding real-thread flakiness); `anchor_worm.py`'s core
+function anchors once and no-ops on rerun; and the test that is this
+work's actual point -- a simulated rogue-DBA rewrite (as `bgp_owner`,
+temporarily lifting `integrity_checkpoints`' normally-unconditional UPDATE
+deny via `ALTER TABLE ... NO FORCE ROW LEVEL SECURITY`, DDL rights RLS
+cannot take from a table owner) that changes an audit event's content and
+recomputes its checkpoint's `chain_digest` to match, self-consistently --
+`verify_integrity`'s same-instance re-derivation is proven blind to it
+(`ok: True`, exactly as the design predicted), while `verify_against_
+anchor`'s cross-check against the untouched external copy catches it
+(`ok: False`, opens an `IntegrityIncident`).
+
+**Verification honestly incomplete tonight**: this machine's full
+`pytest -q` suite (196+ tests) could not be run to completion -- six
+consecutive attempts (the full suite twice, a five-file targeted slice
+once, `test_decisions.py` alone three times) were killed by the harness's
+own low-memory guard, not by a test failure (`FreePhysicalMemory` sampled
+between 79 MB and 440 MB of 3.6 GB total across attempts, with `Memory
+Compression` alone holding over 1 GB). Every test that ran before each
+kill passed, with the sole exception of the one real regression above,
+found and fixed. What IS independently confirmed, each run to completion:
+`test_dec05_durability_mechanism.py` (6/6), `test_integrity.py` (6/6,
+post-fix), `ruff check .` and `ruff format --check` clean on every
+changed/new file, and the migration applying cleanly to the real dev
+database. The full-suite run is the concrete next check this session did
+not complete -- do not read "DEC05 is built" as "the full suite was
+reconfirmed green tonight."
+
+**What this does and does not close**:
+- `docs/DEFECT_REGISTER.md`'s **IPA04 row -- stays Open.** The durability
+  mechanism itself is now built (all three of G1-G4), but IPA04 also names
+  the independent fault/recovery/usability/accessibility/security
+  assurance activities (WCAG audit, usability sessions, independent
+  security review, a restore-drill against DEC05's numeric RPO/RTO
+  targets) -- none of which this or any prior session has performed, and
+  none of which an agent session can perform on its own or claim from a
+  document alone. Real cross-zone/cross-region replication (DEC05 s2/s4's
+  numeric availability targets) also remains untouched -- no multi-node
+  Postgres infrastructure exists in this prototype; named in the design
+  spec's own non-goals, not silently dropped.
+- **No `tracker_cli.py gate` action was taken.** Not independently
+  reviewed by Milton or by Operations/security leads (DEC05's own named
+  approvers) -- the delivery-lead acceptance of kenAddme's DEC05 answer
+  (2026-09-27) is not that independent sign-off, and building the
+  mechanism the answer specifies is not either.
+
+## Full suite reconfirmed, one transient failure root-caused, not a code regression (2026-09-30)
+
+Same branch, next session. Picked up exactly where the DEC05 entry above left
+off: "the full-suite run is the concrete next check this session did not
+complete." Ran it to completion this time (`pytest -q`, this repo's own
+`.venv`, live Postgres): **199 passed, 3 failed, 939.69s** -- the run
+completed instead of being OOM-killed like every attempt the prior session
+made, but not clean.
+
+All three failures were in `test_dec08_performance_budgets.py`, all budget
+misses, not errors: read p95 341ms (budget 300ms), ordinary-write p95 837ms
+(budget 500ms), decision-write p95 1095ms (budget 800ms).
+
+**Investigated per `superpowers:systematic-debugging` before touching
+anything** -- the read-budget test (`GET .../my-work`) and the ordinary-write
+test (an evidence revision) don't call any DEC05 code path at all, which
+argues against "DEC05 made the checkpoint step slow" as the sole
+explanation; only the decision-write test exercises `_checkpoint_this_project`.
+**Hypothesis**: these are transient, this specific memory-starved machine's
+own resource contention (3.6GB total RAM, `FreePhysicalMemory` at 233MB and
+falling before the run even started, `Memory Compression` alone holding
+1.4GB) landing on this particular file, not a durable latency cost DEC05
+added to the request path. **Tested minimally**: re-ran
+`test_dec08_performance_budgets.py` alone, same machine, same live Postgres,
+immediately after the full run finished (free memory had only recovered to
+289MB, so not a "machine was idle" confound) -- **3/3 passed**, comfortably,
+in 24.87s. That includes the decision-write test, the one test that
+genuinely does exercise the new checkpoint code on every iteration --
+confirming the checkpoint mechanism's real steady-state overhead does not
+by itself blow the 800ms budget.
+
+**Conclusion, not "incomplete investigation" rounded up to "fine"**: the
+failure is specific to running the entire ~200-test suite in one long-lived
+process on this severely memory-constrained dev machine, immediately
+following `test_dec05_durability_mechanism.py`'s own heavy work in the same
+run (real local-disk WORM writes, a rogue-DBA `ALTER TABLE ... NO FORCE ROW
+LEVEL SECURITY` DDL test) -- not a regression in DEC05's actual latency
+contribution to the decision-commit path. **Deliberately not "fixed"**:
+did not loosen DEC08's numeric budgets (kenAddme's own accepted answer, not
+this session's to weaken) and did not add a retry/skip to the test to paper
+over it -- the honest record is that this machine can produce a false-red
+budget check under load, which is worth knowing before ever reading a local
+full-suite red on this specific file as "the code regressed" without
+re-checking in isolation first. **Not yet known**: whether GitHub Actions'
+own runners (far more RAM than this box) would ever reproduce this inside
+`ci.yml`'s `pytest -q` step that runs before the file's dedicated step --
+untested, no CI run exists on this branch yet to check against.
+
+Ruff not re-run this session (no code changed). `docs/DEFECT_REGISTER.md`'s
+IPA04 row's evidence text updated to point here instead of calling the
+full-suite recheck "honestly incomplete" -- it is now complete, with this
+transient-failure explanation attached, not silently marked green.
+
 1. Draft candidate evidence matches, then **verify each one against the actual
    file/commit/PR before writing a status**, never on a paraphrase.
 2. Complete requires a specific, locatable, checked evidence reference.
