@@ -85,7 +85,12 @@ def _setup_project(pg_client):
     which persists accounts (and their MFA-enrolled state) across separate
     test functions in this same file."""
     from tests.conftest import enable_mfa, register_and_login
-    from tests.test_projects import _create_org_as_admin, _create_project, _invite_and_accept, _publish_standard_template
+    from tests.test_projects import (
+        _create_org_as_admin,
+        _create_project,
+        _invite_and_accept,
+        _publish_standard_template,
+    )
 
     admin_email = f"{uuid.uuid4()}@example.com"
     approver_email = f"{uuid.uuid4()}@example.com"
