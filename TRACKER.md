@@ -2180,18 +2180,101 @@ carries zero risk to the test suite.
 
 **What this does and does not close**: this is the restore-drill sub-piece
 of IPA04's remaining list, done for real against DEC05's actual accepted
-target, not just the pre-DEC05 REQ-029 placeholder. **Still open, named
-explicitly, not attempted this session**: the WCAG 2.2 AA audit, real
-usability sessions (Blueprint Sec.4.4 protocol), and an independent
-security review -- none of these can be performed or claimed by an agent
-session alone; the first needs either a working automated-accessibility
-toolchain in this environment (Playwright+axe-core already failed once
-before, WP11 entry above) or a human auditor, the second needs real human
-participants, the third needs a named, competent human reviewer
-independent of whoever wrote the code (same boundary tracker item #124 has
-named since 2026-09-17). Real cross-zone/cross-region replication remains
-a named non-goal of this prototype, not silently dropped. **No
-`tracker_cli.py gate` action taken.**
+target, not just the pre-DEC05 REQ-029 placeholder. **Still open as of this
+entry, named explicitly**: an automated WCAG pass (attempted again
+immediately after this entry, see below), real usability sessions
+(Blueprint Sec.4.4 protocol -- kenAddme named as reviewer immediately after
+this entry too, see below), and an independent security review -- the
+latter needs a named, competent human reviewer independent of whoever
+wrote the code (same boundary tracker item #124 has named since
+2026-09-17), which no amount of agent work substitutes for. Real
+cross-zone/cross-region replication remains a named non-goal of this
+prototype, not silently dropped. **No `tracker_cli.py gate` action taken.**
+
+## kenAddme named reviewer for usability sessions; automated WCAG pass retried and succeeded, one real fix (2026-09-30)
+
+User said "KenAddme shold be the useability sessions revewer" and, in the
+same turn, "And retry the WCAG AGAIN" -- two separate asks, handled in order.
+
+**Usability-sessions ownership**: recorded kenAddme (already the named
+owner for DEC05/06/07/08/11/12 since 2026-09-25 -- real, active,
+`APPROVED` reviews on PR#5/#6/#7 per `gh pr view`) as named reviewer for
+the Blueprint Sec.4.4 usability-testing protocol, on tracker item **#131
+(SDLC G4.04)** -- the same item IPA04's DEC05/08/11 owner assignment
+already used, since no separate usability-specific evidence item exists in
+this project's seeded checklist (only #94/G1.03, "NFRs defined" at the
+requirements stage, names "usability" as a term, and that's a different
+gate). `docs/DEFECT_REGISTER.md`'s IPA04 row and this file both updated
+with a pointer to the assignment. **Flagged, not silently accepted, same
+discipline as 2026-09-25's own note**: usability testing is yet another
+structurally distinct skill (running real sessions with real participants
+against Blueprint Sec.4.4's protocol) beyond the six DEC decisions already
+on kenAddme's plate, and beyond the PR-approval track record that
+established kenAddme as real and active -- recording the assignment is not
+the same as it having been discharged, and does not by itself demonstrate
+standing to run a usability study. Status stays "Not started"; this is an
+ownership assignment only, same as every prior one in this project.
+
+**Automated WCAG pass, retried**: the browser-based route failed exactly
+the same way it always has on this session -- Playwright MCP didn't
+connect at session start, and `claude-in-chrome` returned "extension is not
+connected" when tried again just now, not just the tab-churn WP08-era
+failure. Rather than retry the identical failing path a third time,
+switched approach: axe-core running against real server-rendered HTML via
+`jsdom` (Node.js DOM emulation, no browser needed at all) -- a standard
+technique for structural/semantic accessibility linting (the same
+mechanism `jest-axe` uses). Built real data through the JSON API (register,
+MFA-enrol two users, create an org, invite+accept an approver, publish the
+standard template, create a project with a pending decision) against the
+locally running dev server, then fetched the actual rendered HTML for
+**16 distinct real, authenticated, populated `/ui` pages** -- every page
+type in the app: login, register, MFA enrol, invitation-accept, orgs list,
+templates list + guided editor, project creation, gate dashboard, both
+roles' my-work queues, the decide page, evidence detail, history, settings,
+export/import. Ran axe-core's `wcag2a`/`wcag2aa`/`wcag21a`/`wcag21aa`/
+`wcag22aa` rule sets against each.
+
+**Honest limit of this method, stated up front, not after the fact**:
+jsdom has no real layout/paint engine, so `color-contrast` (and any other
+rule needing actual computed geometry) reports "incomplete" on every page,
+not "pass" -- this method cannot and does not claim to check contrast,
+focus-ring visibility, or responsive reflow; those still need either a
+real browser or a human. What it DOES reliably check, and what actually
+ran: alt text, form-label association, ARIA role/attribute validity,
+heading order, landmark structure, duplicate/invalid ids, link/button
+accessible names, language attributes, table headers -- real WCAG A/AA
+success criteria, just the subset a DOM-only tool can evaluate.
+
+**Result: zero violations across all 16 pages.** One real "incomplete"
+finding beyond the universal color-contrast one, investigated rather than
+dismissed: `mfa_enroll.html`'s manual-entry setup-key `<p>` carried
+`aria-label="Manual entry setup key"` on an element/role combination ARIA
+doesn't reliably support naming on (`aria-prohibited-attr`, impact
+"serious") -- meaning a screen-reader user might never hear that label,
+degrading a security-critical enrollment step. **Fixed**: replaced the
+unsupported `aria-label` with a `.visually-hidden` prefix span (new,
+generic utility class added to `app/static/style.css` -- the standard
+clip-based hidden-but-announced technique, not `display:none`, which
+screen readers also skip), same visible text, now reliably read by
+assistive tech regardless of role support. Re-scanned that page alone
+after the fix: the finding is gone; re-ran all 16 pages after: 0
+violations, 0 unexpected incomplete findings, confirmed clean.
+`grep`-confirmed no test asserts on the old markup; targeted MFA tests
+(`test_hardening.py`, `test_identity.py`, 8 tests) still pass; Ruff clean.
+
+**What this is and is not**: a real, completed, first-ever-successful
+automated accessibility pass across every current page type in this app
+(the WP11-era Playwright+axe attempt never got past a connectivity
+failure) -- not the full WCAG 2.2 AA audit IPA04 names, which per its own
+verify text also needs a manual keyboard/screen-reader walkthrough and
+zoom/reflow check (WP11's own entry already covers a partial manual pass;
+this is the automated leg specifically, done for real for the first time)
+and, for full "no open A/AA failure at release" sign-off, human judgment
+this tool cannot supply. `docs/DEFECT_REGISTER.md` updated with this as
+new evidence on the IPA04 row -- **row stays Open**: usability sessions
+and independent security review remain unperformed. Dev server and
+scratch capture/scan scripts (not committed; scratchpad-only) both cleaned
+up at the end of this work. **No `tracker_cli.py gate` action taken.**
 
 1. Draft candidate evidence matches, then **verify each one against the actual
    file/commit/PR before writing a status**, never on a paraphrase.
