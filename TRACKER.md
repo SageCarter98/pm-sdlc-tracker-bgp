@@ -2103,6 +2103,96 @@ IPA04 row's evidence text updated to point here instead of calling the
 full-suite recheck "honestly incomplete" -- it is now complete, with this
 transient-failure explanation attached, not silently marked green.
 
+## Restore drill run against DEC05's actual numeric targets; a real reconciliation-reporting gap found and fixed (2026-09-30)
+
+User said "proceed with IPA04" -- of everything IPA04 still names (WCAG
+audit, usability sessions, independent security review, the restore-drill
+against DEC05's numeric RPO/RTO targets, real cross-zone/region
+replication), the restore-drill is the one piece that's concrete,
+executable, and doesn't require a human participant or an independent
+reviewer's own judgment -- `backend/scripts/restore_drill.py` already
+existed (built WP08, 2026-09-17) but its docstring still cited REQ-029's
+original 1h-RPO placeholder, written before DEC05 had an actual accepted
+answer.
+
+**Updated the script's docstring** to cite DEC05's real accepted numbers
+(RPO 0 in-region / <=5 min cross-region, RTO 8 hours, "quarterly restore
+test into a clean environment" -- DEC05's own words, this script is that
+drill) instead of the stale unresolved-REQ-029 framing, and to state
+plainly that the in-region/cross-region RPO figures need real replication
+infrastructure this single-Postgres-instance prototype doesn't have and
+this drill can't exercise either way (same non-goal already named in the
+DEC05 design spec).
+
+**Ran it for real** against live `bgp_dev`: backup 2.37s, restore 20.85s
+into a genuinely fresh database -- both trivially inside the 8h RTO
+target on this near-empty dev database (not a production-scale proof, see
+the script's own "Honest limits" section). Row counts matched across all
+16 tenant-owned tables.
+
+**Then the reconciliation step reported `MISMATCH`** on the hash-chain
+re-verification -- investigated per `superpowers:systematic-debugging`
+rather than assumed benign or silently ignored, since IPA04/DEC05 both
+treat a chain mismatch as exactly the kind of thing that must not be
+rounded past ("a chain mismatch is treated as an S1 incident, acknowledged
+within 1 hour"). Wrote a one-off read-only diagnostic script (not
+committed, scratch use only) to identify every mismatching project
+individually rather than trust the aggregate flag. **Root cause, confirmed
+by grep against the actual source, not inferred**: all 141 of the
+mismatches (out of 175 projects checked) trace to one single known
+artifact -- `backend/tests/test_wp08_tenant_isolation_rls.py`'s own raw-SQL
+fixture, which inserts an `IntegrityCheckpoint` row with
+`chain_digest='original-digest'` (not a real 64-hex-char sha256 digest,
+zero backing `AuditEvent` rows) to test the RLS policy directly, bypassing
+the real checkpoint pipeline entirely. Because that table's append-only
+guarantee means no role can ever UPDATE or DELETE such a row afterward
+(by design, `app/models.py`'s own `IntegrityCheckpoint` docstring), every
+run of that one test across every session that has ever used this shared,
+never-reset `bgp_dev` has left one more behind -- 141 of them as of today,
+confirmed to be the sole and exact explanation (zero mismatches had any
+other shape once these were excluded).
+
+**This is a real, if minor, finding in its own right, not just an
+explanation to write off**: `restore_drill.py`'s binary
+Reconciliation OK/MISMATCH signal was already permanently red on this
+database and would stay that way forever, silently swallowing any future,
+genuinely new integrity incident inside the same undifferentiated
+"MISMATCH" bucket -- exactly the false-negative risk a quarterly assurance
+drill exists to prevent. **Fixed** (not just documented): `restore_drill.py`
+now classifies each mismatching project by digest *shape* -- a real chain
+digest is always 64 lowercase hex characters (`app/integrity.py`'s own
+`hashlib.sha256(...).hexdigest()`/`GENESIS_DIGEST`), so anything else is
+provably fixture/instrumentation data regardless of which test produced it,
+not a hardcoded match against one literal string. Output now reports
+"known test-fixture artifact(s)" and "UNEXPLAINED mismatch(es)" as separate
+counts; only a nonzero unexplained count fails the drill. **Deliberately
+not attempted**: deleting or otherwise cleaning up the 141 rows -- doing so
+would require bypassing the exact append-only guarantee (FORCE RLS,
+no UPDATE/DELETE policy, not even for `bgp_owner`) that this whole
+mechanism exists to enforce, working against the system's own design
+rather than around a real problem in it.
+
+Re-ran after the fix: **0 unexplained mismatches, reported OK** -- the
+first genuinely trustworthy "Reconciliation OK" this drill has produced
+since the fixture-pollution count passed 1. Ruff clean and formatted.
+No test imports or calls this script (grep-confirmed), so this change
+carries zero risk to the test suite.
+
+**What this does and does not close**: this is the restore-drill sub-piece
+of IPA04's remaining list, done for real against DEC05's actual accepted
+target, not just the pre-DEC05 REQ-029 placeholder. **Still open, named
+explicitly, not attempted this session**: the WCAG 2.2 AA audit, real
+usability sessions (Blueprint Sec.4.4 protocol), and an independent
+security review -- none of these can be performed or claimed by an agent
+session alone; the first needs either a working automated-accessibility
+toolchain in this environment (Playwright+axe-core already failed once
+before, WP11 entry above) or a human auditor, the second needs real human
+participants, the third needs a named, competent human reviewer
+independent of whoever wrote the code (same boundary tracker item #124 has
+named since 2026-09-17). Real cross-zone/cross-region replication remains
+a named non-goal of this prototype, not silently dropped. **No
+`tracker_cli.py gate` action taken.**
+
 1. Draft candidate evidence matches, then **verify each one against the actual
    file/commit/PR before writing a status**, never on a paraphrase.
 2. Complete requires a specific, locatable, checked evidence reference.
