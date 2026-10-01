@@ -7,7 +7,7 @@ import uuid
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, Request, Response, UploadFile
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -1088,8 +1088,13 @@ def export_import_download(request: Request, tenant_id: str, job_id: str, db: Se
             errors=[exc.detail if isinstance(exc.detail, str) else str(exc.detail)],
         )
 
-    return Response(
-        content=json.dumps(job.archive, indent=2, default=str),
+    # DEC08 (Q16): "asynchronous; must begin streaming within 2 s" -- a
+    # StreamingResponse over exports_router._iter_archive_json sends bytes
+    # as the archive is serialized, instead of a Response(content=...)
+    # that waits for one complete json.dumps() string before anything is
+    # sent. Content is byte-for-byte identical to the previous behaviour.
+    return StreamingResponse(
+        exports_router._iter_archive_json(job.archive),
         media_type="application/json",
         headers={"Content-Disposition": f'attachment; filename="bgp-export-{tenant_id}-{job.id}.json"'},
     )

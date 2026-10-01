@@ -32,6 +32,7 @@ export hops.
 import hashlib
 import json
 import uuid
+from collections.abc import Iterator
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -111,6 +112,17 @@ def _parse_dt(value: str | None) -> datetime | None:
 def _digest(payload) -> str:
     canonical = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _iter_archive_json(archive: dict) -> Iterator[str]:
+    """DEC08 (Q16): the export-download budget -- "asynchronous; must begin
+    streaming within 2 s". json.JSONEncoder.iterencode walks the archive
+    and yields text pieces as it goes, instead of json.dumps' single
+    all-at-once string -- the difference that lets a StreamingResponse
+    start sending bytes before the whole (possibly large) archive has been
+    serialized, rather than only after. Same `indent=2, default=str` as the
+    byte-for-byte content this replaces."""
+    yield from json.JSONEncoder(indent=2, default=str).iterencode(archive)
 
 
 def _build_archive(db: Session, tenant_id: str, requesting_user_id: str) -> dict:
