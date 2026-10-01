@@ -1,8 +1,18 @@
 name: ci
 
 on:
-  push:
+  # pull_request alone covers every commit on a branch with an open PR.
+  # Without scoping push to master too, a push to such a branch fired this
+  # workflow twice (once per trigger) -- on two separate, independently
+  # assigned runner VMs. Confirmed 2026-10-01 on PR #9: that doubled a
+  # structural GitHub Actions characteristic (run-to-run CPU variance
+  # between hosted runner instances) into visible, confusing flakiness on
+  # the render-timing/page-weight budget check specifically. Scoping push
+  # to master keeps a post-merge CI run without the redundant per-push
+  # duplicate.
   pull_request:
+  push:
+    branches: [master]
 
 jobs:
   backend:
