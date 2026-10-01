@@ -25,8 +25,8 @@ invention — see
 | --- | --- | --- |
 | Primary profile | mid-range Android on Fast 3G (1.6 Mbps, 150 ms RTT) | Q14 |
 | Degraded profile | low-end Android on Slow 3G (400 kbps, 400 ms RTT), "must stay usable, not fast" | Q14 |
-| LCP, primary | ≤ 2.5 s | Q16 |
-| LCP, degraded | ≤ 5 s | Q16 |
+| LCP, primary | ≤ 2.5 s (DEC08) — CI enforces ≤ 4.0 s | Q16 |
+| LCP, degraded | ≤ 5 s (DEC08) — CI enforces ≤ 8.0 s | Q16 |
 | INP | ≤ 200 ms | Q16 |
 | CLS | ≤ 0.1 | Q16 |
 | Critical render path | ≤ 170 KB compressed | Q16 |
@@ -48,6 +48,12 @@ broadband, 320/360 px viewports, 400% zoom reflow for WCAG 1.4.10) that this
 script does **not** cover — those are usability-testing device/viewport
 conditions, not render-timing budgets, and belong with the manual usability
 sample (Q13), not a CI gate.
+
+**LCP's CI-enforced numbers are looser than DEC08's own**, by a `CI_RUNNER_VARIANCE_MARGIN`
+(currently 1.6x) defined in `check.mjs`. This is a CI-measurement tolerance
+for GitHub-hosted runner variance (see "Known limitations"), not a change to
+what DEC08 actually approved — any further change to that margin should go
+through DEC08's UX/technical leads, not be treated as a routine code tweak.
 
 ## Pages measured
 
@@ -119,8 +125,14 @@ has. There is no click-and-navigate substitute standing in for it.
 - **Five pages, not all routes.** See "Pages measured" above.
 - **Even with median-of-3, expect some run-to-run variance**, more so for
   INP (real `devtools` throttling) than for LCP/CLS/bytes (`simulate`
-  throttling) — simulate reduces the variance a lot but, per the finding
-  above, does not eliminate it.
+  throttling) — simulate reduces the *within-run* variance a lot (median-of-3
+  samples landed within ~3ms of each other across every page in a given
+  run), but does nothing about *which GitHub-hosted runner VM* a job lands
+  on. Confirmed 2026-10-01 on PR #9: two single-trigger CI runs of the exact
+  same commit landed on runner tiers ~1.77–1.99x apart in CPU speed
+  (heavier pages amplify the gap more). `CI_RUNNER_VARIANCE_MARGIN` in
+  `check.mjs` is this script's answer to that — see "Where the numbers come
+  from" above — not a claim that the underlying noise is gone.
 - **The degraded profile's CPU multiplier is a calibration choice**, not a
   DEC08 number — see "Where the numbers come from".
 - **The critical-render-path byte figure is this script's own operational
