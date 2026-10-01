@@ -1,0 +1,15 @@
+{
+  "name": "bgp-perf-budgets",
+  "private": true,
+  "version": "1.0.0",
+  "description": "WP12/REQ-043: Lighthouse-based CI check for the render-timing (LCP/INP/CLS) and page-weight budgets DEC08 Q16 specifies. See check.mjs and README.md.",
+  "type": "module",
+  "scripts": {
+    "check": "node check.mjs"
+  },
+  "dependencies": {
+    "chrome-launcher": "1.2.2",
+    "lighthouse": "13.5.0",
+    "puppeteer-core": "25.12.0"
+  }
+}

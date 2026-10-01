@@ -1,8 +1,18 @@
 name: ci
 
 on:
-  push:
+  # pull_request alone covers every commit on a branch with an open PR.
+  # Without scoping push to master too, a push to such a branch fired this
+  # workflow twice (once per trigger) -- on two separate, independently
+  # assigned runner VMs. Confirmed 2026-10-01 on PR #9: that doubled a
+  # structural GitHub Actions characteristic (run-to-run CPU variance
+  # between hosted runner instances) into visible, confusing flakiness on
+  # the render-timing/page-weight budget check specifically. Scoping push
+  # to master keeps a post-merge CI run without the redundant per-push
+  # duplicate.
   pull_request:
+  push:
+    branches: [master]
 
 jobs:
   backend:
@@ -63,6 +73,31 @@ jobs:
         # same reasoning as Dependency/Secret scan each getting their own
         # named step below despite conceptually being "more checks."
         run: pytest -q tests/test_dec08_performance_budgets.py
+      - name: Setup Node (WP12/REQ-043 -- render-timing and page-weight budgets)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install render-timing/page-weight budget harness deps
+        working-directory: tools/perf-budgets
+        run: npm ci
+      - name: Start dev server for render-timing/page-weight budget check
+        run: |
+          nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > /tmp/uvicorn.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8000/ui/login > /dev/null && exit 0
+            sleep 1
+          done
+          echo "dev server never became healthy"; cat /tmp/uvicorn.log; exit 1
+      - name: Render-timing and page-weight budgets (DEC08 Q14/Q16)
+        # REQ-043's second of three numeric sub-parts (see tools/perf-budgets/
+        # README.md) -- LCP/INP/CLS and page-weight, measured with a real
+        # headless Chrome via Lighthouse against the server started above.
+        # Same DEC08 "enforced in CI as a blocking budget check" rationale
+        # as the API-latency step above.
+        working-directory: tools/perf-budgets
+        env:
+          BGP_PERF_BASE_URL: http://127.0.0.1:8000
+        run: npm run check
       - name: Dependency vulnerability scan (REQ-046)
         run: |
           pip install pip-audit==2.7.3
