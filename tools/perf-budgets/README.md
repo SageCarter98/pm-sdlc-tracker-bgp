@@ -80,14 +80,20 @@ Chrome (not Lighthouse's own CLI):
    Python test uses), and creates a project from it. This is real
    application data, not a hand-rolled page.
 2. For each of the two network/CPU profiles, navigates to each of the five
-   pages and runs Lighthouse's `largest-contentful-paint`,
-   `cumulative-layout-shift`, `first-contentful-paint`, `total-byte-weight`
-   and `network-requests` audits under `throttlingMethod: 'simulate'`.
+   pages 3 times and runs Lighthouse's `largest-contentful-paint`,
+   `cumulative-layout-shift`, `first-contentful-paint`, `total-byte-weight`,
+   `network-requests` and `render-blocking-insight` audits under
+   `throttlingMethod: 'simulate'` each time, budget-checking the median of
+   the 3 — `throttlingMethod: 'simulate'` still derives its numbers from one
+   real captured trace, so confirmed on real CI runs (not just a local
+   machine): two runs of the exact same commit on GitHub-hosted runners
+   produced primary-profile LCPs of ~1.4s and ~2.6s. "Simulate" is not the
+   deterministic escape hatch its name implies, hence the same multi-sample
+   discipline `test_dec08_performance_budgets.py` already uses for its own
+   latency numbers, applied here too.
 3. For `evidence-form` only, additionally measures INP in `timespan` mode
-   under real (`devtools`) throttling, 3 times, budget-checking the median —
-   the same multi-sample discipline
-   `test_dec08_performance_budgets.py` already uses for its own latency
-   numbers.
+   under real (`devtools`) throttling, also 3 times, budget-checking the
+   median.
 4. Prints a JSON report of every measurement, then exits non-zero and lists
    each specific breach if any budget was missed.
 
@@ -111,9 +117,10 @@ has. There is no click-and-navigate substitute standing in for it.
 ## Known limitations
 
 - **Five pages, not all routes.** See "Pages measured" above.
-- **Real CDP throttling (used for INP) is less deterministic than
-  simulation** (used for everything else) — expect more run-to-run variance
-  in the INP number specifically.
+- **Even with median-of-3, expect some run-to-run variance**, more so for
+  INP (real `devtools` throttling) than for LCP/CLS/bytes (`simulate`
+  throttling) — simulate reduces the variance a lot but, per the finding
+  above, does not eliminate it.
 - **The degraded profile's CPU multiplier is a calibration choice**, not a
   DEC08 number — see "Where the numbers come from".
 - **The critical-render-path byte figure is this script's own operational

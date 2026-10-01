@@ -152,7 +152,12 @@ function sumBytes(networkRequestsDetails, predicate) {
   return networkRequestsDetails.items.filter(predicate).reduce((sum, r) => sum + (r.transferSize || 0), 0);
 }
 
-async function measureNavigation(page, url, profile) {
+function median(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+async function measureNavigationOnce(page, url, profile) {
   const result = await lighthouse(
     url,
     { onlyCategories: undefined },
@@ -206,6 +211,28 @@ async function measureNavigation(page, url, profile) {
   return { lcpMs, cls, criticalRenderPathBytes, totalBytes, blockingRequests };
 }
 
+async function measureNavigation(page, url, profile) {
+  // Confirmed on real CI runs, not just this script's local dev machine:
+  // throttlingMethod 'simulate' still derives its numbers from one real
+  // captured trace, so LCP (and to a lesser extent CLS) inherits whatever
+  // CPU contention the host had at that moment -- two runs of the exact
+  // same commit on GitHub-hosted runners produced primary-profile LCPs of
+  // ~1.4s and ~2.6s. Median-of-3 is the same discipline measureInp already
+  // uses for devtools throttling, now applied here too since "simulate"
+  // turned out not to be the deterministic escape hatch its name implies.
+  const samples = [];
+  for (let i = 0; i < 3; i++) {
+    samples.push(await measureNavigationOnce(page, url, profile));
+  }
+  return {
+    lcpMs: median(samples.map((s) => s.lcpMs)),
+    cls: median(samples.map((s) => s.cls)),
+    criticalRenderPathBytes: median(samples.map((s) => s.criticalRenderPathBytes)),
+    totalBytes: median(samples.map((s) => s.totalBytes)),
+    blockingRequests: median(samples.map((s) => s.blockingRequests)),
+  };
+}
+
 async function measureInp(page, url, profile) {
   // INP is only computable by Lighthouse under real (devtools) throttling
   // in `timespan` mode with a genuine user interaction during the
@@ -215,7 +242,7 @@ async function measureInp(page, url, profile) {
   // CDP throttling is less deterministic than simulation, so this is run
   // 3x and the median is budget-checked -- same multi-sample discipline
   // test_dec08_performance_budgets.py already uses for its own latency
-  // numbers, not a new pattern invented here.
+  // numbers, and that measureNavigation above now also uses.
   const samples = [];
   for (let i = 0; i < 3; i++) {
     await page.goto(url, { waitUntil: 'load' });
@@ -245,8 +272,7 @@ async function measureInp(page, url, profile) {
     samples.push(audit.numericValue);
   }
   if (samples.length === 0) return null;
-  samples.sort((a, b) => a - b);
-  return samples[Math.floor(samples.length / 2)];
+  return median(samples);
 }
 
 async function main() {
