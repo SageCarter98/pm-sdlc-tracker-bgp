@@ -6,7 +6,7 @@ import json
 import uuid
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Form, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, Form, Request, UploadFile
 from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import text

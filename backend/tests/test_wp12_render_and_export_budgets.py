@@ -84,9 +84,7 @@ def test_export_download_streams_without_buffering_the_whole_body_first(ui_clien
     job_id = ui_client.post(f"/orgs/{tenant_id}/exports").json()["id"]
 
     start = time.monotonic()
-    with ui_client.stream(
-        "GET", f"/ui/orgs/{tenant_id}/export-import/exports/{job_id}/download"
-    ) as resp:
+    with ui_client.stream("GET", f"/ui/orgs/{tenant_id}/export-import/exports/{job_id}/download") as resp:
         assert resp.status_code == 200
         # DEC08 Q16's own words: "asynchronous; must begin streaming within
         # 2 s". A StreamingResponse never sends a precomputed
