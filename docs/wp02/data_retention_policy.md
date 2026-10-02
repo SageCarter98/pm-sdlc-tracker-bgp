@@ -1,18 +1,41 @@
 # Data retention, legal hold and disposal policy (REQ-048)
 
-**Status: drafted 2026-09-16, not independently reviewed.** See [README.md](README.md).
+**Status: drafted 2026-09-16. Retention floors reviewed and approved by Freston Kenny Adedeme
+2026-10-01** (owner of the KenAddme PM/SDLC frameworks this project is governed under), resolving
+open question 1 below: the 30-day post-deletion grace window, 90-day unaccepted-invitation purge
+and 12-month access-event retention are accepted as proposed. See [README.md](README.md).
+
+**What that approval does and does not cover**, stated rather than left to inference:
+
+- It covers the **floors** (the numbers). It is not an independent security/privacy review of this
+  document as a whole, and open questions 2 and 3 below remain open.
+- Two of the three approved floors are now **enforced in code**:
+  `backend/scripts/retention_sweep.py` (REQ-047), covering unaccepted invitations and
+  `tenant_access_events`, plus `security_log_events` on the same 12-month basis — see the next
+  bullet.
+- The `users` 30-day grace window is **approved but not enforceable yet**: this app has no
+  account-deletion mechanism (no `deleted_at` column, no deletion endpoint), so there is no
+  deletion event for a grace window to run from. Named in that script's own docstring as
+  deliberately out of scope rather than overlooked.
+- `security_log_events` is **not named in the table below** but is swept on the same 12-month
+  floor, because `app/models.py`'s own `SecurityLogEvent` docstring points here for its retention
+  and the rationale is identical. That extension is an inference by the implementing pass, flagged
+  here for confirmation at the next review rather than quietly folded into the approval above.
 
 REQ-048 (blueprint line 458-464): "Define retention floor, legal hold and authorised disposal;
 preserve actor attribution within retention and clarify decision retention." Verification
 TST-048: "Policy review resolves retention conflicts before implementation; hold blocks eligible
 disposal and records its basis."
 
-This is a **policy proposal** for independent review, not an implemented control. No
-retention-enforcement code (scheduled purge job, legal-hold flag, disposal audit) exists yet
-anywhere in the repository — that is correctly out of scope for WP02, which is discovery and
-decisions, not implementation. Implementation belongs to whichever work package owns each table
-once it's built (WP03/WP04 for what exists today; WP06/WP07/WP08 for Project/Evidence/Decision/
-Audit tables).
+This started as a **policy proposal** for independent review, not an implemented control, and
+WP02 correctly held no enforcement code — WP02 is discovery and decisions, not implementation.
+
+**Superseded in part, 2026-10-01**: the purge-job half now exists as
+`backend/scripts/retention_sweep.py` (REQ-047), following the floor approval recorded above.
+Still absent, and still correctly out of scope here: a **legal-hold flag** (proposed below,
+unbuilt — nothing currently blocks a disposal that a hold should block) and a **disposal audit
+table** (the sweep reports counts to its own output; it does not write a durable per-row disposal
+record). Retention for the WP06-WP09 tables below remains unaddressed, as that section says.
 
 ## Proposed retention floors, by table (tables that exist today)
 

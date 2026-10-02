@@ -2276,6 +2276,94 @@ and independent security review remain unperformed. Dev server and
 scratch capture/scan scripts (not committed; scratchpad-only) both cleaned
 up at the end of this work. **No `tracker_cli.py gate` action taken.**
 
+## REQ-047 retention enforcement: the disposal sweep, and the retention floors approved to enable it (2026-10-01)
+
+Same session as the WP12/REQ-043 performance-budget work above (PR #9,
+merged `1d2fff4`). Picked the longest-standing named gap in this file as
+the next buildable item: "retention is not automatically enforced (no
+scheduler exists, a gap named since WP01)", restated verbatim in
+`app/models.py`'s own `SecurityLogEvent` docstring.
+
+**Blocked first, then unblocked by a real approval, not by assumption.**
+`docs/wp02/data_retention_policy.md` carried "Status: drafted 2026-09-16,
+not independently reviewed", and three of its floors are explicitly
+flagged in its own text as non-blueprint proposals ("None of these numbers
+come from the blueprint -- they are this drafting pass's proposals only").
+Building an automated job that permanently deletes rows on unreviewed
+numbers would have been a gate decision through the back door, so this
+was raised rather than coded around. Freston Kenny Adedeme reviewed the
+floors in-session and approved them as proposed (30-day post-deletion
+grace, 90-day unaccepted-invitation purge, 12-month access-event
+retention). That approval is now recorded in the policy doc's own Status
+block, **scoped honestly**: it covers the numbers, it is not an
+independent security/privacy review of the document, and the doc's open
+questions 2 and 3 stay open. **No `tracker_cli.py gate` action taken.**
+
+**Built**: `backend/scripts/retention_sweep.py`, dry-run by default
+(`--apply` required to delete), following the `scripts/anchor_worm.py` /
+`restore_drill.py` precedent for manually-run maintenance (this prototype
+still has no scheduler, and this pass did not invent one).
+
+**The design decision that actually mattered, and it was measured, not
+reasoned**: `invitations` and `tenant_access_events` carry FORCE ROW LEVEL
+SECURITY (migration `0002_wp04_rls.py`), which applies to the table owner
+too, with a fail-closed tenant policy. Verified against the live dev
+database before writing the sweep: connected as `bgp_owner` with no
+`app.tenant_id` set, `SELECT count(*)` on both tables returns **0** --
+so the obvious implementation (one cross-tenant bulk `DELETE`) would have
+deleted **nothing, silently, with no error**. The sweep therefore iterates
+tenant by tenant setting `app.tenant_id`, exactly as every other
+RLS-scoped query in this codebase does. **Deliberately rejected**:
+granting BYPASSRLS to a maintenance role, or adding a retention-specific
+RLS policy -- either would punch a hole in the precise tenant-isolation
+control REQ-007/008 and the REQ-009 adversarial suite exist to defend, to
+save a loop. `tests/test_req047_retention_sweep.py`'s first test pins that
+fail-closed premise, so the loop can't be "optimised" away later without
+the guard failing first.
+
+**Index decision, also measured rather than assumed by symmetry** —
+migration `0018_req047_retention_index.py`: `EXPLAIN` on the real database
+showed the two RLS'd tables already ride their existing `tenant_id`
+indexes with the timestamp as a cheap filter over one tenant's rows (Index
+Scan, cost 8.31 / 8.17), so **no** index was added there; but
+`security_log_events` (no RLS, no tenant predicate to narrow on) was a
+`Seq Scan` at cost 126.94 and growing unbounded, so it got
+`ix_security_log_events_created_at` — re-measured after: Index Scan, cost
+**4.30**. An initial instinct to index all three timestamp columns was
+wrong and the measurement caught it.
+
+**Scoped out, named rather than silently skipped**: the approved `users`
+30-day grace window is **not enforced**, because it is not enforceable —
+this app has no account-deletion mechanism at all (no `deleted_at`, no
+deletion endpoint), so no deletion event exists for a grace window to run
+from; building that feature was not in this pass's scope. `memberships`
+removal is already `active=false` (which IS the policy's stated
+mechanism). `mfa_recovery_codes` is retain-don't-purge by policy, so no
+action is the correct action. Published template versions, decisions,
+audit events and checkpoints stay indefinite by design.
+`security_log_events` is swept on the same 12-month floor even though the
+policy's table never names it — an **inference** from that model's own
+docstring pointing at the policy, flagged in both the script docstring and
+the policy doc for confirmation at next review, not folded into the
+approval as if covered.
+
+**Verified**: 7 new tests pass (floor boundaries both directions, accepted
+invitations retained regardless of age, dry-run deletes nothing,
+idempotent re-run, and a cross-tenant test proving sweeping tenant A
+leaves tenant B's equally-eligible rows alone). Full suite re-run. Ruff
+clean and formatted. The script was run for real in **dry-run** against
+the live dev database -- 1114 tenants in 8.7s, reporting 10 eligible
+invitations and 7 eligible access events. **`--apply` was deliberately
+not run**: that would delete 17 real rows from the shared dev database,
+which this pass was not asked to do, so the apply path's evidence is its
+tests against purpose-made fixture rows, not a live disposal. Stated
+plainly rather than implied as fully exercised.
+
+**Also still missing, from the policy's own list**: a legal-hold flag
+(nothing currently blocks a disposal that a hold should block) and a
+durable per-row disposal audit record (the sweep reports counts to its
+output only). Both recorded in the policy doc as remaining gaps.
+
 1. Draft candidate evidence matches, then **verify each one against the actual
    file/commit/PR before writing a status**, never on a paraphrase.
 2. Complete requires a specific, locatable, checked evidence reference.
