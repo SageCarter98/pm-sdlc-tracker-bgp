@@ -4,23 +4,69 @@ executable code and invariant overrides. Nothing in this module ever
 evaluates a string as code -- conditions are structured data, walked by
 _evaluate_condition, not passed to eval/exec or a template engine.
 
-DEC07 (exact vocabulary and limits, third framework choice) is still open --
-this is a working prototype of the schema shape Sec.5.5 already approved,
-not a claim that DEC07 is resolved.
+DEC07 Q10 (docs/blueprint/BGP_DEC_Resolution_Intake_2026-09-25_ANSWERED.md
+lines 119-132) resolved the vocabulary: Sec.5.5's eq/in/all/any approved
+as-is, plus three additions (`not`, `gte`/`lte`, `count(...)` with a
+comparison) and two tightenings (a 200-node cap alongside the depth-5
+limit, and a hard evaluation timeout). It also requires rules to be pure
+functions of project state plus a supplied "as at" timestamp, and a
+`vocabulary_version` stamped on every template version "so old templates
+evaluate identically forever, regardless of later vocabulary changes".
+
+DEC07 closes with "Resist adding anything beyond this", so: no operator
+here goes beyond that list, and `count`'s comparison reuses eq/gte/lte
+rather than introducing a fourth comparison form.
+
+DEC07 Q11's third framework fixture (a no-gate agile DoR/DoD framework) is
+separate work and not implemented here.
 """
 
 from __future__ import annotations
 
+import time
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 MAX_CONDITION_DEPTH = 5
 
+# DEC07 tightening 1: "cap total condition nodes at 200 in addition to the
+# depth-5 limit".
+MAX_CONDITION_NODES = 200
+
+# DEC07 tightening 2: "add a hard evaluation timeout". Defence in depth
+# rather than the primary bound -- a tree already capped at depth 5 and 200
+# nodes evaluates in microseconds, so a budget this generous should never
+# be reached by a well-formed rule. Enforced as a deadline checked at every
+# node (see _evaluate), not via signal.alarm (Unix-only) or a worker
+# thread: this runs inside a request on both Windows dev and Linux CI.
+EVALUATION_TIMEOUT_SECONDS = 1.0
+
+# The vocabulary this build evaluates and authors against. Bumping this is
+# the mechanism DEC07 asks for: a template stamped with an older version
+# keeps being validated against exactly the operators that existed then,
+# so adding to the vocabulary later cannot change how it behaves.
+VOCABULARY_VERSION = 2
+
 # Sec.5.5: "Permitted operators are equality, membership and bounded all/any
 # over declared facts. No arbitrary scripts, network lookups or unbounded
-# recursion."
-ALLOWED_OPERATORS = {"eq", "in", "all", "any"}
+# recursion." DEC07 Q10 added the rest, gated by vocabulary version.
+OPERATORS_BY_VOCABULARY_VERSION: dict[int, set[str]] = {
+    1: {"eq", "in", "all", "any"},
+    2: {"eq", "in", "all", "any", "not", "gte", "lte", "count"},
+}
+ALLOWED_OPERATORS = OPERATORS_BY_VOCABULARY_VERSION[VOCABULARY_VERSION]
+
+# Leaf operators (take `fact` + `value`) vs branch operators (take nested
+# `conditions`). `count` is a branch that additionally carries its own
+# comparison against a target.
+_LEAF_OPERATORS = {"eq", "in", "gte", "lte"}
+_COUNT_COMPARISONS = {"eq", "gte", "lte"}
+
+# The reserved fact name carrying DEC07's "supplied 'as at' timestamp".
+# Rules read it like any other fact; nothing in project state can shadow it
+# (see evaluate_condition).
+AS_AT_FACT = "as_at"
 
 # Facts/keys a rule must never be able to name -- doing so would let a
 # tenant-authored template turn off the platform's own invariants, which
@@ -42,15 +88,28 @@ class RuleValidationError(ValueError):
         super().__init__("; ".join(errors))
 
 
+class RuleEvaluationTimeout(Exception):
+    """DEC07's "hard evaluation timeout" fired. Deliberately an exception
+    rather than a silent False: a rule that cannot be evaluated inside its
+    budget is an operational anomaly, not a readiness answer, and the one
+    production caller (app/routers/projects.py) already rolls its whole
+    transaction back if evaluation raises -- a behaviour
+    tests/test_projects.py pins independently."""
+
+
 class Condition(BaseModel):
-    """A single leaf test, or a bounded all/any over nested conditions.
+    """A single leaf test, or a bounded branch over nested conditions.
     There is no "expression" field anywhere in this model -- there is
     nothing here capable of representing arbitrary code."""
 
-    op: Literal["eq", "in", "all", "any"]
+    op: Literal["eq", "in", "all", "any", "not", "gte", "lte", "count"]
     fact: str | None = None
     value: Any | None = None
     conditions: list["Condition"] | None = None
+    # `count` only: how its tally of satisfied sub-conditions is compared
+    # against `value`. Reuses the approved comparison words rather than
+    # adding new ones, per DEC07's "resist adding anything beyond this".
+    compare: Literal["eq", "gte", "lte"] | None = None
 
     @field_validator("fact")
     @classmethod
@@ -61,11 +120,33 @@ class Condition(BaseModel):
 
     @model_validator(mode="after")
     def _shape_matches_operator(self) -> "Condition":
-        if self.op in ("eq", "in"):
+        if self.op != "count" and self.compare is not None:
+            raise ValueError(f"operator '{self.op}' does not take 'compare'")
+
+        if self.op in _LEAF_OPERATORS:
             if self.fact is None:
                 raise ValueError(f"operator '{self.op}' requires 'fact'")
             if self.conditions is not None:
                 raise ValueError(f"operator '{self.op}' does not take nested 'conditions'")
+        elif self.op == "not":
+            # Unary by design: `not` over a list would silently need an
+            # implied all/any between the negated parts, which the author
+            # should have to state explicitly.
+            if not self.conditions or len(self.conditions) != 1:
+                raise ValueError("operator 'not' requires exactly one nested condition")
+            if self.fact is not None:
+                raise ValueError("operator 'not' does not take 'fact' directly")
+        elif self.op == "count":
+            if not self.conditions:
+                raise ValueError("operator 'count' requires a non-empty 'conditions' list")
+            if self.fact is not None:
+                raise ValueError("operator 'count' does not take 'fact' directly")
+            if self.compare is None:
+                raise ValueError("operator 'count' requires 'compare' (one of eq, gte, lte)")
+            # bool is a subclass of int in Python, so `count >= True` would
+            # pass a naive isinstance check.
+            if isinstance(self.value, bool) or not isinstance(self.value, int):
+                raise ValueError("operator 'count' requires an integer 'value' to compare its tally against")
         else:  # all / any
             if not self.conditions:
                 raise ValueError(f"operator '{self.op}' requires a non-empty 'conditions' list")
@@ -77,6 +158,24 @@ class Condition(BaseModel):
         if not self.conditions:
             return 1
         return 1 + max(c.depth() for c in self.conditions)
+
+    def node_count(self) -> int:
+        """Total nodes in this tree, this one included -- the quantity
+        DEC07's 200-node cap bounds."""
+        if not self.conditions:
+            return 1
+        return 1 + sum(c.node_count() for c in self.conditions)
+
+    def operators_used(self) -> set[str]:
+        """Every operator appearing anywhere in this tree, for vocabulary
+        gating. `compare` is not included: its values (eq/gte/lte) are
+        words of the `count` operator's own shape, and `count` itself is
+        already gated -- counting them separately would reject `count` at
+        every version."""
+        used = {self.op}
+        for child in self.conditions or ():
+            used |= child.operators_used()
+        return used
 
 
 Condition.model_rebuild()
@@ -106,11 +205,29 @@ class Rule(BaseModel):
     evidence_example: str | None = None
 
     @model_validator(mode="after")
-    def _bounded_depth(self) -> "Rule":
+    def _bounded_depth_and_size(self) -> "Rule":
         for cond in (self.applicability, self.conditions):
             if cond is not None and cond.depth() > MAX_CONDITION_DEPTH:
                 raise ValueError(f"rule '{self.rule_id}': condition nesting exceeds max depth {MAX_CONDITION_DEPTH}")
+
+        # DEC07's words are "cap total condition nodes at 200". Read as the
+        # total this rule evaluates -- applicability and conditions summed,
+        # not each tree separately -- since bounding evaluation cost is the
+        # stated purpose. Flagged as an interpretation: the stricter of the
+        # two readings, so two 150-node trees in one rule is 300 and over.
+        total_nodes = sum(c.node_count() for c in (self.applicability, self.conditions) if c is not None)
+        if total_nodes > MAX_CONDITION_NODES:
+            raise ValueError(
+                f"rule '{self.rule_id}': {total_nodes} total condition nodes exceeds max {MAX_CONDITION_NODES}"
+            )
         return self
+
+    def operators_used(self) -> set[str]:
+        used: set[str] = set()
+        for cond in (self.applicability, self.conditions):
+            if cond is not None:
+                used |= cond.operators_used()
+        return used
 
 
 class GateDefinition(BaseModel):
@@ -127,6 +244,14 @@ class TemplateSchema(BaseModel):
     classification, role, status, decision and applicability schemes."""
 
     schema_version: int = 1
+    # DEC07: "Stamp vocabulary_version on every template version so old
+    # templates evaluate identically forever, regardless of later
+    # vocabulary changes." Defaulting to 1 is what makes that true without
+    # a migration or a backfill: every version published before this field
+    # existed is immutable (REQ-011), so its stored schema_json simply
+    # lacks the key and validates as vocabulary 1 -- exactly the operator
+    # set it was authored against.
+    vocabulary_version: int = 1
     tracks: list[str] = Field(min_length=1)
     classes: list[str] = Field(min_length=1)
     roles: list[str] = Field(min_length=1)
@@ -140,6 +265,14 @@ class TemplateSchema(BaseModel):
         class_set, role_set = set(self.classes), set(self.roles)
         seen_gate_ids: set[str] = set()
         seen_rule_ids: set[str] = set()
+
+        permitted_operators = OPERATORS_BY_VOCABULARY_VERSION.get(self.vocabulary_version)
+        if permitted_operators is None:
+            errors.append(
+                f"vocabulary_version {self.vocabulary_version} is not a vocabulary this build knows "
+                f"(known: {sorted(OPERATORS_BY_VOCABULARY_VERSION)})"
+            )
+            permitted_operators = set()
 
         for gate in self.gates:
             if gate.gate_id in seen_gate_ids:
@@ -165,6 +298,16 @@ class TemplateSchema(BaseModel):
                         f"rule '{rule.rule_id}' references undeclared class(es) {sorted(unknown_rule_classes)}"
                     )
 
+                # Covers applicability and conditions alike -- a rule can
+                # gate its own relevance on an operator just as easily as
+                # its readiness test.
+                beyond_vocabulary = rule.operators_used() - permitted_operators
+                if beyond_vocabulary:
+                    errors.append(
+                        f"rule '{rule.rule_id}' uses operator(s) {sorted(beyond_vocabulary)} "
+                        f"not in vocabulary_version {self.vocabulary_version}"
+                    )
+
         if errors:
             raise ValueError("; ".join(errors))
         return self
@@ -185,9 +328,43 @@ def validate_template_schema(data: dict) -> TemplateSchema:
         raise RuleValidationError(errors) from exc
 
 
-def evaluate_condition(condition: Condition, facts: dict[str, Any]) -> bool:
-    """Evaluate order per Sec.5.5: unknown facts fail closed. This walks a
-    fixed, small AST -- it never executes tenant-supplied code."""
+def _compare(left: Any, right: Any, op: str) -> bool:
+    """`gte`/`lte` over whatever project state actually holds. Python 3
+    raises TypeError on mismatched types ("x" >= 1), and a tenant-authored
+    rule comparing a text fact against a numeric threshold is a realistic
+    mistake -- so an incomparable pair fails closed, the same answer an
+    unknown fact already gives, rather than propagating out of a readiness
+    check and failing the request.
+
+    Dates compare as text, deliberately: template JSON has no date type, so
+    a rule's threshold is always a string, and this stays a plain
+    comparison rather than growing date parsing DEC07 never asked for.
+    That works because ISO-8601 in a single consistent format sorts
+    lexicographically -- which is why callers must supply `as_at` as an ISO
+    string, not a datetime object (a datetime compared against a string
+    threshold would raise TypeError and fail closed every time, making
+    date rules silently useless; app/routers/projects.py passes
+    `.isoformat()` for exactly this reason).
+
+    Known boundary behaviour, stated rather than left to be discovered: a
+    full timestamp is lexicographically greater than the bare date it falls
+    on ("2026-10-02T05:00:00+00:00" > "2026-10-02"), so `lte` against a
+    bare date excludes that day. A rule meaning "on or before 2 October"
+    should compare against the start of the next day, or against a full
+    timestamp."""
+    try:
+        return left >= right if op == "gte" else left <= right
+    except TypeError:
+        return False
+
+
+def _evaluate(condition: Condition, facts: dict[str, Any], deadline: float | None) -> bool:
+    if deadline is not None and time.monotonic() > deadline:
+        raise RuleEvaluationTimeout(
+            f"rule evaluation exceeded its {EVALUATION_TIMEOUT_SECONDS}s budget "
+            f"(depth<={MAX_CONDITION_DEPTH}, nodes<={MAX_CONDITION_NODES} should evaluate far inside it)"
+        )
+
     if condition.op == "eq":
         if condition.fact not in facts:
             return False
@@ -196,8 +373,49 @@ def evaluate_condition(condition: Condition, facts: dict[str, Any]) -> bool:
         if condition.fact not in facts:
             return False
         return facts[condition.fact] in condition.value
+    if condition.op in ("gte", "lte"):
+        if condition.fact not in facts:
+            return False
+        return _compare(facts[condition.fact], condition.value, condition.op)
     if condition.op == "all":
-        return all(evaluate_condition(c, facts) for c in condition.conditions)
+        return all(_evaluate(c, facts, deadline) for c in condition.conditions)
     if condition.op == "any":
-        return any(evaluate_condition(c, facts) for c in condition.conditions)
+        return any(_evaluate(c, facts, deadline) for c in condition.conditions)
+    if condition.op == "not":
+        return not _evaluate(condition.conditions[0], facts, deadline)
+    if condition.op == "count":
+        # No short-circuit: the tally needs every sub-condition's answer.
+        satisfied = sum(1 for c in condition.conditions if _evaluate(c, facts, deadline))
+        if condition.compare == "eq":
+            return satisfied == condition.value
+        return _compare(satisfied, condition.value, condition.compare)
     raise AssertionError(f"unreachable: unknown operator {condition.op!r} slipped past validation")
+
+
+def evaluate_condition(
+    condition: Condition,
+    facts: dict[str, Any],
+    *,
+    as_at: Any | None = None,
+    timeout_seconds: float | None = EVALUATION_TIMEOUT_SECONDS,
+) -> bool:
+    """Evaluate order per Sec.5.5: unknown facts fail closed. This walks a
+    fixed, small AST -- it never executes tenant-supplied code.
+
+    DEC07: rules are "pure functions of project state plus a supplied 'as
+    at' timestamp -- no external calls, no wall-clock reads inside the rule
+    itself". So `as_at` is a parameter, never read from the clock here, and
+    a rule reads it as the `as_at` fact like any other. Project state
+    cannot shadow it: it is applied over `facts`, because project state is
+    tenant-influenced and the evaluation timestamp is not. Omit it and a
+    rule referencing `as_at` fails closed, like any other unknown fact.
+
+    `time.monotonic` below is the timeout's own bookkeeping, not a fact a
+    rule can read -- it cannot affect any rule's result, only whether
+    evaluation is abandoned. Pass `timeout_seconds=None` to disable the
+    deadline (no caller does; kept so the bound is explicit at the call
+    site rather than implicit)."""
+    if as_at is not None:
+        facts = {**facts, AS_AT_FACT: as_at}
+    deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
+    return _evaluate(condition, facts, deadline)

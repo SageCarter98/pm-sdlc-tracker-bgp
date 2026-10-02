@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -164,10 +164,20 @@ def _seed_evidence_for_occurrence(
     trigger: str,
     occurrence: GateOccurrence,
     actor_user_id: str,
+    # An ISO-8601 string, not a datetime: rule_engine._compare compares
+    # date facts as text, and a datetime against a string threshold would
+    # raise TypeError and fail closed every time.
+    as_at: str | None = None,
 ) -> list[EvidenceItem]:
     """REQ-016/017: every applicable rule on this gate, for this class and
     this occurrence's trigger type, becomes its own EvidenceItem plus a
-    first EvidenceRevision -- never shared with any other occurrence."""
+    first EvidenceRevision -- never shared with any other occurrence.
+
+    `as_at` is DEC07's "supplied 'as at' timestamp": applicability may now
+    compare dates (gte/lte), and a rule must never read the clock itself,
+    so the caller passes the moment this seeding represents. Omitted, a
+    date-comparing applicability rule fails closed like any unknown
+    fact."""
     gate = next((g for g in schema.gates if g.gate_id == gate_id), None)
     if gate is None:
         return []
@@ -176,7 +186,9 @@ def _seed_evidence_for_occurrence(
     for rule in gate.rules:
         if class_id not in rule.class_ids or rule.occurrence_type != trigger:
             continue
-        if rule.applicability is not None and not evaluate_condition(rule.applicability, {"class_id": class_id}):
+        if rule.applicability is not None and not evaluate_condition(
+            rule.applicability, {"class_id": class_id}, as_at=as_at
+        ):
             continue
 
         item = EvidenceItem(
@@ -310,6 +322,7 @@ def create_project(
                     trigger="routine",
                     occurrence=occurrence,
                     actor_user_id=membership.user_id,
+                    as_at=datetime.now(timezone.utc).isoformat(),
                 )
             )
 
@@ -435,6 +448,7 @@ def create_occurrence(
             trigger=payload.trigger,
             occurrence=occurrence,
             actor_user_id=membership.user_id,
+            as_at=datetime.now(timezone.utc).isoformat(),
         )
         db.commit()
     except IntegrityError:
