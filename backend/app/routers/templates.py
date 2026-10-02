@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.deps import get_active_membership, require_role
 from app.models import Membership, Role, Template, TemplateVersion
-from app.rule_engine import RuleValidationError, validate_template_schema
+from app.rule_engine import VOCABULARY_VERSION, RuleValidationError, validate_template_schema
 
 router = APIRouter(prefix="/orgs/{tenant_id}/templates", tags=["templates"])
 
@@ -47,6 +47,21 @@ class TemplateOut(BaseModel):
 
 _BLANK_SCHEMA = {
     "schema_version": 1,
+    # DEC07: "Stamp vocabulary_version on every template version." Stamped
+    # here, on the blank guided-authoring starter, so a tenant authoring a
+    # template from scratch (AC08: reachable without hand-editing JSON)
+    # gets the current vocabulary rather than defaulting to 1 and being
+    # unable to use not/gte/lte/count at all.
+    #
+    # Deliberately NOT stamped on the other version-creating paths, and
+    # the distinction matters: the JSON import path and update_draft take
+    # an externally-authored schema, so whatever IT declares governs
+    # (absent => 1, the vocabulary it was written against); and the
+    # fork/copy path carries the source version's schema_json unchanged,
+    # so a copy keeps evaluating exactly as its original did. Re-stamping
+    # either would let a BGP-F04 export hop silently re-pin a template's
+    # semantics, which is the opposite of what DEC07 asks for.
+    "vocabulary_version": VOCABULARY_VERSION,
     "tracks": ["Delivery"],
     "classes": ["Draft"],
     "roles": ["contributor", "approver"],

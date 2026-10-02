@@ -108,6 +108,25 @@ def _describe_condition(cond: dict | None) -> str:
         parts = [_describe_condition(c) for c in cond.get("conditions") or []]
         joiner = " AND " if op == "all" else " OR "
         return "(" + joiner.join(parts) + ")"
+    # DEC07 Q10's additions. The guided form builder below still only
+    # *creates* eq/in (+ one all/any wrapper) -- these arrive via Advanced
+    # JSON or import -- but they must still READ back in plain language:
+    # without this, a perfectly valid rule rendered as "Unrecognised
+    # condition shape", which is actively misleading rather than merely
+    # unhelpful. Offering them in the guided builder is the separate UI
+    # pass DEC07 itself anticipates ("another thing the guided authoring UI
+    # has to explain to a beginner").
+    if op == "not":
+        inner = cond.get("conditions") or []
+        return f"NOT {_describe_condition(inner[0])}" if inner else "NOT (empty)"
+    if op == "gte":
+        return f"{cond.get('fact')} is at least {cond.get('value')!r}"
+    if op == "lte":
+        return f"{cond.get('fact')} is at most {cond.get('value')!r}"
+    if op == "count":
+        parts = [_describe_condition(c) for c in cond.get("conditions") or []]
+        wording = {"gte": "at least", "lte": "at most", "eq": "exactly"}.get(cond.get("compare"), "?")
+        return f"{wording} {cond.get('value')} of [" + ", ".join(parts) + "]"
     return "Unrecognised condition shape -- edit via Advanced JSON"
 
 
