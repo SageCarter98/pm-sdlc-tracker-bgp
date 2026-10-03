@@ -36,6 +36,13 @@ jobs:
       # CI-only synthetic credentials -- not used anywhere outside this job.
       BGP_DATABASE_URL: postgresql+psycopg2://bgp_app:ci-app-password@localhost:5432/bgp_dev
       BGP_MIGRATION_DATABASE_URL: postgresql+psycopg2://bgp_owner:ci-owner-password@localhost:5432/bgp_dev
+      # Without this, test_dec05_durability_mechanism.py's availability probe
+      # cannot connect and all 6 DEC05 durability tests self-skip -- which is
+      # exactly what had been happening on every CI run since they were
+      # written (2026-09-29): the role had never appeared in this workflow.
+      # A skip is not a pass, and IPA04's register row cites those tests as
+      # evidence, so they were only ever green locally.
+      BGP_BACKUP_DATABASE_URL: postgresql+psycopg2://bgp_backup:ci-backup-password@localhost:5432/bgp_dev
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -51,15 +58,26 @@ jobs:
           pip install ruff==0.9.6
           ruff check .
           ruff format --check .
-      - name: Create bgp_dev roles and database (REQ-007 two-role setup)
+      # bgp_backup is created with CONNECT and schema USAGE only -- NOT the
+      # pg_read_all_data or CREATEDB privileges scripts/restore_drill.py
+      # needs. That is deliberate: the DEC05 tests use this role solely for
+      # an availability probe (`SELECT 1`, test_dec05_durability_mechanism.py
+      # lines 46-47) and never read a row through it, so connectability is
+      # all CI requires. Consequence to be explicit about: this workflow
+      # does NOT exercise the restore drill, and a green run here is not
+      # evidence for REQ-029 backup/restore.
+      - name: Create bgp_dev roles and database (REQ-007 two-role setup, plus bgp_backup for DEC05)
         env:
           PGPASSWORD: ci-superuser-password
         run: |
           psql -h localhost -U postgres -c "CREATE ROLE bgp_owner LOGIN PASSWORD 'ci-owner-password' NOSUPERUSER NOCREATEDB NOCREATEROLE;"
           psql -h localhost -U postgres -c "CREATE ROLE bgp_app LOGIN PASSWORD 'ci-app-password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;"
+          psql -h localhost -U postgres -c "CREATE ROLE bgp_backup LOGIN PASSWORD 'ci-backup-password' NOSUPERUSER NOCREATEDB NOCREATEROLE BYPASSRLS;"
           psql -h localhost -U postgres -c "CREATE DATABASE bgp_dev OWNER bgp_owner;"
           psql -h localhost -U postgres -c "GRANT CONNECT ON DATABASE bgp_dev TO bgp_app;"
           psql -h localhost -U postgres -d bgp_dev -c "GRANT USAGE ON SCHEMA public TO bgp_app;"
+          psql -h localhost -U postgres -c "GRANT CONNECT ON DATABASE bgp_dev TO bgp_backup;"
+          psql -h localhost -U postgres -d bgp_dev -c "GRANT USAGE ON SCHEMA public TO bgp_backup;"
       - name: Apply migrations (RLS policies -- REQ-007/008)
         run: alembic upgrade head
       - name: Run tests, including the adversarial cross-tenant suite (REQ-009)
