@@ -130,8 +130,17 @@ def _describe_condition(cond: dict | None) -> str:
     return "Unrecognised condition shape -- edit via Advanced JSON"
 
 
+def _bgp_status_id(entry):
+    """A status/decision-outcome entry is either a bare string (vocabulary
+    1/2) or a structured object with an `id` (DEC07 vocabulary 3). Without
+    this, Jinja's `join` filter stringifies the dict and renders its repr
+    straight into the page."""
+    return entry["id"] if isinstance(entry, dict) else entry
+
+
 templates.env.globals["describe_condition"] = _describe_condition
 templates.env.filters["tojson"] = lambda value, indent=2: json.dumps(value, indent=indent, default=str)
+templates.env.filters["bgp_status_id"] = _bgp_status_id
 
 
 # ---------------------------------------------------------------- Login/MFA
@@ -440,7 +449,7 @@ def evidence_form_page(
         tenant_id=tenant_id,
         item=detail.item,
         revisions=detail.revisions,
-        statuses=schema.statuses,
+        statuses=list(schema.status_lookup()),
         draft=draft,
         flash=flash,
         rule=rule,
@@ -524,7 +533,7 @@ def evidence_submit_revision(
             tenant_id=tenant_id,
             item=detail.item,
             revisions=detail.revisions,
-            statuses=schema.statuses,
+            statuses=list(schema.status_lookup()),
             draft=None,
             errors=[exc.detail if isinstance(exc.detail, str) else str(exc.detail)],
         )
@@ -571,7 +580,7 @@ async def evidence_upload_attachment(
             tenant_id=tenant_id,
             item=detail.item,
             revisions=detail.revisions,
-            statuses=schema.statuses,
+            statuses=list(schema.status_lookup()),
             draft=None,
             rule=_find_rule(schema, detail.item.gate_id, detail.item.rule_id),
             attachments=attachments,
