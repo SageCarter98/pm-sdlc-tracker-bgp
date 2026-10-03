@@ -207,7 +207,7 @@ def _seed_evidence_for_occurrence(
             required=rule.blocker_level != "advisory",
             blocker_level=rule.blocker_level,
             permitted_role_ids=rule.permitted_role_ids,
-            status="Not started",
+            status=schema.initial_status(),
             owner_user_id=None,
             due_date=None,
             completed_date=None,
@@ -221,7 +221,7 @@ def _seed_evidence_for_occurrence(
                 tenant_id=tenant_id,
                 evidence_item_id=item.id,
                 revision_number=1,
-                status="Not started",
+                status=schema.initial_status(),
                 owner_user_id=None,
                 due_date=None,
                 completed_date=None,
@@ -668,7 +668,21 @@ def create_evidence_revision(
             f"base_revision {payload.base_revision} is stale -- current is {item.latest_revision_number}",
         )
 
-    if payload.status == "Complete" and item.required and not payload.reference:
+    project_row = db.query(Project).filter(Project.id == item.project_id).one()
+    schema = _load_bound_schema(db, tenant_id, project_row.template_version_id)
+    status_lookup = schema.status_lookup()
+
+    definition = status_lookup.get(payload.status)
+    if definition is None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"status '{payload.status}' is not declared by this project's template version "
+            f"(declared: {sorted(status_lookup)})",
+        )
+
+    # REQ-018, keyed on what the status MEANS rather than on the literal
+    # "Complete". Owner ruling 2026-10-03: Complete is a state concept.
+    if definition.satisfies and item.required and not payload.reference:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY, "Cannot mark a required item Complete without a reference (REQ-018)"
         )
