@@ -2373,3 +2373,276 @@ output only). Both recorded in the policy doc as remaining gaps.
    PM Framework; delivery lead/independent reviewer sign-off per SDLC), taken
    manually via `tracker_cli.py gate` — naming DEC01's roles is not a gate
    decision and doesn't substitute for one.
+
+## DEC07 Q10: the resolved rule vocabulary, versioned so old templates never shift (2026-10-02)
+
+Next buildable item after REQ-047 (PR #10, merged `f802604`): DEC07 Q10's
+answer had been recorded since 2026-09-27 but never implemented, and
+`rule_engine.py`'s own module docstring still read "DEC07 ... is still
+open". Merged as PR #11 (`d75a963`), commit `c419365` — `rule_engine.py`,
+`routers/templates.py`, `routers/projects.py`, `webapp/router.py`, and a
+new `tests/test_dec07_rule_vocabulary.py` (+682/-18 over 5 files).
+
+**Implemented exactly the answered list, and nothing past it.** Sec.5.5's
+`eq`/`in`/`all`/`any` stand; added `not`, `gte`/`lte` and `count(...)`
+with a comparison; applied both tightenings (a 200-node cap alongside the
+existing depth-5 limit, and a hard evaluation timeout). DEC07 closes with
+"Resist adding anything beyond this", so `count`'s comparison reuses
+`eq`/`gte`/`lte` rather than introducing a fourth comparison form.
+
+**The part needing a mechanism rather than an operator was
+`vocabulary_version`.** Templates are immutable once published (REQ-011),
+so every already-published version's `schema_json` simply lacks the key
+and validates as vocabulary 1 — the exact operator set it was authored
+against. That is what makes DEC07's "old templates evaluate identically
+forever" true with **no migration and no backfill**. Validation gates it
+both directions: a vocabulary-1 template naming `not` is rejected, and an
+unknown version is rejected rather than assumed forward-compatible.
+Stamped on the blank guided-authoring starter only — deliberately **not**
+on import, `update_draft` or fork/copy, since those carry an
+externally-authored or inherited schema and re-stamping would let an
+export/import hop silently re-pin a template's semantics.
+
+**Two interpretations flagged rather than buried.** "Cap total condition
+nodes at 200" is read as applicability + conditions summed per rule (the
+stricter reading, since bounding evaluation cost is the stated purpose).
+And `as_at` is passed as an ISO-8601 **string**, not a `datetime`:
+template JSON has no date type, so a rule's threshold is always text, and
+a `datetime` compared against a string threshold would raise `TypeError`
+and fail closed every time — making date rules silently useless. The
+boundary that follows is stated in `_compare`'s docstring rather than left
+to be discovered: a full timestamp sorts after the bare date it falls on,
+so `lte` against a bare date excludes that day.
+
+**Purity kept, per DEC07's own requirement.** `as_at` is applied *over*
+the facts dict, not under it, so tenant-influenced project state cannot
+shadow the evaluation timestamp. The rule itself reads no clock;
+`time.monotonic` is the timeout's own bookkeeping and cannot change any
+rule's result. The timeout is a deadline checked at each node — not
+`signal.alarm` (Unix-only) or a worker thread — because this runs inside
+a request on Windows dev and Linux CI alike, and it **raises** rather than
+returning `False`: a rule that cannot be evaluated in budget is an
+operational anomaly, not a readiness answer, and the one production caller
+already rolls its transaction back on exception.
+
+**How vocabulary gating is actually enforced**: a new
+`Condition.operators_used()` walks the whole tree (nested conditions
+included, so a v2 operator cannot hide inside a `count`'s children) and
+`Rule.operators_used()` unions applicability and conditions. `compare` is
+deliberately excluded from that set — its values are words of `count`'s
+own shape and `count` itself is already gated, so counting them
+separately would reject `count` at every version. Documented in the
+method's docstring rather than left implicit.
+
+**Scoped out, named rather than silently skipped**: the guided form
+builder still only *creates* `eq`/`in` — offering the rest is the separate
+UI pass DEC07 anticipates. But `webapp`'s `_describe_condition` now
+renders the new operators in plain language, because a valid rule arriving
+via Advanced JSON or import previously read back as "Unrecognised
+condition shape", which is misleading rather than merely unhelpful.
+**DEC07 Q11/Q12's third framework fixture is not in here** and remains
+unbuilt.
+
+**Verified**: 38 tests collected and passing in the new file; full suite
+**249 passed, 0 failed, 0 skipped** (900s). Zero skips matters — it means
+the 32 live-Postgres RLS/concurrency tests actually ran rather than
+self-skipping. The two earlier attempts at that run were OOM-killed on
+this machine, so the work was held uncommitted until a complete run
+existed rather than committed on a partial result. Ruff check and format
+clean across 90 files. CI `backend` check SUCCESS on PR #11.
+
+**Review state, recorded because this file has had to record the opposite
+before**: PR #11 carries an actual `APPROVED` review from kenAddme
+(`gh pr view 11 --json reviews`), not the `COMMENTED`-only admin-merge
+pattern EC-202 documents and that previously forced three tracker items
+back down to "In progress". This is a genuine human approval of this
+change, and nothing more than that — not an SDLC gate decision. **No
+`tracker_cli.py gate` action taken.**
+
+## DEC07 Q11/Q12: the third framework fixture, and the gap it found (2026-10-03)
+
+Next item after Q10 (PR #11, `c419365`). Q11 asked for a third framework
+fixture *structurally different* from the two gate-based ones already
+built — "an agile Definition-of-Ready / Definition-of-Done framework with
+no gates at all", recurring per-increment checks, unnumbered — on the
+stated reasoning that "if the rule engine and data model survive that
+without a special case, the model is genuinely general." Q12 asked for
+full parity on the model: tracks, items, rules, roles, statuses,
+decisions.
+
+**Run as a spike before a build, deliberately.** Writing the fixture first
+would have meant guessing whether it fit. The probe (throwaway, deleted)
+imported a candidate through the real API — import, publish, project
+creation, evidence seeding, a second increment, readiness, a decision — and
+the answer changed the shape of the work.
+
+**What survived, and it is more than expected.** Recurrence needs no new
+model concept: each sprint is occurrence 2, 3, ... of the same check set,
+and `create_occurrence` already allocates it with its own evidence, which
+`GateOccurrence`'s own docstring had anticipated ("the second routine
+review of the same gate is sequence 2"). Unnumbered ids work because
+`gate_id`/`rule_id` are free strings. The fixture also became the first
+real consumer of Q10's vocabulary (`not`, `count(...)`, at
+`vocabulary_version: 2`), so it now doubles as a regression canary for
+that work.
+
+**What did not survive — a template's declared vocabulary is not
+honoured.** Five sub-findings, verified by probe and then by reading the
+code, now recorded as the `DEC07-Q11 vocabulary indirection` row in
+`docs/DEFECT_REGISTER.md`: `TemplateSchema.statuses` is read by no
+readiness path (readiness matches the literal `"Complete"`); the authoring
+UI nonetheless *offers* the declared list, so a user picks "Met", gets a
+201, and readiness still says "has not been marked Complete"; an
+undeclared status is accepted outright; REQ-018's "no Complete without a
+reference" control is keyed to the same literal, so a required item can
+carry an unreferenced done-meaning status; and `_outcome_eligibility`
+matches the Blueprint's five English outcome words, so declared outcomes
+422 with `permitted_outcomes: []`.
+
+**And a sixth, wider than the other five, found while tracing the
+fixture's own rules.** `evaluate_condition` has exactly one call site in
+the whole application (`routers/projects.py:189`, on
+`rule.applicability`). A rule's `conditions` tree — the part saying what
+must actually be true — is validated for depth, the 200-node cap and the
+operator vocabulary, then never walked by any readiness path, and
+`required_fields` has no consumers beyond its one declaring line. So
+readiness is decided entirely by the human-set `status` string, and all of
+Q10's machinery currently governs a tree nothing evaluates for readiness.
+Proven by probe rather than grep alone: the fixture's
+`definition-of-done.checks-pass` condition is satisfiable (True when fed
+`automated_checks_passing`) but False under the only facts any call site
+supplies (`{class_id}`) — and the blocker clears anyway, on status alone.
+The satisfiable-when-fed half is deliberate: it rules out the reading that
+the condition is merely malformed.
+
+That sixth finding changes the honest headline. This is not just "the
+status and outcome words are hardcoded" — it is that a substantial part of
+the approved declarative rule schema (`conditions`, `required_fields`, and
+`statuses`) is inert: validated rigorously, then never consulted. It has
+the largest bearing of the six on REQ-013's "configurable rules" claim and
+should be read before the fix is scoped.
+
+Severity stated split rather than rounded: every readiness path fails
+**closed**, so no unready decision is approved — none of this is a gate
+bypass. The REQ-018 sub-finding is the sharpest individual edge, because
+the evidence record itself ends up in exactly the unreferenced-"done"
+state that control exists to forbid.
+
+**One lead recorded as a lead, not a finding.** `permitted_role_ids`
+appears to be consulted only for my-work routing
+(`routers/projects.py:527`), not enforced when a revision is submitted
+(`create_evidence_revision` checks project membership only). If that is
+right, any project member can satisfy an item the framework restricts to a
+named role. Read from code and never probed, so it is written down as a
+lead for its own piece of work rather than asserted here — claiming a
+control gap on code reading alone is the thing this file's own history
+says not to do.
+
+**Why the fixture shipped before the fix.** The alternative — fix the
+vocabulary indirection first — would have meant designing against a
+description of the gap instead of a reproducible demonstration of it. So
+this commit is the fixture plus the finding; generalising the
+status/outcome vocabularies is its own piece of work, carrying the same
+backward-compatibility obligation `vocabulary_version` established in Q10,
+and needs its own design rather than being improvised here.
+
+**The characterization tests are labelled as such, loudly.** Five
+`test_gap_*` tests pin the current *wrong* behaviour so the fix lands as a
+deliberate, visible change to one file rather than a silent diff. The
+module docstring and every one of those docstrings says plainly that they
+are not a spec to preserve and are expected to be rewritten. A test
+asserting a defect is dangerous precisely when nobody can tell that is
+what it is.
+
+**Two model concessions, recorded rather than smoothed over.** `gates`
+cannot be empty (`min_length=1`), so the three recurring check sets are
+expressed *as* gates — "no gates at all" holds in the framework's language
+but not in the model's. And `GateDefinition.sequence` is required, so
+1/2/3 are supplied for checks that are not an ordered run (ready and done
+recur per story, increment-review per increment). Both are in the
+fixture's own `_meta`, not just here.
+
+**Q12 is NOT satisfied, and is recorded that way.** The fixture reaches
+parity on tracks, items, rules and roles — not on statuses or decisions,
+which Q12's "full parity on the model" names explicitly. Q12 stays open
+until the vocabulary work lands; it must not be logged as
+answered-and-built on the strength of this commit.
+
+**Q12's "not a shipped starter" is enforced in code, not just asserted.**
+`scripts/seed_starter_frameworks.py` seeds every `*.json` in the fixtures
+directory as a shared `tenant_id=NULL` platform starter, so dropping the
+file in would have published the agile fixture to every tenant — the exact
+thing Q12 forbids until its own review passes. The script now skips any
+fixture flagged `_meta.validation_fixture`, after validating it (so a
+validation fixture still fails loudly on a schema regression), and
+`test_framework_fixtures.py` asserts the flag the script keys on is
+present so the two cannot drift.
+
+**One latent test trap fixed in passing.** `test_framework_fixtures.py`
+asserted `len(set(gate_counts)) == 3`. A fourth fixture with 2 gates would
+have given `{2, 2, 4, 6}` → a set of size 3 → **passing while colliding**,
+for entirely the wrong reason. The distinctness assertions are now tied to
+`len(FIXTURE_FILES)`, so a collision fails instead of hiding. The agile
+fixture has three check sets independently of this (story-level ready,
+story-level done, increment-level review are genuinely different
+cadences), not three to satisfy an assertion.
+
+**Verified**: 13 new tests in `test_dec07_q11_agile_fixture.py`, 21
+passing across it and `test_framework_fixtures.py`; Ruff check and format
+clean. All 13 were watched failing before the fixture existed, so they are
+known to test the fixture rather than pass vacuously. The seed script's
+guard was verified by a read-only replay of its per-fixture decision
+branch — **the script itself was not executed against a database this
+session**, which is stated here rather than implied.
+
+**Full suite: every test passes, by chunked execution.** All **264
+collected tests ran and passed, 0 failed**, across 8 sequential chunks of
+5 test files covering all 37 test files in the suite (63/42/43/28/45/20/16/7).
+Chunking was not a convenience: this machine cannot complete a
+single-process full run (see below), and chunks stay inside its memory.
+The perf-budget file sits in chunk 2 and passed there with the rest.
+
+**The one run that did complete in a single process is recorded too,
+because the honest version is messier than "green".** It finished **260
+passed, 2 failed** (603s), both failures in
+`test_dec08_performance_budgets.py` — taken before the two sixth-finding
+tests existed, which is the whole of the 262-vs-264 difference. Those same
+budget tests pass **3/3 in isolation** (24s), **9/9 immediately after the
+heaviest neighbour** `test_dec05_durability_mechanism.py` (52s), and again
+in chunk 2 above. The failures never reproduced in any targeted form.
+
+The two failures' assertion text was **never captured**, and that is a gap
+in this evidence rather than something to paper over: the first run's
+output was piped through `tail`, which discarded the detail, and **two
+subsequent attempts to re-run with the detail captured were both
+OOM-killed by the operating system** — the second after only two tests.
+Retrying stopped there rather than continuing to hammer the same failing
+action.
+
+What makes the contention reading evidenced rather than assumed: this
+machine has **3.46 GB of total RAM with 0.41 GB free (88% used)**,
+measured this session. On that machine, running the full suite (32
+live-Postgres tests, plus Postgres itself, plus an editor and two agent
+processes) means assertions of the form `p95 <= 300 ms` are measuring
+memory pressure, not request handling. The run that died after two tests
+is the clearest evidence the pressure is ambient rather than accumulated
+by the suite — it never reached most of the new tests. Same conclusion the
+2026-09-30 entry reached about the same file.
+
+Two things deliberately **not** claimed. First, that the 2 failures are
+diagnosed: they are *un-diagnosed*, with a well-evidenced mechanism.
+Second, that the 12 added tests contributed nothing — they do add load
+ahead of latency-sensitive tests, and that cannot be ruled out from here.
+
+**Correcting something stated earlier in this session's own working
+notes**: CI does *not* isolate the budget tests. `.github/workflows/ci.yml`
+runs the full suite at line 66 and the budget file again at line 75, and
+that second step's own comment says it is for *visibility by step name*
+("already part of the full suite above (so a breach already fails the
+build)"). So a genuine budget breach fails CI, and a CI red on those two
+tests must be treated as real rather than waved through as local
+contention.
+
+**No gate decision.** Evidence items and this narrative only — no
+`tracker_cli.py gate` action taken, and the DEC07-Q11 register row is a
+finding, not an approval.
