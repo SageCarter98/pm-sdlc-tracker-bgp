@@ -46,7 +46,20 @@ EVALUATION_TIMEOUT_SECONDS = 1.0
 # the mechanism DEC07 asks for: a template stamped with an older version
 # keeps being validated against exactly the operators that existed then,
 # so adding to the vocabulary later cannot change how it behaves.
-VOCABULARY_VERSION = 3
+#
+# Deliberately staying at 2, NOT 3, even though vocabulary 3 is fully
+# implemented below (StatusDefinition/OutcomeDefinition, the lookups, and
+# every v3 validation rule). Spec Sec.7 rollout step 1 requires v3 ship
+# "accepted but unused -- no fixture or template declares it yet". This
+# constant is the stamp every new guided-authoring draft gets
+# (routers/templates.py's _BLANK_SCHEMA), so bumping it would make v3 the
+# default for all new templates before the guided authoring UI can emit
+# valid v3 vocabulary (its metadata form only produces plain
+# comma-separated strings -- see webapp/router.py's _parse_csv use). A
+# template that explicitly declares "vocabulary_version": 3 still
+# validates and behaves per v3 in full; it is simply not the default.
+# Do not "helpfully" bump this until the authoring UI can express v3.
+VOCABULARY_VERSION = 2
 
 # Sec.5.5: "Permitted operators are equality, membership and bounded all/any
 # over declared facts. No arbitrary scripts, network lookups or unbounded

@@ -65,14 +65,8 @@ _BLANK_SCHEMA = {
     "tracks": ["Delivery"],
     "classes": ["Draft"],
     "roles": ["contributor", "approver"],
-    "statuses": [
-        {"id": "Not started", "initial": True},
-        {"id": "Complete", "satisfies": True},
-    ],
-    "decision_outcomes": [
-        {"id": "Approve", "kind": "approving"},
-        {"id": "Hold", "kind": "recording"},
-    ],
+    "statuses": ["Not started", "Complete"],
+    "decision_outcomes": ["Approve", "Hold"],
     "gates": [{"gate_id": "G1", "name": "Intake", "sequence": 1, "class_ids": ["Draft"], "rules": []}],
 }
 
