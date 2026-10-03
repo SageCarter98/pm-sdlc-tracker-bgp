@@ -92,7 +92,23 @@ def _exception_is_currently_valid(db: Session, exc: ExceptionRecord, *, lock: bo
     return approver_membership is not None and approver_membership.role in DECISION_AUTHORITY_ROLES
 
 
-def _compute_readiness(db: Session, project: Project, occurrence: GateOccurrence, *, lock: bool = False) -> dict:
+def _has_valid_exception(db: Session, item: EvidenceItem, *, lock: bool = False) -> bool:
+    """REVIEW FOCUS 5: re-checked on the locked path too, so an exception
+    that expired between preview and commit cannot silently approve."""
+    query = db.query(ExceptionRecord).filter(ExceptionRecord.evidence_item_id == item.id).order_by(ExceptionRecord.id)
+    if lock:
+        query = query.with_for_update()
+    return any(_exception_is_currently_valid(db, exc, lock=lock) for exc in query.all())
+
+
+def _compute_readiness(
+    db: Session,
+    project: Project,
+    occurrence: GateOccurrence,
+    schema: TemplateSchema,
+    *,
+    lock: bool = False,
+) -> dict:
     """Returns {manifest, manifest_digest, hard_blockers, conditional_blockers,
     advisory_unsatisfied} -- always computed fresh against current evidence
     and exception state, never cached. This *is* REQ-021's reassessment
@@ -119,26 +135,43 @@ def _compute_readiness(db: Session, project: Project, occurrence: GateOccurrence
         query = query.with_for_update()
     items = query.all()
 
+    # DEC07: ask the bound template what a status MEANS instead of matching
+    # the literal word "Complete" -- the whole point of this task.
+    status_lookup = schema.status_lookup()
+
     hard_blockers, conditional_blockers, advisory_unsatisfied = [], [], []
     blocker_explanations = []
     for item in items:
-        if item.status == "Complete":
+        definition = status_lookup.get(item.status)
+        # Fail closed on a status the bound template does not declare --
+        # reachable for rows written before this template version, and the
+        # same unknown-fact rule the condition evaluator already uses.
+        #
+        # A status unconditionally satisfies only when it declares
+        # satisfies=True AND does not also require an exception -- a
+        # requires_exception status is deliberately never "directly"
+        # satisfying, it falls through to the exception check below just
+        # like an unsatisfied status does.
+        directly_satisfied = definition is not None and definition.satisfies and not definition.requires_exception
+        if directly_satisfied:
             continue
         if item.blocker_level == "advisory":
+            # Advisory items were never excused by an exception before this
+            # task (the old code's advisory branch ran before the exception
+            # check existed at all) -- preserve that: no exception lookup
+            # for advisory, just direct-status satisfaction above.
             advisory_unsatisfied.append(item.id)
             continue
-        exception_query = (
-            db.query(ExceptionRecord).filter(ExceptionRecord.evidence_item_id == item.id).order_by(ExceptionRecord.id)
-        )
-        if lock:
-            # BGP-F03 follow-up: locked in the same fixed order as evidence
-            # rows above (evidence, then exceptions, then the approver
-            # membership inside _exception_is_currently_valid) so concurrent
-            # decision-committing transactions can still only ever wait on
-            # each other, never deadlock.
-            exception_query = exception_query.with_for_update()
-        excepted = any(_exception_is_currently_valid(db, exc, lock=lock) for exc in exception_query.all())
-        if excepted:
+        # REQ-020: a valid exception excuses ANY hard/conditional blocker
+        # not already directly satisfied by its status -- the pre-existing
+        # universal escape valve (test_decisions.py's exception tests) --
+        # and is also the ONLY way a requires_exception status (e.g.
+        # "Waived") can ever count as satisfied (checked in the same
+        # BGP-F03 locked order -- evidence, then exceptions, then the
+        # approver membership inside _exception_is_currently_valid -- so
+        # concurrent decision-committing transactions can still only ever
+        # wait on each other, never deadlock).
+        if _has_valid_exception(db, item, lock=lock):
             continue
         (hard_blockers if item.blocker_level == "hard" else conditional_blockers).append(item.id)
         blocker_explanations.append(
@@ -151,9 +184,9 @@ def _compute_readiness(db: Session, project: Project, occurrence: GateOccurrence
                 # a member of by the time this function runs).
                 "explanation": (
                     f"Gate {item.gate_id}: a {item.blocker_level} '{item.evidence_kind}' item "
-                    f"(currently '{item.status}') has not been marked Complete."
+                    f"(currently '{item.status}') is not in a status this framework treats as satisfied."
                 ),
-                "corrective_action": f"POST /orgs/{{tenant_id}}/evidence/{item.id}/revisions with status 'Complete' and a reference",
+                "corrective_action": f"POST /orgs/{{tenant_id}}/evidence/{item.id}/revisions with a satisfying status and a reference",
             }
         )
 
@@ -490,7 +523,7 @@ def preview_decision(
     _require_project_member(db, project_id, membership.user_id)
     occurrence = _get_occurrence_or_404(db, project_id, occurrence_id)
     schema = _load_bound_schema(db, tenant_id, project.template_version_id)
-    readiness = _compute_readiness(db, project, occurrence)
+    readiness = _compute_readiness(db, project, occurrence, schema)
 
     outcome_allowed = outcome_denial_reason = None
     if payload.outcome:
@@ -601,7 +634,7 @@ def _record_decision(
     # BGP-F03: locked -- see _compute_readiness's docstring. Held from here
     # through the commit below, so nothing can change these evidence items
     # out from under this decision between reading them and committing.
-    readiness = _compute_readiness(db, project, occurrence, lock=True)
+    readiness = _compute_readiness(db, project, occurrence, schema, lock=True)
 
     def _deny(reason_text: str, http_status: int) -> None:
         db.add(
@@ -1093,7 +1126,8 @@ def create_compensating_review(
     project = _get_owned_project_or_404(db, tenant_id, project_id)
     membership = _require_decision_authority(db, project_id, user, mfa_verified)
     occurrence = _get_occurrence_or_404(db, project_id, occurrence_id)
-    readiness = _compute_readiness(db, project, occurrence)
+    schema = _load_bound_schema(db, tenant_id, project.template_version_id)
+    readiness = _compute_readiness(db, project, occurrence, schema)
 
     review = CompensatingReview(
         tenant_id=tenant_id,

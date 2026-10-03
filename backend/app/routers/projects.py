@@ -513,6 +513,19 @@ def my_work(
     }
     project_names = {p.id: p.name for p in db.query(Project).filter(Project.id.in_(my_project_ids)).all()}
 
+    # DEC07: my_work spans projects, so resolve each item's status against
+    # ITS OWN bound template version. One schema would silently apply one
+    # framework's vocabulary to another's items.
+    status_lookup_by_project: dict[str, dict] = {}
+
+    def _satisfies(item: EvidenceItem) -> bool:
+        if item.project_id not in status_lookup_by_project:
+            project_row = db.query(Project).filter(Project.id == item.project_id).one()
+            item_schema = _load_bound_schema(db, tenant_id, project_row.template_version_id)
+            status_lookup_by_project[item.project_id] = item_schema.status_lookup()
+        definition = status_lookup_by_project[item.project_id].get(item.status)
+        return definition is not None and definition.satisfies
+
     q = db.query(EvidenceItem).filter(EvidenceItem.tenant_id == tenant_id, EvidenceItem.project_id.in_(my_project_ids))
     if status_filter:
         q = q.filter(EvidenceItem.status == status_filter)
@@ -529,11 +542,11 @@ def my_work(
         else:
             continue
 
-        if item.status == "Complete":
-            direct_action = "No action needed -- already Complete."
+        if _satisfies(item):
+            direct_action = f"No action needed -- already '{item.status}'."
         else:
             direct_action = (
-                f"POST /orgs/{tenant_id}/evidence/{item.id}/revisions with status 'Complete' and a reference"
+                f"POST /orgs/{tenant_id}/evidence/{item.id}/revisions with a satisfying status and a reference"
             )
 
         results.append(
