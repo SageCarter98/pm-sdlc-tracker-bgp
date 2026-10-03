@@ -1,8 +1,16 @@
-"""Seed the three neutral fixture frameworks as shared platform starters
+"""Seed the neutral fixture frameworks as shared platform starters
 (tenant_id=NULL). Run as bgp_owner (table owner, exempt from RLS) -- no
 tenant's own bgp_app connection is allowed to create a tenant_id=NULL
 template (see the WITH CHECK clause in alembic/versions/0003_wp05_templates.py),
 so this administrative path is the only way starters get created.
+
+Not every fixture in fixtures/synthetic/frameworks/ is a starter. One
+marked `_meta.validation_fixture` is validated like the rest but never
+seeded: DEC07 Q12 requires the agile DoR/DoD fixture stay "a validation
+fixture, not a shipped starter template, until it has passed its own
+review", and seeding it here is precisely what would break that. The flag
+lives in the fixture rather than in a filename list here so a new
+validation fixture cannot be shipped by forgetting to update this script.
 
 Usage (from backend/, with BGP_MIGRATION_DATABASE_URL set in .env):
     python scripts/seed_starter_frameworks.py
@@ -34,6 +42,13 @@ def main() -> None:
             name = meta.get("name", fixture_path.stem)
 
             validate_template_schema(data)  # raises loudly if a fixture regressed
+
+            # Validated above, deliberately not seeded -- see the module
+            # docstring. Checked after validation, so a validation fixture
+            # still fails this script loudly if its schema regresses.
+            if meta.get("validation_fixture"):
+                print(f"skip (validation fixture, not a shipped starter): {name}")
+                continue
 
             existing = db.query(Template).filter(Template.tenant_id.is_(None), Template.name == name).one_or_none()
             if existing is not None:

@@ -1,0 +1,173 @@
+{
+  "_meta": {
+    "name": "Cadence Agile DoR/DoD (synthetic validation fixture)",
+    "validation_fixture": true,
+    "note": "DEC07 Q11/Q12's third framework fixture. Fictional, not KenAddme content (DEC03 licensing unresolved, REQ-014). Marked a validation fixture, NOT a shipped starter template, per Q12's own instruction that it stay one 'until it has passed its own review' -- seed_starter_frameworks.py skips it for that reason, so it never reaches a tenant as a starter.",
+    "why_this_shape": "Q11 chose an agile framework with no gates deliberately, as the harder test: 'if the rule engine and data model survive that without a special case, the model is genuinely general.' The three existing fixtures are all gate-based and all declare the same house vocabulary ('Complete', 'Approve'/'Hold'/...), so none of them could ever have tested whether a template's declared vocabulary is actually honoured.",
+    "deliberate_non_conformance": "This fixture declares its OWN statuses ('Met', not 'Complete') and its OWN decision outcomes ('Increment accepted', not 'Approve'). That is the point, not an oversight: the engine hardcodes the literal English words, so this fixture demonstrates the gap rather than hiding it by conforming. See backend/tests/test_dec07_q11_agile_fixture.py and the 'DEC07-Q11 vocabulary indirection' row in docs/DEFECT_REGISTER.md. Do not 'fix' this file by renaming its statuses to 'Complete' -- that would delete the finding.",
+    "model_concessions": "Two places the agile shape had to bend to the model, both recorded rather than smoothed over: (1) 'gates' cannot be empty (min_length=1), so the three recurring check sets are expressed AS gates -- a renaming, so 'no gates at all' holds in the framework's language but not in the model's; (2) GateDefinition.sequence is required, so 1/2/3 are supplied even though these checks are not an ordered run -- definition-of-ready and definition-of-done recur per story and increment-review per increment, on different cadences, not one after another.",
+    "recurrence": "Each sprint is a new occurrence of the same check set (GateOccurrence.sequence 2, 3, ...), which the model already supported with no change. That is the part of Q11's generality claim that genuinely held."
+  },
+  "schema_version": 1,
+  "vocabulary_version": 2,
+  "tracks": ["Increment"],
+  "classes": ["Team"],
+  "roles": ["product_owner", "developer", "facilitator"],
+  "statuses": ["Not met", "Met", "Waived for this increment"],
+  "decision_outcomes": ["Increment accepted", "Not accepted"],
+  "gates": [
+    {
+      "gate_id": "definition-of-ready",
+      "name": "Definition of Ready",
+      "sequence": 1,
+      "class_ids": ["Team"],
+      "description": "A recurring check, applied to work entering an increment -- not a checkpoint the project passes once. Re-run every sprint.",
+      "rules": [
+        {
+          "version": 1,
+          "rule_id": "definition-of-ready.acceptance-criteria",
+          "class_ids": ["Team"],
+          "occurrence_type": "routine",
+          "evidence_kind": "checklist",
+          "required_fields": ["criteria"],
+          "permitted_role_ids": ["product_owner"],
+          "blocker_level": "hard",
+          "conditions": {
+            "op": "count",
+            "compare": "gte",
+            "value": 2,
+            "conditions": [
+              {"op": "eq", "fact": "has_acceptance_criteria", "value": true},
+              {"op": "eq", "fact": "has_demoable_outcome", "value": true},
+              {"op": "eq", "fact": "dependencies_identified", "value": true}
+            ]
+          },
+          "guidance": "An item is ready when at least two of these hold: it states how it will be judged done, it produces something you can show, and its dependencies are known.",
+          "evidence_example": "The story's own acceptance-criteria checklist, linked from the board."
+        },
+        {
+          "version": 1,
+          "rule_id": "definition-of-ready.no-blocking-unknowns",
+          "class_ids": ["Team"],
+          "occurrence_type": "routine",
+          "evidence_kind": "note",
+          "required_fields": ["note"],
+          "permitted_role_ids": ["developer", "facilitator"],
+          "blocker_level": "hard",
+          "conditions": {
+            "op": "not",
+            "conditions": [{"op": "eq", "fact": "has_blocking_unknown", "value": true}]
+          },
+          "guidance": "Say plainly whether anything unknown would stop this item mid-sprint. If something would, it is not ready yet -- that is a normal answer, not a failure.",
+          "evidence_example": "A one-line note: 'No blocking unknowns -- auth library already proven in the last increment.'"
+        },
+        {
+          "version": 1,
+          "rule_id": "definition-of-ready.sized",
+          "class_ids": ["Team"],
+          "occurrence_type": "routine",
+          "evidence_kind": "note",
+          "required_fields": ["estimate"],
+          "permitted_role_ids": ["developer"],
+          "blocker_level": "advisory",
+          "guidance": "Record a rough size. Advisory on purpose: an unsized item is a smell, not a stop.",
+          "evidence_example": "'Roughly two days, one developer.'"
+        }
+      ]
+    },
+    {
+      "gate_id": "definition-of-done",
+      "name": "Definition of Done",
+      "sequence": 2,
+      "class_ids": ["Team"],
+      "description": "The recurring check that finished work is genuinely finished. Re-run every sprint, against that sprint's own evidence.",
+      "rules": [
+        {
+          "version": 1,
+          "rule_id": "definition-of-done.checks-pass",
+          "class_ids": ["Team"],
+          "occurrence_type": "routine",
+          "evidence_kind": "link",
+          "required_fields": ["run_url"],
+          "permitted_role_ids": ["developer"],
+          "blocker_level": "hard",
+          "conditions": {"op": "eq", "fact": "automated_checks_passing", "value": true},
+          "guidance": "Link the run that passed, not a screenshot of it -- a link can be re-checked later, an image cannot.",
+          "evidence_example": "A link to the passing pipeline run for the merge commit."
+        },
+        {
+          "version": 1,
+          "rule_id": "definition-of-done.peer-reviewed",
+          "class_ids": ["Team"],
+          "occurrence_type": "routine",
+          "evidence_kind": "link",
+          "required_fields": ["review_url"],
+          "permitted_role_ids": ["developer", "facilitator"],
+          "blocker_level": "hard",
+          "conditions": {"op": "eq", "fact": "peer_reviewed", "value": true},
+          "guidance": "Link the review itself. Someone other than the author needs to have actually looked.",
+          "evidence_example": "A link to the approved review on the change."
+        },
+        {
+          "version": 1,
+          "rule_id": "definition-of-done.documented-where-it-matters",
+          "class_ids": ["Team"],
+          "occurrence_type": "routine",
+          "evidence_kind": "note",
+          "required_fields": ["note"],
+          "permitted_role_ids": ["developer"],
+          "blocker_level": "conditional",
+          "applicability": {"op": "eq", "fact": "changes_public_behaviour", "value": true},
+          "guidance": "Only applies when the change alters behaviour someone outside the team can see. Internal refactors skip this.",
+          "evidence_example": "'Updated the API reference and the changelog entry for the new export parameter.'"
+        },
+        {
+          "version": 1,
+          "rule_id": "definition-of-done.no-known-regressions",
+          "class_ids": ["Team"],
+          "occurrence_type": "routine",
+          "evidence_kind": "checklist",
+          "required_fields": ["note"],
+          "permitted_role_ids": ["developer", "facilitator"],
+          "blocker_level": "advisory",
+          "guidance": "Note anything you know broke and chose to accept. Advisory because recording a known regression honestly is better than hiding one to keep a check green.",
+          "evidence_example": "'Export ordering changed; accepted, noted for the next increment.'"
+        }
+      ]
+    },
+    {
+      "gate_id": "increment-review",
+      "name": "Increment Review",
+      "sequence": 3,
+      "class_ids": ["Team"],
+      "description": "An increment-level check, called when the team holds its review -- deliberately all triggered, so it is never auto-created at project start the way the per-story checks are.",
+      "rules": [
+        {
+          "version": 1,
+          "rule_id": "increment-review.demonstrated",
+          "class_ids": ["Team"],
+          "occurrence_type": "triggered",
+          "evidence_kind": "note",
+          "required_fields": ["note"],
+          "permitted_role_ids": ["product_owner"],
+          "blocker_level": "hard",
+          "conditions": {"op": "eq", "fact": "increment_demonstrated", "value": true},
+          "guidance": "Record that the increment was actually shown to someone outside the team, and to whom.",
+          "evidence_example": "'Shown to the two pilot teams; notes in the review doc.'"
+        },
+        {
+          "version": 1,
+          "rule_id": "increment-review.feedback-captured",
+          "class_ids": ["Team"],
+          "occurrence_type": "triggered",
+          "evidence_kind": "link",
+          "required_fields": ["link"],
+          "permitted_role_ids": ["product_owner", "facilitator"],
+          "blocker_level": "conditional",
+          "guidance": "Link where the feedback landed, so the next increment's readiness check can reach it.",
+          "evidence_example": "A link to the review notes or the newly raised items."
+        }
+      ]
+    }
+  ]
+}
