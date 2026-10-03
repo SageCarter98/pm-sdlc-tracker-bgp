@@ -89,6 +89,17 @@ def _meet(client, tenant_id, item):
     assert resp.status_code == 201, resp.text
 
 
+def _waive(client, tenant_id, item):
+    """Sets a `requires_exception` status with deliberately NO
+    ExceptionRecord ever created for it -- the exact unapproved-waiver
+    shape Amendment 2 exists to keep out of a sibling's facts."""
+    resp = client.post(
+        f"/orgs/{tenant_id}/evidence/{item['id']}/revisions",
+        json={"base_revision": 1, "status": "Waived", "reference": "note-1"},
+    )
+    assert resp.status_code == 201, resp.text
+
+
 def test_conditions_withhold_satisfaction_until_the_count_is_met(client, count_project):
     """G5 and spec 4.4: a satisfying status is necessary but not
     sufficient -- the conditions tree must also hold."""
@@ -131,6 +142,25 @@ def test_a_fact_for_an_unseeded_rule_fails_closed(client, count_project):
     tenant_id, created = count_project
     body = _preview(client, tenant_id, created)
     assert isinstance(body["hard_blockers"], list)
+
+
+def test_an_unapproved_waiver_reads_as_unsatisfied_to_a_siblings_condition(client, count_project):
+    """Amendment 2 tripwire. `dod.a`'s status is "Waived" -- satisfies=True,
+    requires_exception=True -- with no ExceptionRecord ever created for it.
+    `_evidence_facts` must still report `item:dod.a` as "unsatisfied", not
+    "satisfied", or dod.summary's count would wrongly read 2-of-2 (dod.a
+    waived + dod.b met) and clear a blocker nobody actually approved."""
+    tenant_id, created = count_project
+    items = _items(created)
+
+    _meet(client, tenant_id, items["dod.summary"])
+    _meet(client, tenant_id, items["dod.b"])
+    _waive(client, tenant_id, items["dod.a"])
+
+    assert items["dod.summary"]["id"] in _preview(client, tenant_id, created)["hard_blockers"], (
+        "dod.a's unapproved waiver must count as unsatisfied, leaving only dod.b -- "
+        "1 of 2 required, so dod.summary must stay blocked"
+    )
 
 
 def test_conditions_are_not_evaluated_for_a_v2_template(client):
