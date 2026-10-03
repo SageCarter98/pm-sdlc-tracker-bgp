@@ -25,7 +25,7 @@ from app.models import (
     ProjectMembership,
     User,
 )
-from app.rule_engine import TemplateSchema
+from app.rule_engine import TemplateSchema, evaluate_condition
 from app.routers.projects import _get_owned_project_or_404, _load_bound_schema, _require_project_member
 
 router = APIRouter(tags=["decisions"])
@@ -101,6 +101,54 @@ def _has_valid_exception(db: Session, item: EvidenceItem, *, lock: bool = False)
     return any(_exception_is_currently_valid(db, exc, lock=lock) for exc in query.all())
 
 
+# DEC07 narrow-scope condition facts. The namespace is CLOSED: only
+# `item:<rule_id>` exists, scoped to this occurrence. Cross-occurrence and
+# project-state facts are deliberately absent -- a sprint-2 check must not
+# depend on sprint-1's answers (REQ-016), and a general project-state fact
+# pipeline is its own work package.
+_ITEM_FACT_PREFIX = "item:"
+
+
+def _evidence_facts(items: list[EvidenceItem], status_lookup: dict) -> dict[str, str]:
+    """Facts are derived from STORED statuses only -- never from other
+    items' freshly-derived condition results. That is what makes this a
+    single pass with no fixpoint, no ordering dependence and no cycle: an
+    item's conditions can read whether a sibling's status satisfies, but
+    not whether that sibling's own conditions passed.
+
+    A `requires_exception` status (e.g. a "Waived" that declares
+    satisfies=True) is deliberately reported as "unsatisfied" here even
+    though its definition sets satisfies=True -- this mirrors
+    `directly_satisfied` in `_compute_readiness` exactly. Reporting it as
+    satisfied would let a sibling's condition tree be granted on the
+    strength of a waiver nobody has actually approved yet (this function
+    takes no `db` and cannot check), which is fail-open and would violate
+    both "fail closed everywhere" and spec 4.4's "withhold, never grant"."""
+    facts: dict[str, str] = {}
+    for item in items:
+        definition = status_lookup.get(item.status)
+        satisfied = definition is not None and definition.satisfies and not definition.requires_exception
+        facts[f"{_ITEM_FACT_PREFIX}{item.rule_id}"] = "satisfied" if satisfied else "unsatisfied"
+    return facts
+
+
+def _conditions_hold(item: EvidenceItem, rules_by_id: dict, facts: dict[str, str], conditions_enabled: bool) -> bool:
+    """Conditions may only WITHHOLD satisfaction, never grant it (spec 4.4),
+    so this is only ever consulted for an item whose status already
+    satisfies directly. Off entirely below vocabulary 3 (G6).
+
+    Deliberately NOT consulted on the exception path (`_has_valid_exception`
+    below): that is REQ-020's universal human-approved escape valve, and
+    letting a condition tree override an approved exception would narrow
+    REQ-020 without a mandate to do so."""
+    if not conditions_enabled:
+        return True
+    rule = rules_by_id.get(item.rule_id)
+    if rule is None or rule.conditions is None:
+        return True
+    return evaluate_condition(rule.conditions, facts)
+
+
 def _compute_readiness(
     db: Session,
     project: Project,
@@ -139,6 +187,12 @@ def _compute_readiness(
     # the literal word "Complete" -- the whole point of this task.
     status_lookup = schema.status_lookup()
 
+    # Vocabulary 3 turns condition evaluation on. At 1/2 it stays off, so a
+    # published template keeps evaluating identically (G6).
+    conditions_enabled = schema.vocabulary_version >= 3
+    facts = _evidence_facts(items, status_lookup) if conditions_enabled else {}
+    rules_by_id = {rule.rule_id: rule for gate in schema.gates for rule in gate.rules}
+
     hard_blockers, conditional_blockers, advisory_unsatisfied = [], [], []
     blocker_explanations = []
     for item in items:
@@ -153,7 +207,7 @@ def _compute_readiness(
         # satisfying, it falls through to the exception check below just
         # like an unsatisfied status does.
         directly_satisfied = definition is not None and definition.satisfies and not definition.requires_exception
-        if directly_satisfied:
+        if directly_satisfied and _conditions_hold(item, rules_by_id, facts, conditions_enabled):
             continue
         if item.blocker_level == "advisory":
             # Advisory items were never excused by an exception before this
