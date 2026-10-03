@@ -186,7 +186,9 @@ def _compute_readiness(
                     f"Gate {item.gate_id}: a {item.blocker_level} '{item.evidence_kind}' item "
                     f"(currently '{item.status}') is not in a status this framework treats as satisfied."
                 ),
-                "corrective_action": f"POST /orgs/{{tenant_id}}/evidence/{item.id}/revisions with a satisfying status and a reference",
+                "corrective_action": (
+                    f"POST /orgs/{{tenant_id}}/evidence/{item.id}/revisions with a satisfying status and a reference"
+                ),
             }
         )
 

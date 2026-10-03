@@ -1,6 +1,7 @@
 """DEC07: readiness resolves a status through the bound template's
 declared semantics instead of matching the literal "Complete"."""
 
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -49,6 +50,62 @@ def v3_project(client):
     enable_mfa(client)
     tenant_id = client.post("/orgs", json={"name": "V3 Co"}).json()["id"]
     created = client.post(f"/orgs/{tenant_id}/templates/import", json={"name": "V3", "schema_json": V3}).json()
+    pub = client.post(f"/orgs/{tenant_id}/templates/{created['template_id']}/versions/{created['id']}/publish")
+    assert pub.status_code == 200, pub.text
+    project = client.post(
+        f"/orgs/{tenant_id}/projects",
+        json={"name": "Squad", "template_version_id": created["id"], "class_id": "Team", "members": []},
+    )
+    assert project.status_code == 201, project.text
+    return tenant_id, project.json()
+
+
+# REVIEW FOCUS 5's exception-expiry test needs an outcome that actually
+# resolves: a v3 template's decision_outcomes are OutcomeDefinition
+# OBJECTS (previous task), but _outcome_eligibility still checks
+# `outcome not in schema.decision_outcomes` as a literal membership test
+# against that list -- so a v3 outcome string never matches and the
+# request 422s on "not a declared outcome" before blockers are even
+# consulted. That object-awareness lands in the NEXT task
+# (`_outcome_eligibility`/`_permitted_outcomes` are off limits here), so
+# this one test runs at vocabulary 2, where decision_outcomes are plain
+# strings and the outcome check actually passes -- the only way to reach
+# the blocker-denial code path this test is meant to exercise.
+V2_TEMPLATE = {
+    "vocabulary_version": 2,
+    "tracks": ["Increment"],
+    "classes": ["Team"],
+    "roles": ["developer", "approver"],
+    "statuses": ["Not started", "In progress", "Complete"],
+    "decision_outcomes": ["Approve", "Hold"],
+    "gates": [
+        {
+            "gate_id": "dod",
+            "name": "Definition of Done",
+            "sequence": 1,
+            "class_ids": ["Team"],
+            "rules": [
+                {
+                    "version": 1,
+                    "rule_id": "dod.checks",
+                    "class_ids": ["Team"],
+                    "occurrence_type": "routine",
+                    "evidence_kind": "link",
+                    "permitted_role_ids": ["developer"],
+                    "blocker_level": "hard",
+                }
+            ],
+        }
+    ],
+}
+
+
+@pytest.fixture()
+def v2_project(client):
+    register_and_login(client, "admin@v2.example")
+    enable_mfa(client)
+    tenant_id = client.post("/orgs", json={"name": "V2 Co"}).json()["id"]
+    created = client.post(f"/orgs/{tenant_id}/templates/import", json={"name": "V2", "schema_json": V2_TEMPLATE}).json()
     pub = client.post(f"/orgs/{tenant_id}/templates/{created['template_id']}/versions/{created['id']}/publish")
     assert pub.status_code == 200, pub.text
     project = client.post(
@@ -137,24 +194,31 @@ def test_requires_exception_status_satisfies_with_a_valid_exception(client, v3_p
     assert _preview(client, tenant_id, created)["hard_blockers"] == []
 
 
-def test_an_expired_exception_does_not_satisfy_on_the_locked_commit_path(client, v3_project):
+def test_an_expired_exception_does_not_satisfy_on_the_locked_commit_path(client, v2_project):
     """REVIEW FOCUS 5. An exception valid at preview time but expired by
     commit time must not approve. The locked readiness path re-checks
-    validity rather than trusting the earlier read."""
+    validity rather than trusting the earlier read.
+
+    Runs at VOCABULARY 2, not V3: see V2_TEMPLATE's comment above --
+    `_outcome_eligibility` is not object-aware yet (next task's job), so a
+    v3 outcome 422s on "not a declared outcome" before readiness is even
+    consulted, which would make this test pass for the wrong reason. At
+    vocabulary 2, "Approve" is a plain string, the outcome check passes,
+    and execution actually reaches the blocker check this test exists to
+    exercise."""
     from app.db import get_db
     from app.main import app
     from app.models import ExceptionRecord
 
-    tenant_id, created = v3_project
+    tenant_id, created = v2_project
     item = created["evidence_items"][0]
     admin_id = client.get("/auth/me").json()["id"]
     now = datetime.now(timezone.utc)
 
-    client.post(
-        f"/orgs/{tenant_id}/evidence/{item['id']}/revisions",
-        json={"base_revision": 1, "status": "Waived", "reference": "waiver-note"},
-    )
-    client.post(
+    # Leave the item UNSATISFIED (no "Complete" revision) -- REQ-020's
+    # universal exception escape valve is the mechanism under test, not a
+    # satisfying status.
+    exc = client.post(
         f"/orgs/{tenant_id}/evidence/{item['id']}/exceptions",
         json={
             "reason": "accepted for this increment",
@@ -163,6 +227,8 @@ def test_an_expired_exception_does_not_satisfy_on_the_locked_commit_path(client,
             "expires_at": (now + timedelta(days=1)).isoformat(),
         },
     )
+    assert exc.status_code == 201, exc.text
+
     body = _preview(client, tenant_id, created)
     assert body["hard_blockers"] == [], "precondition: the valid exception should satisfy at preview"
     digest = body["manifest_digest"]
@@ -171,21 +237,30 @@ def test_an_expired_exception_does_not_satisfy_on_the_locked_commit_path(client,
     # Same direct-DB-manipulation pattern as test_decisions.py's expired-
     # exception test: go through the SAME overridden session the TestClient
     # uses (app.db.SessionLocal binds to the real dev Postgres, not this
-    # test's in-memory SQLite).
-    db = next(app.dependency_overrides[get_db]())
-    record = db.query(ExceptionRecord).filter(ExceptionRecord.evidence_item_id == item["id"]).one()
-    record.expires_at = now - timedelta(minutes=1)
-    db.commit()
+    # test's in-memory SQLite). Closed explicitly so this test-only session
+    # doesn't leak a connection past this function.
+    with closing(next(app.dependency_overrides[get_db]())) as db:
+        record = db.query(ExceptionRecord).filter(ExceptionRecord.evidence_item_id == item["id"]).one()
+        record.expires_at = now - timedelta(minutes=1)
+        db.commit()
 
     refused = client.post(
         f"/orgs/{tenant_id}/projects/{created['project']['id']}"
         f"/occurrences/{created['occurrences'][0]['id']}/decisions",
-        json={"outcome": "Increment accepted", "manifest_digest": digest},
+        json={"outcome": "Approve", "manifest_digest": digest},
         headers={"Idempotency-Key": "expired-exception-1"},
     )
+    # The manifest itself (item id + revision number) is unchanged by
+    # expiring the exception, so the digest still matches -- this must be
+    # refused for the RIGHT reason: an unresolved hard blocker, not a
+    # stale-manifest guess or (at v3) an undeclared-outcome 422 that would
+    # pass for no reason related to the exception at all.
     assert refused.status_code in (409, 422), (
-        "an expired exception must not approve -- either the manifest is stale (409) or the "
-        f"blocker is unresolved (422), got {refused.status_code}: {refused.text[:200]}"
+        f"an expired exception must not approve, got {refused.status_code}: {refused.text[:200]}"
+    )
+    assert "hard blocker" in refused.text, (
+        "must be refused because of the now-unresolved hard blocker specifically, not some other reason -- "
+        f"got {refused.status_code}: {refused.text[:200]}"
     )
 
 
@@ -200,11 +275,12 @@ def test_an_undeclared_stored_status_fails_closed(client, v3_project):
     item_id = created["evidence_items"][0]["id"]
 
     # Same overridden-session pattern as above -- app.db.SessionLocal binds
-    # to the real dev Postgres, not this test's in-memory SQLite.
-    db = next(app.dependency_overrides[get_db]())
-    row = db.query(EvidenceItem).filter(EvidenceItem.id == item_id).one()
-    row.status = "Legacy word"
-    db.commit()
+    # to the real dev Postgres, not this test's in-memory SQLite. Closed
+    # explicitly so this test-only session doesn't leak a connection.
+    with closing(next(app.dependency_overrides[get_db]())) as db:
+        row = db.query(EvidenceItem).filter(EvidenceItem.id == item_id).one()
+        row.status = "Legacy word"
+        db.commit()
 
     body = _preview(client, tenant_id, created)
     assert body["hard_blockers"] == [item_id]

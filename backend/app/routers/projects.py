@@ -19,7 +19,13 @@ from app.models import (
     Role,
     TemplateVersion,
 )
-from app.rule_engine import RuleValidationError, TemplateSchema, evaluate_condition, validate_template_schema
+from app.rule_engine import (
+    RuleValidationError,
+    StatusDefinition,
+    TemplateSchema,
+    evaluate_condition,
+    validate_template_schema,
+)
 
 router = APIRouter(tags=["projects"])
 
@@ -511,16 +517,19 @@ def my_work(
         pm.project_id: pm.role
         for pm in db.query(ProjectMembership).filter(ProjectMembership.project_id.in_(my_project_ids)).all()
     }
-    project_names = {p.id: p.name for p in db.query(Project).filter(Project.id.in_(my_project_ids)).all()}
+    projects_by_id = {p.id: p for p in db.query(Project).filter(Project.id.in_(my_project_ids)).all()}
+    project_names = {pid: p.name for pid, p in projects_by_id.items()}
 
     # DEC07: my_work spans projects, so resolve each item's status against
     # ITS OWN bound template version. One schema would silently apply one
     # framework's vocabulary to another's items.
-    status_lookup_by_project: dict[str, dict] = {}
+    status_lookup_by_project: dict[str, dict[str, StatusDefinition]] = {}
 
     def _satisfies(item: EvidenceItem) -> bool:
         if item.project_id not in status_lookup_by_project:
-            project_row = db.query(Project).filter(Project.id == item.project_id).one()
+            # Reuse the Project row already loaded above (project_names'
+            # source) instead of re-querying it per item.
+            project_row = projects_by_id[item.project_id]
             item_schema = _load_bound_schema(db, tenant_id, project_row.template_version_id)
             status_lookup_by_project[item.project_id] = item_schema.status_lookup()
         definition = status_lookup_by_project[item.project_id].get(item.status)
