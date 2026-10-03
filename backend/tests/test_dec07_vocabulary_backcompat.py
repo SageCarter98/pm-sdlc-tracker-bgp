@@ -98,9 +98,9 @@ def test_complete_still_clears_a_blocker_and_permits_the_declared_outcomes(clien
 
 @pytest.mark.parametrize("stem", V1_V2_FIXTURES)
 def test_rule_conditions_are_still_not_evaluated_for_v1_v2(client, stem):
-    """G6 specifically: turning conditions on for v3 must not turn it on
-    for v1/v2. Completing a hard item clears its blocker even though no
-    facts are ever supplied to satisfy its conditions tree."""
+    """Literal Complete clears a hard blocker across all v1/v2 fixtures.
+    Note: these fixtures have no rules with conditions fields, so they
+    cannot tripwire condition evaluation — see new test below for that."""
     register_and_login(client, "admin@backcompat.example")
     enable_mfa(client)
     tenant_id = client.post("/orgs", json={"name": "BC Co"}).json()["id"]
@@ -131,3 +131,70 @@ def test_rule_conditions_are_still_not_evaluated_for_v1_v2(client, stem):
         f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{occurrence['id']}/preview", json={}
     ).json()
     assert preview["hard_blockers"] == []
+
+
+def test_a_v2_template_with_populated_conditions_still_ignores_them(client):
+    """G6's real tripwire: a vocabulary 2 template with populated conditions
+    must ignore those conditions and satisfy on status alone. The three file
+    fixtures cannot test this because they have no rules with conditions fields.
+    This test uses an inline schema with a hard blocker that has a false
+    condition; setting status to Complete must still clear the blocker."""
+    register_and_login(client, "admin@backcompat.example")
+    enable_mfa(client)
+    tenant_id = client.post("/orgs", json={"name": "BC Co"}).json()["id"]
+
+    schema = {
+        "schema_version": 1,
+        "vocabulary_version": 2,
+        "tracks": ["Delivery"],
+        "classes": ["C"],
+        "roles": ["approver"],
+        "statuses": ["Not started", "In progress", "Complete"],
+        "decision_outcomes": ["Approve", "Hold"],
+        "gates": [
+            {
+                "gate_id": "g1",
+                "name": "Test Gate",
+                "sequence": 1,
+                "class_ids": ["C"],
+                "rules": [
+                    {
+                        "version": 1,
+                        "rule_id": "r1",
+                        "class_ids": ["C"],
+                        "occurrence_type": "routine",
+                        "evidence_kind": "document",
+                        "required_fields": [],
+                        "permitted_role_ids": ["approver"],
+                        "blocker_level": "hard",
+                        "conditions": {"op": "eq", "fact": "automated_checks_passing", "value": True},
+                    }
+                ],
+            }
+        ],
+    }
+
+    created = client.post(
+        f"/orgs/{tenant_id}/templates/import", json={"name": "v2_with_conditions", "schema_json": schema}
+    ).json()
+    resp = client.post(f"/orgs/{tenant_id}/templates/{created['template_id']}/versions/{created['id']}/publish")
+    assert resp.status_code == 200, resp.text
+    version_id = created["id"]
+
+    project = client.post(
+        f"/orgs/{tenant_id}/projects",
+        json={"name": "Project", "template_version_id": version_id, "class_id": "C", "members": []},
+    ).json()
+    project_id = project["project"]["id"]
+    occurrence_id = project["occurrences"][0]["id"]
+    item = project["evidence_items"][0]
+
+    client.post(
+        f"/orgs/{tenant_id}/evidence/{item['id']}/revisions",
+        json={"base_revision": 1, "status": "Complete", "reference": "doc-1"},
+    )
+
+    preview = client.post(
+        f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{occurrence_id}/preview", json={}
+    ).json()
+    assert preview["hard_blockers"] == [], "v2 must satisfy on status alone; its false conditions are ignored"
