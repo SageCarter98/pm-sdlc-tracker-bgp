@@ -46,7 +46,7 @@ EVALUATION_TIMEOUT_SECONDS = 1.0
 # the mechanism DEC07 asks for: a template stamped with an older version
 # keeps being validated against exactly the operators that existed then,
 # so adding to the vocabulary later cannot change how it behaves.
-VOCABULARY_VERSION = 2
+VOCABULARY_VERSION = 3
 
 # Sec.5.5: "Permitted operators are equality, membership and bounded all/any
 # over declared facts. No arbitrary scripts, network lookups or unbounded
@@ -54,6 +54,11 @@ VOCABULARY_VERSION = 2
 OPERATORS_BY_VOCABULARY_VERSION: dict[int, set[str]] = {
     1: {"eq", "in", "all", "any"},
     2: {"eq", "in", "all", "any", "not", "gte", "lte", "count"},
+    # Vocabulary 3 adds NO operators. The bump carries semantics instead:
+    # structured status/outcome entries (StatusDefinition/OutcomeDefinition
+    # below) and evaluation of a rule's `conditions` tree. Stated here
+    # because "same set as 2" otherwise looks like a copy-paste slip.
+    3: {"eq", "in", "all", "any", "not", "gte", "lte", "count"},
 }
 ALLOWED_OPERATORS = OPERATORS_BY_VOCABULARY_VERSION[VOCABULARY_VERSION]
 
@@ -239,6 +244,46 @@ class GateDefinition(BaseModel):
     description: str | None = None  # optional plain-language gate purpose; see Rule.guidance
 
 
+# EvidenceItem.status / EvidenceRevision.status are String(30)
+# (app/models.py). A longer id validates happily and then fails at
+# revision time as a database error, so it is rejected here instead.
+MAX_STATUS_ID_LENGTH = 30
+
+# v1/v2 templates declare bare strings. These two maps are what make
+# "old templates evaluate identically forever" (DEC07 Q10) true with no
+# migration: today's hardcoded literals, expressed as data.
+_LEGACY_SATISFYING_STATUS = "Complete"
+_LEGACY_INITIAL_STATUS = "Not started"
+_LEGACY_OUTCOME_KINDS = {
+    "Approve": "approving",
+    "Approve with conditions": "conditional_approving",
+    "Hold": "recording",
+    "Redirect": "recording",
+    "Terminate": "recording",
+}
+
+
+class StatusDefinition(BaseModel):
+    """One evidence status plus what it MEANS, so readiness can ask the
+    template instead of matching an English word."""
+
+    id: str = Field(min_length=1, max_length=MAX_STATUS_ID_LENGTH)
+    satisfies: bool = False
+    # A satisfying status that must be justified by a valid ExceptionRecord
+    # (REQ-020) rather than freely chosen. Without this, declaring an extra
+    # satisfying status would be a route around a hard blocker.
+    requires_exception: bool = False
+    initial: bool = False
+
+
+class OutcomeDefinition(BaseModel):
+    """`kind` carries exactly the three behaviours _outcome_eligibility
+    hardcodes today for the Blueprint's five words."""
+
+    id: str = Field(min_length=1)
+    kind: Literal["approving", "conditional_approving", "recording"]
+
+
 class TemplateSchema(BaseModel):
     """REQ-010: version framework templates containing tracks, gates,
     classification, role, status, decision and applicability schemes."""
@@ -255,9 +300,54 @@ class TemplateSchema(BaseModel):
     tracks: list[str] = Field(min_length=1)
     classes: list[str] = Field(min_length=1)
     roles: list[str] = Field(min_length=1)
-    statuses: list[str] = Field(min_length=1)
-    decision_outcomes: list[str] = Field(min_length=1)
+    statuses: list[str | StatusDefinition] = Field(min_length=1)
+    decision_outcomes: list[str | OutcomeDefinition] = Field(min_length=1)
     gates: list[GateDefinition] = Field(min_length=1)
+
+    def status_lookup(self) -> dict[str, StatusDefinition]:
+        """Normalise mixed strings/objects into one lookup. Plain strings
+        resolve per vocabulary_version -- that is the whole back-compat
+        mechanism (G6)."""
+        out: dict[str, StatusDefinition] = {}
+        for entry in self.statuses:
+            if isinstance(entry, StatusDefinition):
+                out[entry.id] = entry
+                continue
+            if self.vocabulary_version <= 2:
+                out[entry] = StatusDefinition(
+                    id=entry,
+                    satisfies=(entry == _LEGACY_SATISFYING_STATUS),
+                    initial=(entry == _LEGACY_INITIAL_STATUS),
+                )
+            else:
+                out[entry] = StatusDefinition(id=entry)
+        return out
+
+    def outcome_lookup(self) -> dict[str, OutcomeDefinition]:
+        """An outcome with no resolvable kind is OMITTED, not defaulted --
+        preserving today's honest refusal for a v1/v2 template declaring
+        an outcome this prototype never handled."""
+        out: dict[str, OutcomeDefinition] = {}
+        for entry in self.decision_outcomes:
+            if isinstance(entry, OutcomeDefinition):
+                out[entry.id] = entry
+                continue
+            kind = _LEGACY_OUTCOME_KINDS.get(entry)
+            if kind is not None:
+                out[entry] = OutcomeDefinition(id=entry, kind=kind)
+        return out
+
+    def initial_status(self) -> str:
+        """G7: the status a seeded item starts in comes from the template,
+        never from a literal in the seeding code."""
+        for definition in self.status_lookup().values():
+            if definition.initial:
+                return definition.id
+        # Unreachable for v3 (validated) and for any v1/v2 template
+        # declaring "Not started". A v1/v2 template that omits it falls
+        # back to the first declared status, which is what the old literal
+        # effectively meant for such a template.
+        return next(iter(self.status_lookup()))
 
     @model_validator(mode="after")
     def _cross_references_resolve(self) -> "TemplateSchema":
@@ -307,6 +397,33 @@ class TemplateSchema(BaseModel):
                         f"rule '{rule.rule_id}' uses operator(s) {sorted(beyond_vocabulary)} "
                         f"not in vocabulary_version {self.vocabulary_version}"
                     )
+
+        status_defs = list(self.status_lookup().values())
+        declared_ids = [entry.id if isinstance(entry, StatusDefinition) else entry for entry in self.statuses]
+        if len(declared_ids) != len(set(declared_ids)):
+            errors.append("duplicate status id declared")
+        for definition in status_defs:
+            if definition.requires_exception and not definition.satisfies:
+                errors.append(f"status '{definition.id}': requires_exception is meaningless without satisfies")
+
+        if self.vocabulary_version >= 3:
+            if sum(1 for d in status_defs if d.initial) != 1:
+                errors.append("vocabulary 3 requires exactly one status with initial: true")
+            if not any(d.satisfies for d in status_defs):
+                errors.append("vocabulary 3 requires at least one status with satisfies: true")
+            for entry in self.decision_outcomes:
+                if not isinstance(entry, OutcomeDefinition):
+                    errors.append(
+                        f"decision outcome '{entry}': vocabulary 3 requires an explicit kind "
+                        f"(approving | conditional_approving | recording)"
+                    )
+
+        for status_id in declared_ids:
+            if len(status_id) > MAX_STATUS_ID_LENGTH:
+                errors.append(
+                    f"status '{status_id}' exceeds the {MAX_STATUS_ID_LENGTH}-character limit "
+                    f"imposed by EvidenceItem.status"
+                )
 
         if errors:
             raise ValueError("; ".join(errors))
