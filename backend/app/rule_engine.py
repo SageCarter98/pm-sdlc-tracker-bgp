@@ -280,7 +280,16 @@ class StatusDefinition(BaseModel):
     """One evidence status plus what it MEANS, so readiness can ask the
     template instead of matching an English word."""
 
-    id: str = Field(min_length=1, max_length=MAX_STATUS_ID_LENGTH)
+    # No max_length here: enforcing it on the Pydantic field would raise
+    # BEFORE the explicit vocabulary>=3 loop in _cross_references_resolve
+    # ever ran (status_lookup() constructs this model earlier), which (a)
+    # surfaced Pydantic's generic length message instead of the intended
+    # "imposed by EvidenceItem.status" explanation, and (b) aborted the
+    # whole validator on the first offending structured entry, destroying
+    # REQ-012's one-error-per-problem aggregation. One enforcement point
+    # only -- the explicit loop over declared ids, gated behind v3 so a
+    # published v1/v2 template is never newly rejected (G6).
+    id: str = Field(min_length=1)
     satisfies: bool = False
     # A satisfying status that must be justified by a valid ExceptionRecord
     # (REQ-020) rather than freely chosen. Without this, declaring an extra
@@ -356,10 +365,13 @@ class TemplateSchema(BaseModel):
         for definition in self.status_lookup().values():
             if definition.initial:
                 return definition.id
-        # Unreachable for v3 (validated) and for any v1/v2 template
-        # declaring "Not started". A v1/v2 template that omits it falls
-        # back to the first declared status, which is what the old literal
-        # effectively meant for such a template.
+        # A defensive default, not a claim about today's behaviour: today's
+        # seeding (routers/projects.py) writes the literal "Not started"
+        # regardless of what the template declares, so this fallback would
+        # only ever be exercised by a v1/v2 template that omits "Not
+        # started" entirely -- a case nothing today actually produces.
+        # Unreachable for v3 (validated to have exactly one initial status)
+        # and for any v1/v2 template that declares "Not started".
         return next(iter(self.status_lookup()))
 
     @model_validator(mode="after")
@@ -413,13 +425,24 @@ class TemplateSchema(BaseModel):
 
         status_defs = list(self.status_lookup().values())
         declared_ids = [entry.id if isinstance(entry, StatusDefinition) else entry for entry in self.statuses]
-        if len(declared_ids) != len(set(declared_ids)):
-            errors.append("duplicate status id declared")
         for definition in status_defs:
             if definition.requires_exception and not definition.satisfies:
                 errors.append(f"status '{definition.id}': requires_exception is meaningless without satisfies")
 
+        # Both checks below are gated behind vocabulary_version >= 3 on
+        # purpose (controller ruling, fix round 2/5): spec Sec.5 enforces
+        # the length cap "at publish time", not on every re-read, and
+        # routers/projects.py re-validates a template's stored schema_json
+        # on every single project binding. A duplicate status id or a
+        # >30-character status id was never checked before this task, so
+        # a published, immutable (REQ-011) v1/v2 template that happens to
+        # carry either must keep validating exactly as it always did (G6)
+        # -- gating behind v3 is airtight for that, since no v3 template
+        # can be published yet (VOCABULARY_VERSION stays 2; see its own
+        # comment). A NEW v3 template still gets both checks, in full.
         if self.vocabulary_version >= 3:
+            if len(declared_ids) != len(set(declared_ids)):
+                errors.append("duplicate status id declared")
             if sum(1 for d in status_defs if d.initial) != 1:
                 errors.append("vocabulary 3 requires exactly one status with initial: true")
             if not any(d.satisfies for d in status_defs):
@@ -430,13 +453,12 @@ class TemplateSchema(BaseModel):
                         f"decision outcome '{entry}': vocabulary 3 requires an explicit kind "
                         f"(approving | conditional_approving | recording)"
                     )
-
-        for status_id in declared_ids:
-            if len(status_id) > MAX_STATUS_ID_LENGTH:
-                errors.append(
-                    f"status '{status_id}' exceeds the {MAX_STATUS_ID_LENGTH}-character limit "
-                    f"imposed by EvidenceItem.status"
-                )
+            for status_id in declared_ids:
+                if len(status_id) > MAX_STATUS_ID_LENGTH:
+                    errors.append(
+                        f"status '{status_id}' exceeds the {MAX_STATUS_ID_LENGTH}-character limit "
+                        f"imposed by EvidenceItem.status"
+                    )
 
         if errors:
             raise ValueError("; ".join(errors))

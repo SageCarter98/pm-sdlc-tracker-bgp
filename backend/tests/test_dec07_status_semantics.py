@@ -1,6 +1,8 @@
 """DEC07 vocabulary indirection, schema layer: structured status and
 outcome semantics, and their vocabulary-gated normalisation."""
 
+import re
+
 import pytest
 
 from app.rule_engine import RuleValidationError, validate_template_schema
@@ -121,17 +123,51 @@ def test_v3_plain_string_outcome_is_rejected():
     assert "kind" in str(exc.value)
 
 
+def _error_messages(exc_value: RuleValidationError) -> list[str]:
+    """RuleValidationError.errors is, for a model-validator failure, a
+    single pydantic-wrapped string: "<loc>: Value error, " followed by
+    every "; "-joined message our own validator raised. Strip that
+    pydantic prefix and split the rest back into individual messages, so
+    a parametrized case can assert on the ONE message that actually
+    proves its point, instead of a vague substring that a different
+    firing rule could also satisfy (fix round 2/5, Important 4)."""
+    out: list[str] = []
+    for joined in exc_value.errors:
+        joined = re.sub(r"^.*?Value error,\s*", "", joined, count=1)
+        out.extend(part.strip() for part in joined.split("; "))
+    return out
+
+
 @pytest.mark.parametrize(
-    "statuses, needle",
+    "statuses, expected_message",
     [
-        ([{"id": "A", "initial": True}, {"id": "B", "initial": True, "satisfies": True}], "exactly one"),
-        ([{"id": "A", "satisfies": True}, {"id": "B", "satisfies": True}], "exactly one"),
-        ([{"id": "A", "initial": True}, {"id": "B"}], "at least one"),
-        ([{"id": "A", "initial": True}, {"id": "B", "requires_exception": True}], "requires_exception"),
-        ([{"id": "A", "initial": True}, {"id": "A", "satisfies": True}], "duplicate"),
+        (
+            [{"id": "A", "initial": True}, {"id": "B", "initial": True, "satisfies": True}],
+            "vocabulary 3 requires exactly one status with initial: true",
+        ),
+        (
+            # Same rule as above, the other side of it: zero initial
+            # statuses is as invalid as two. There is no separate "exactly
+            # one satisfies" rule -- satisfies only carries an "at least
+            # one" requirement, covered by the next case.
+            [{"id": "A", "satisfies": True}, {"id": "B", "satisfies": True}],
+            "vocabulary 3 requires exactly one status with initial: true",
+        ),
+        (
+            [{"id": "A", "initial": True}, {"id": "B"}],
+            "vocabulary 3 requires at least one status with satisfies: true",
+        ),
+        (
+            [{"id": "A", "initial": True}, {"id": "B", "requires_exception": True}],
+            "status 'B': requires_exception is meaningless without satisfies",
+        ),
+        (
+            [{"id": "A", "initial": True}, {"id": "A", "satisfies": True}],
+            "duplicate status id declared",
+        ),
     ],
 )
-def test_v3_status_validation_rules(statuses, needle):
+def test_v3_status_validation_rules(statuses, expected_message):
     with pytest.raises(RuleValidationError) as exc:
         validate_template_schema(
             _schema(
@@ -140,12 +176,15 @@ def test_v3_status_validation_rules(statuses, needle):
                 decision_outcomes=[{"id": "Yes", "kind": "approving"}],
             )
         )
-    assert needle in str(exc.value).lower()
+    assert expected_message in _error_messages(exc.value)
 
 
 def test_status_id_length_boundary_is_thirty():
     """REVIEW FOCUS 2. EvidenceItem.status is String(30); an off-by-one
-    here reaches the database as an error instead of a message."""
+    here reaches the database as an error instead of a message. Uses a
+    structured entry; test_v3_plain_string_status_over_length_is_rejected
+    below covers the plain-string route specifically, since StatusDefinition
+    no longer enforces the cap itself (fix round 2/5, Critical 2)."""
     ok = "x" * 30
     s = validate_template_schema(
         _schema(
@@ -164,7 +203,56 @@ def test_status_id_length_boundary_is_thirty():
                 decision_outcomes=[{"id": "Yes", "kind": "approving"}],
             )
         )
-    assert "30" in str(exc.value)
+    expected = f"status '{'x' * 31}' exceeds the 30-character limit imposed by EvidenceItem.status"
+    assert expected in _error_messages(exc.value)
+
+
+def test_v3_plain_string_status_over_length_is_rejected_with_the_evidence_item_reason():
+    """Critical 2 (fix round 2/5): StatusDefinition no longer enforces
+    max_length, so a structured entry's cap is enforced purely by the
+    explicit loop. A PLAIN STRING over 30 characters has no Pydantic field
+    to catch it at all -- this is the only path that ever catches it, and
+    it must surface OUR reason, not a generic one, since there is no
+    generic one to fall back to."""
+    with pytest.raises(RuleValidationError) as exc:
+        validate_template_schema(
+            _schema(
+                vocabulary_version=3,
+                statuses=[{"id": "New", "initial": True}, {"id": "Done", "satisfies": True}, "x" * 31],
+                decision_outcomes=[{"id": "Yes", "kind": "approving"}],
+            )
+        )
+    messages = _error_messages(exc.value)
+    assert any("imposed by EvidenceItem.status" in m for m in messages)
+    assert any("30-character" in m for m in messages)
+
+
+def test_v2_duplicate_and_overlength_statuses_still_validate():
+    """G6 made explicit (fix round 2/5, controller-requested proof for
+    Critical 1): gating the duplicate-id and length-cap checks behind
+    vocabulary_version >= 3 must not newly reject a vocabulary-2 template
+    that happens to declare a duplicate status id or an id longer than 30
+    characters -- nothing ever checked either before this task, so a
+    published, immutable (REQ-011) v1/v2 template carrying one must keep
+    validating exactly as it always did on every re-read (routers/projects.py
+    re-validates schema_json on every single project binding)."""
+    dup = validate_template_schema(
+        _schema(
+            vocabulary_version=2,
+            statuses=["Not started", "Complete", "Complete"],
+            decision_outcomes=["Approve", "Hold"],
+        )
+    )
+    assert dup is not None
+
+    overlong = validate_template_schema(
+        _schema(
+            vocabulary_version=2,
+            statuses=["Not started", "x" * 31],
+            decision_outcomes=["Approve", "Hold"],
+        )
+    )
+    assert overlong is not None
 
 
 def test_vocabulary_three_has_the_same_operators_as_two():
