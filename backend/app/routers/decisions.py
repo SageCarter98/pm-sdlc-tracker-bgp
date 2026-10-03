@@ -292,52 +292,57 @@ class DecisionOut(BaseModel):
 def _outcome_eligibility(
     schema: TemplateSchema, outcome: str, readiness: dict, conditions: ConditionsIn | None
 ) -> tuple[bool, str | None]:
-    if outcome not in schema.decision_outcomes:
+    definition = schema.outcome_lookup().get(outcome)
+    if definition is None:
+        declared = [e if isinstance(e, str) else e.id for e in schema.decision_outcomes]
+        if outcome in declared:
+            # Declared but with no resolvable kind -- only reachable for a
+            # v1/v2 template naming an outcome this prototype never
+            # handled. Same honest refusal as before, deliberately kept.
+            return False, (
+                f"outcome '{outcome}' is declared by the template but not handled by this prototype's decision logic"
+            )
         return False, f"'{outcome}' is not a decision outcome declared by this template version"
 
-    if outcome in ("Hold", "Redirect", "Terminate"):
-        return True, None  # Blueprint Sec.2.2: recorded outcomes, not approvals -- no blocker requirement
+    if definition.kind == "recording":
+        # Blueprint Sec.2.2: recorded outcomes, not approvals -- no blocker
+        # requirement.
+        return True, None
 
     if readiness["hard_blockers"]:
         return False, "unresolved hard blocker(s) deny any approval outcome"
 
-    if outcome == "Approve":
+    if definition.kind == "approving":
         if readiness["conditional_blockers"]:
             return False, "unresolved conditional blocker(s) -- use 'Approve with conditions' or resolve them first"
         return True, None
 
-    if outcome == "Approve with conditions":
-        if conditions is None:
-            return (
-                False,
-                "missing deadline or condition owner",
-            )  # TST-022 wording, covers the whole missing-conditions case
-        if not conditions.conditions or not conditions.owner_user_id:
-            return False, "missing deadline or condition owner"
-        if _as_utc(conditions.deadline) <= _now():
-            return False, "missing deadline or condition owner"
-        return True, None
-
-    return False, f"outcome '{outcome}' is declared by the template but not handled by this prototype's decision logic"
+    # conditional_approving
+    if conditions is None:
+        return False, "missing deadline or condition owner"
+    if not conditions.conditions or not conditions.owner_user_id:
+        return False, "missing deadline or condition owner"
+    if _as_utc(conditions.deadline) <= _now():
+        return False, "missing deadline or condition owner"
+    return True, None
 
 
 def _permitted_outcomes(schema: TemplateSchema, readiness: dict) -> list[str]:
     """REQ-037's confirmation-summary list. Deliberately more lenient than
-    _outcome_eligibility for 'Approve with conditions': that outcome is
-    structurally reachable whenever no hard blocker exists, even before
-    the caller has actually supplied conditions -- the summary's job is to
-    tell the user which *paths* are open, not to pre-validate a specific
-    conditions payload they haven't written yet."""
+    _outcome_eligibility for conditional_approving: that outcome is
+    structurally reachable whenever no hard blocker exists, even before the
+    caller has supplied conditions -- the summary's job is to say which
+    PATHS are open, not to pre-validate a payload nobody has written yet."""
     permitted = []
-    for outcome in schema.decision_outcomes:
-        if outcome in ("Hold", "Redirect", "Terminate"):
-            permitted.append(outcome)
+    for definition in schema.outcome_lookup().values():
+        if definition.kind == "recording":
+            permitted.append(definition.id)
         elif readiness["hard_blockers"]:
             continue
-        elif outcome == "Approve" and not readiness["conditional_blockers"]:
-            permitted.append(outcome)
-        elif outcome == "Approve with conditions":
-            permitted.append(outcome)
+        elif definition.kind == "approving" and not readiness["conditional_blockers"]:
+            permitted.append(definition.id)
+        elif definition.kind == "conditional_approving":
+            permitted.append(definition.id)
     return permitted
 
 
