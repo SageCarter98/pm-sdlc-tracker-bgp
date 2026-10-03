@@ -1,6 +1,6 @@
 # DEC07 vocabulary indirection — design spec
 
-Status: draft, pending user review
+Status: **approved** 2026-10-03 (PR #14, `APPROVED` by kenAddme; REQ-018 interpretation ruled by owner in session)
 Owner: this session, spec on branch `SageCarter98/dec07-vocabulary-indirection-spec`
 Implementation: not started; no code branch cut, by design (see §7)
 Tracker rows this closes evidence toward (not the whole row):
@@ -69,9 +69,9 @@ claim than the requirement made.
   plus a supplied 'as at' timestamp — no external calls, no wall-clock
   reads inside the rule itself."
 - **REQ-018**'s own text contains the word "Complete" ("do not allow
-  removal of required evidence while Complete"). This spec reads that as a
-  **state concept**, not a mandated string literal — stated explicitly
-  because it is an interpretation, and a reviewer may disagree.
+  removal of required evidence while Complete"). Read as a **state
+  concept, not a mandated string literal** — see the recorded ruling
+  below, which settles this.
 
 ### Decisions taken by the owner in session, 2026-10-03
 
@@ -84,6 +84,15 @@ claim than the requirement made.
 4. `required_fields` stays **advisory** and out of scope.
 5. A satisfying status may carry `requires_exception`.
 6. **Q12 stays open until this work lands.**
+7. **REQ-018 interpretation, ruled 2026-10-03 (owner, in session):**
+   "Complete is a state concept not a literal." This is the recorded
+   interpretation decision §8 required before implementation, and it is
+   what licenses G3. Consequence, stated so nobody has to re-derive it: the
+   literal string `"Complete"` carries no special meaning in a v3 template,
+   and a framework's own completion word is as valid as the Blueprint's.
+   The string retains its meaning for vocabulary 1 and 2 templates only,
+   via normalisation (§4.1), which is a compatibility mechanism rather
+   than a statement about the requirement.
 
 ## 2. Goals
 
@@ -343,10 +352,12 @@ can be broken by steps 1-2.
 
 ## 8. Risks / open questions carried forward, not silently resolved
 
-- **REQ-018's "Complete" is being read as a concept, not a literal**
-  (§1). If a reviewer reads the requirement as mandating the exact string,
-  G3 conflicts with it and this needs a recorded interpretation decision
-  before implementation.
+- ~~**REQ-018's "Complete" is being read as a concept, not a literal.**~~
+  **RESOLVED 2026-10-03** by owner ruling — see §1 decision 7. Kept here
+  rather than deleted, because this spec's whole argument for G3 rests on
+  that interpretation, and a future reader is entitled to see that it was
+  raised as a genuine risk, put to the owner, and answered, rather than
+  assumed by whoever wrote the code.
 - **`conditions` can only withhold, never grant** (§4.4). Defensible — it
   keeps the human attestation load-bearing — but it does mean a fully
   automatable check still needs a person to assert it. If the owner wants
