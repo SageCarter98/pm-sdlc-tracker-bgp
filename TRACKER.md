@@ -2650,15 +2650,29 @@ finding, not an approval.
 ## DEC07 vocabulary indirection fixed: a template's own words now govern readiness; Q12 closed (2026-10-04)
 
 The `DEC07-Q11 vocabulary indirection` finding logged the day before
-(2026-10-03, `docs/DEFECT_REGISTER.md`) is now fixed, across thirteen
-commits on `SageCarter98/dec07-vocabulary-indirection-impl` against the
-spec and plan at
+(2026-10-03, `docs/DEFECT_REGISTER.md`) is now fixed, originally across
+thirteen commits on `SageCarter98/dec07-vocabulary-indirection-impl`
+against the spec and plan at
 `docs/superpowers/specs/2026-10-03-dec07-vocabulary-indirection-design.md`
 and `docs/superpowers/plans/2026-10-03-dec07-vocabulary-indirection.md`:
 `ee9472b`, `3b8e710`, `cd83fdb`, `28747f3`, `faede1a`, `a834f64`,
 `802abc4`, `c7852aa`, `55831e3`, `9546229`, `c2ca1a7`, `02649e0`, and
 `6a0aaf7` (the commit carrying this entry, added in a small follow-up
 commit once its own SHA existed).
+
+**Correction, 2026-10-04 (closing pass): "thirteen commits" is stale --
+it counted only the original implementation and stopped at the paragraph's
+own writing.** A whole-branch review after this entry was written raised
+2 blocking and 8 important findings; closing them took four more commits
+(`8f6c065` fixing a stale BGP-F03-follow-up fixture the sweep below found,
+`c9cc5fc` recording that fix's own SHA, `7123fa7` withdrawing this
+section's earlier wrong root-cause claim for that same red, and `5ed8f3b`
+closing the review's remaining C1/I1-I8 findings), plus this entry's own
+documentation commit. `git log --oneline 8e9ebfa..HEAD` run after that
+commit landed counts **eighteen** commits total, not thirteen -- the
+number belongs to the whole branch's history, not to one task's slice of
+it, and restating a stale count here would be exactly the kind of
+rounding this register exists to catch.
 
 **What changed, in one sentence.** `statuses` and `decision_outcomes` now
 accept structured entries that carry their own meaning — `satisfies`,
@@ -2667,8 +2681,14 @@ accept structured entries that carry their own meaning — `satisfies`,
 and eligibility path asks the bound template what a word means instead of
 comparing it to a hardcoded English literal.
 
-**Six of the six sub-findings are closed; the seventh thing the row named
-is not, and is not claimed to be.** Sub-findings (1)-(5) — statuses unread
+**Five of the six sub-findings are closed, and one half of the sixth.**
+(Corrected 2026-10-04, closing pass: this previously read "Six of the six
+sub-findings are closed; the seventh thing the row named is not" — the
+register names exactly **six** sub-findings, not seven, and
+`required_fields` is explicitly *inside* sub-finding (6), not a separate
+item; the very next paragraph here already said so, so the headline
+contradicted its own section. Fixed to match what the register and the
+rest of this entry actually say.) Sub-findings (1)-(5) — statuses unread
 by readiness, the authoring UI offering a list that did nothing, undeclared
 statuses stored without complaint, REQ-018 keyed to the literal, declared
 outcomes unrecordable — are all closed. Sub-finding (6) had two halves:
@@ -2879,3 +2899,130 @@ fix.
 `tracker_cli.py` invocation of any kind and no `tracker_cli.py gate`
 action. The register rows above are findings and closures of findings, not
 approvals; a gate decision remains a named human authority's sign-off.
+
+## Whole-branch review closing pass: C1/I1-I8 and the M-item log (2026-10-04)
+
+A full whole-branch review of this branch (after the entry above) raised 2
+blocking and 8 important findings against the vocabulary-indirection work.
+A fix wave addressed most of them in an earlier, uncommitted session that a
+usage limit cut off before it tested, documented or committed anything.
+This entry finishes that wave: verifies what was already fixed, finishes
+what was missing, tests, and commits (`5ed8f3b`, plus this documentation
+commit). Per-finding disposition:
+
+- **C1 (REQ-006 separation-of-duties bypass) — fixed, verified, and its
+  register row closed.** Already correct in the uncommitted work;
+  confirmed by reading the diff. Full detail, including the corrected
+  reachability claim, is in `docs/DEFECT_REGISTER.md`'s "DEC07 SoD outcome
+  literal" row (now Closed, 2026-10-04).
+- **I1 (30-char cap bypassable at default vocabulary) — fixed, verified.**
+  Already correct and broader than the original finding asked (covers
+  statuses AND decision outcomes, gated on a structured entry OR
+  `vocabulary_version >= 3`). Confirmed by reading `rule_engine.py:480-515`.
+- **I2 (vacuous guard test) — fixed, verified.**
+  `test_an_unknown_future_vocabulary_version_is_rejected` now uses
+  `max(OPERATORS_BY_VOCABULARY_VERSION) + 1` and asserts the specific
+  rejection message, so it actually exercises the unknown-version path
+  rather than vocabulary 3's content rules.
+- **I3 (`my_work._satisfies` fail-open) — fixed, verified.** Uses the
+  shared `status_satisfies` predicate plus condition evaluation via
+  `_conditions_hold`/`_evidence_facts`, and a new `_pending_exception`
+  helper gives the action text an honest third state (satisfies, but only
+  once an exception is approved) instead of collapsing it into "no action
+  needed".
+- **I4(b) (undeclared-status 422 containment) — fixed, verified.** Gated
+  at `projects.py:716` behind `schema.vocabulary_version >= 3`, restoring
+  spec §7's explicit containment rather than recording the deviation as an
+  accepted exception.
+- **I4(c) (agile.json's seeded status silently changed) — now recorded
+  and pinned, not just noted.** `routers/projects.py` seeding every item
+  from `TemplateSchema.initial_status()` means `agile.json` (vocabulary 2,
+  no `"Not started"` declared) now seeds `'Not met'` instead of the old
+  literal. Recorded as an accepted G6 consequence in
+  `docs/DEFECT_REGISTER.md`'s DEC07-Q11 open-items list, and pinned by
+  `test_dec07_q11_agile_fixture.py::test_the_v1_fixture_seeds_its_own_first_declared_status`.
+- **I5 (stale "fallback is defensive" comment) — fixed, verified.**
+  `rule_engine.py`'s `initial_status()` now says the fallback is live and
+  names `agile.json` as the case that exercises it.
+- **I6 (TRACKER.md rounds 5½/6 up to 6/6, invents a seventh item, and
+  undercounts the commits) — fixed in this entry.** Headline corrected to
+  "Five of the six sub-findings are closed, and one half of the sixth."
+  The "thirteen commits" claim corrected with a dated note explaining why
+  it was stale and what the real total is (eighteen, `git log --oneline
+  8e9ebfa..HEAD` after this commit).
+- **I7 (measurable falsehood: 30-char cap claimed to force "Waived")  —
+  fixed, verified.** Both `agile.v3.json`'s `_meta.status_id_note` and the
+  matching test comment now say the real reason (a shorter id, available
+  because it's a new version) and state plainly that the v1 string (25
+  chars) was already compliant.
+- **I8 (webapp cannot record a v3 `conditional_approving` outcome) —
+  fixed; test coverage was missing and has been added.** The production
+  fix (both `webapp/router.py`'s `_conditional_outcome_ids` and
+  `decide.html`'s fieldset resolving through `outcome_lookup()`'s declared
+  `kind`) was already correct in the uncommitted work. No test exercised
+  it end-to-end, so one was added:
+  `test_dec07_webapp_statuses.py::test_decide_page_offers_conditions_for_a_declared_conditional_outcome`
+  drives a real v3 `conditional_approving` outcome ("Accept with
+  follow-ups") through the actual `/ui` decide GET (asserts the fieldset
+  renders) and POST (asserts the decision commits, not "missing deadline
+  or condition owner") against the plain SQLite test client — the RLS-only
+  code this project's webapp tests otherwise gate on Postgres for is a
+  no-op there (`db.get_bind().dialect.name == "postgresql"` guards every
+  `SET LOCAL`), so this did not need a live-Postgres fixture.
+- **M2/M3 (committed review scaffolding in test comments) — fixed.**
+  Stripped "REVIEW FOCUS n", "Amendment 2" and "fix round x/5" references
+  from `test_dec07_rule_vocabulary.py`, `test_dec07_status_semantics.py`,
+  `test_dec07_conditions_evaluation.py`, `test_dec07_revision_validation.py`,
+  and `test_dec07_readiness_semantics.py`. The last of those also had a
+  comment (on `V2_TEMPLATE`) and a docstring (on
+  `test_an_expired_exception_does_not_satisfy_on_the_locked_commit_path`)
+  describing `_outcome_eligibility` as not yet object-aware and the real
+  fix as landing in a "NEXT task" — Task 5 (`55831e3`) had already landed
+  that fix by the time this branch reached its current HEAD, so both were
+  corrected to state the real, current reason this one test keeps a
+  vocabulary-2 fixture (nobody rewrote it once the fix landed, and there
+  is no need to).
+- **M4 (stale "one production caller" claim) — fixed, verified.**
+  `RuleEvaluationTimeout`'s docstring now names both production callers
+  (`routers/projects.py` and `_conditions_hold` in `routers/decisions.py`,
+  reached from readiness) and states plainly that the exception is caught
+  nowhere — fail-closed, not a handled error path.
+- **M1, M5-M9, M11, the `blocker_explanations` two-cause wording gap, and
+  the pre-existing `applicability` latent gap — logged, not fixed, per
+  the review's own instruction.** Recorded as a new bullet list in
+  `docs/DEFECT_REGISTER.md` directly under the DEC07-Q11 open-items
+  section. None of these block what this branch set out to do; none is
+  claimed fixed.
+
+**A real regression found and fixed while finishing this wave, not
+pre-existing and not part of the original findings list:**
+`test_dec07_outcome_semantics.py::test_an_approving_outcome_can_actually_be_recorded`
+started failing once C1's fix was applied — correctly. Its single-admin
+project made the deciding admin the evidence's sole preparer, so C1's now-
+working self-only-approval check denied the decision 403 where the test
+expected 201. Rewritten with a second project member (an `approver` who
+never touched the evidence) as the decider, which is the ordinary,
+non-self-only approval path this test was always meant to exercise — the
+self-only-denial case has its own dedicated pin,
+`test_dec07_q11_agile_fixture.py::test_a_declared_approving_outcome_is_refused_for_a_self_only_approver`.
+
+**Verified.** Every DEC07/webapp/project/template/fixture test file this
+branch touches was run, two files per pytest process (this machine's
+3.46GB RAM OOMs a single full-suite process): `test_dec07_webapp_statuses.py`
+(4), `test_decisions.py` + `test_dec07_outcome_semantics.py` (21, after the
+regression above was fixed), `test_dec07_q11_agile_fixture.py` +
+`test_dec07_rule_vocabulary.py` (56), `test_dec07_status_semantics.py` +
+`test_dec07_vocabulary_backcompat.py` (24), `test_dec07_readiness_semantics.py`
++ `test_dec07_conditions_evaluation.py` (11), `test_dec07_revision_validation.py`
++ `test_dec07_webapp_statuses.py` (12), `test_projects.py` +
+`test_framework_fixtures.py` (20), `test_templates.py` +
+`test_ui08_template_authoring.py` (20), `test_wp13_webapp_new_pages.py` (6,
+against real Postgres — available and used this session, not skipped).
+All green. `ruff check` and `ruff format --check` both clean across the
+full `app`/`tests` tree.
+
+**No gate decision.** Evidence documents, fixtures and tests only — no
+`tracker_cli.py` invocation of any kind and no `tracker_cli.py gate`
+action. The register rows above (and in `docs/DEFECT_REGISTER.md`) are
+findings and closures of findings, not approvals; a gate decision remains
+a named human authority's sign-off.
