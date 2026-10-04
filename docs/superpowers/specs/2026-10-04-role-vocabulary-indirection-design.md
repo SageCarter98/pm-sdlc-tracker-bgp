@@ -89,8 +89,10 @@ the shape.
   and which may decide a gate.
 - **G2** `permitted_role_ids` resolves against the bound template's declared roles,
   with no platform-enum dependency, for a v4 binding.
-- **G3** `DECISION_AUTHORITY_ROLES` is replaced by declared capability at all four
-  call sites.
+- **G3** `DECISION_AUTHORITY_ROLES` is split: its two project-layer call sites
+  resolve declared capability, its two tenant-layer sites stay platform-fixed
+  (see §5.3's table — an earlier draft of this spec wrongly said all four would
+  change).
 - **G4** A member may be assigned any role the bound template version declares.
 - **G5** Vocabulary 1–3 behaviour is bit-identical (the G6 obligation DEC07
   established, renumbered here as G5 to avoid collision).
@@ -189,11 +191,29 @@ serving v1–3 through the legacy map.
   `definition.attests` **and** membership of the item's `permitted_role_ids`. The two
   existing exemptions — assigned `owner_user_id`, tenant administrator — stay
   unchanged, each already pinned by its own test.
-- **Decide** — `DECISION_AUTHORITY_ROLES` is deleted. Its four call sites
-  (`decisions.py:98`, `:506`, `:516`, `:544`) ask the bound schema whether the role
-  decides. **Tenant administrators keep decision authority unconditionally**, the
-  same carve-out the attest path has, so a template cannot lock its owner out of its
-  own gates.
+- **Decide** — **correction to this spec, made 2026-10-04 while writing the plan
+  and before any code:** an earlier draft of this section said all four
+  `DECISION_AUTHORITY_ROLES` call sites would ask the bound schema. That is wrong,
+  and acting on it would have contradicted §3.1. The constant is consulted at **two
+  different layers**:
+
+  | site | checks | becomes |
+  | --- | --- | --- |
+  | `decisions.py:98` | tenant `Membership.role` | **stays platform-fixed** |
+  | `decisions.py:506` | tenant `Membership.role` (compensating reviewer still holds org authority) | **stays platform-fixed** |
+  | `decisions.py:516` | project `ProjectMembership.role` (reviewer's authority on this project) | declared capability |
+  | `decisions.py:544` | project `ProjectMembership.role` (who may record the decision) | declared capability |
+
+  So the constant is **split, not deleted**: a platform-level set keeps its two
+  tenant-layer sites (renamed to say so), and the two project-layer sites resolve
+  `decides` through the bound schema. This is the §4 invariant expressed directly in
+  code — the tenant check and the project check are literally the two halves of the
+  intersection, and neither can be removed without the other becoming visible as a
+  widening.
+
+  **Tenant administrators keep decision authority unconditionally** at the project
+  layer, the same carve-out the attest path has, so a template cannot lock its owner
+  out of its own gates.
 
 ### 5.4 Membership assignment
 
