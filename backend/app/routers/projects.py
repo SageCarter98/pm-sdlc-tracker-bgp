@@ -401,6 +401,70 @@ def _require_project_member(db: Session, project_id: str, user_id: str) -> Proje
     return pm
 
 
+def _require_permitted_to_attest(item: EvidenceItem, pm: ProjectMembership, membership: Membership) -> None:
+    """REQ-032/TST-032: `permitted_role_ids` says WHO MAY ATTEST an item, and
+    this is where that is enforced.
+
+    It was previously declared in the template, validated against the
+    schema's declared roles (rule_engine's "references undeclared role(s)"),
+    consulted as a my-work visibility filter -- and then never checked when a
+    revision was actually submitted, so any project member could mark a hard,
+    required, approver-only item Complete. Probed and confirmed 2026-10-04
+    before this fix. Separation of duties for DECISIONS is a different
+    control (decisions.py's _check_separation_of_duties); this is about who
+    may supply evidence, not who may approve a gate.
+
+    Two exemptions, owner-approved 2026-10-04 and each pinned by its own test
+    in test_permitted_role_enforcement.py so neither widens silently:
+
+    1. The explicitly assigned owner always may -- assignment is itself an
+       authorised act by someone who had the authority to make it, and the
+       assignee is exactly the person being asked to act.
+    2. A tenant administrator always may -- they already administer the
+       tenant, and this product's assignment workflow has an admin writing
+       the first revision in order to set an owner at all.
+
+    Fails closed: an item declaring no permitted roles admits nobody but
+    those two exemptions. The schema requires at least one
+    (`permitted_role_ids: list[str] = Field(min_length=1)`), so that state is
+    unreachable through validation -- but a legacy or hand-edited row must
+    not become a free-for-all."""
+    if item.owner_user_id is not None and item.owner_user_id == membership.user_id:
+        return
+    if membership.role == Role.TENANT_ADMINISTRATOR:
+        return
+
+    declared = item.permitted_role_ids or []
+    if pm.role in declared:
+        return
+
+    # The restriction is only enforceable against roles the platform can
+    # actually ASSIGN. Project membership roles come from the fixed `Role`
+    # enum, NOT from the bound template's declared `roles` -- so a framework
+    # naming its own roles (agile.json/agile.v3.json declare product_owner,
+    # developer, facilitator; none assignable) has permitted_role_ids that no
+    # project member's role can ever match. Enforcing strictly there would
+    # make every item in such a framework attestable only by a tenant
+    # administrator or the assigned owner, which is not a narrowing this
+    # change is entitled to make.
+    #
+    # So: enforce where the declared roles are assignable, and fall back to
+    # membership-only where none of them is -- deliberately, visibly, and
+    # recorded as its own defect-register row ("declared role vocabulary is
+    # not honoured"), which is the DEC07 status/outcome vocabulary gap in a
+    # different field and needs the same indirection treatment to fix
+    # properly. This fallback is the one place this control fails open; it is
+    # pinned by test_an_unassignable_role_vocabulary_falls_back_to_membership.
+    if not (set(declared) & {role.value for role in Role}):
+        return
+
+    raise HTTPException(
+        status.HTTP_403_FORBIDDEN,
+        f"your project role '{pm.role}' is not permitted to submit evidence for this item "
+        f"(permitted roles: {sorted(declared)})",
+    )
+
+
 @router.post(
     "/orgs/{tenant_id}/projects/{project_id}/occurrences",
     response_model=CreateOccurrenceResponse,
@@ -711,7 +775,8 @@ def create_evidence_revision(
     )
     if item is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Evidence item not found")
-    _require_project_member(db, item.project_id, membership.user_id)
+    pm = _require_project_member(db, item.project_id, membership.user_id)
+    _require_permitted_to_attest(item, pm, membership)
 
     if payload.base_revision != item.latest_revision_number:
         raise HTTPException(

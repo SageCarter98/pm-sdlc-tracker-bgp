@@ -279,6 +279,14 @@ def agile_v3_two_person(client) -> AgileProject:
     second_id = _invite_and_accept(client, tenant_id, V3_SOD_SECOND, "approver")
     enable_mfa(client)
     login(client, V3_SOD_ADMIN)
+    # "approver" is a platform Role, and project membership roles must be one
+    # of those -- agile.v3.json's own declared roles (product_owner,
+    # developer, facilitator) are NOT assignable, which is exactly the
+    # "declared role vocabulary is not honoured" gap recorded in
+    # docs/DEFECT_REGISTER.md. So this member's project role cannot match any
+    # of this template's permitted_role_ids, and submission falls back to
+    # membership-only (see _require_permitted_to_attest). That fallback is
+    # what keeps this test working; it is not an endorsement of it.
     return _publish_v3_project(client, tenant_id, [{"user_id": second_id, "role": "approver"}])
 
 
