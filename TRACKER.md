@@ -2656,8 +2656,9 @@ spec and plan at
 `docs/superpowers/specs/2026-10-03-dec07-vocabulary-indirection-design.md`
 and `docs/superpowers/plans/2026-10-03-dec07-vocabulary-indirection.md`:
 `ee9472b`, `3b8e710`, `cd83fdb`, `28747f3`, `faede1a`, `a834f64`,
-`802abc4`, `c7852aa`, `55831e3`, `9546229`, `c2ca1a7`, `02649e0`, and the
-commit carrying this entry.
+`802abc4`, `c7852aa`, `55831e3`, `9546229`, `c2ca1a7`, `02649e0`, and
+`6a0aaf7` (the commit carrying this entry, added in a small follow-up
+commit once its own SHA existed).
 
 **What changed, in one sentence.** `statuses` and `decision_outcomes` now
 accept structured entries that carry their own meaning — `satisfies`,
