@@ -2800,32 +2800,80 @@ regresses, *despite its own satisfying status*) — which is the half that
 distinguishes real condition evaluation from a test that would pass either
 way.
 
-**Full suite: 319 of 320 pass, by chunked execution, and the one red is
-pre-existing.** Nine sequential chunks of 5 test files covered all 44 test
-files; the chunk totals sum to 320, matching `pytest --collect-only -q`
-exactly, so no chunk silently skipped files. Chunking is not a convenience
-— this machine has 3.46 GB RAM and cannot complete a single-process run
-(two earlier attempts were OOM-killed). Both perf-budget files
-(`test_dec08_performance_budgets.py` in chunk 3,
-`test_wp12_render_and_export_budgets.py` in chunk 8) **passed** this time.
+**Full suite: 320 collected; this task's own chunked runs reported 319/320,
+but that number is corrected below by an independent sweep that found a
+second failure and a wrong root-cause claim for the first.** Nine sequential
+chunks of 5 test files covered all 44 test files; the chunk totals sum to
+320, matching `pytest --collect-only -q` exactly, so no chunk silently
+skipped files. Chunking is not a convenience — this machine has 3.46 GB RAM
+and cannot complete a single-process run (two earlier attempts were
+OOM-killed). Both perf-budget files (`test_dec08_performance_budgets.py` in
+chunk 3, `test_wp12_render_and_export_budgets.py` in chunk 8) passed in
+*this task's own* chunking of that run.
 
-The single failure is, in
+**The controller ran its own independent chunked sweep of `c9cc5fc` and
+measured 318 passed, 2 failed — the collected count (320) matches exactly,
+the pass count does not, and both reds needed correcting.**
+
+One red is environmental, not a defect:
+`test_dec08_performance_budgets.py::test_read_budget_gate_dashboard_and_my_work`
+failed while sharing a pytest process (123.87s) and passed 3/3 run alone
+(14.44s) — the same memory-contention pattern recorded elsewhere in this
+file for this machine, not a budget regression.
+
+The other red, in
 `backend/tests/test_bgp_f03_followup_app_level_concurrency.py`,
-`test_real_endpoint_returns_clean_409_not_500_when_it_loses_the_race`,
-and it is **not** caused by this
-work: it was reproduced at pristine `02649e0` with every change of this
-commit stashed. Its cause is in its own fixture, which seeds a template
-declaring `"statuses": ["Not started"]` and then seeds the evidence row
-directly as `'Complete'` — a status that template never declares. Before
-`a834f64` readiness compared the literal and cleared it; now readiness asks
-the template, finds the status undeclared, and fails closed, so the item is
-a hard blocker and the test's `assert preview.json()["hard_blockers"] == []`
-fails before the race it exists to test is ever exercised. It is a test
-fixture that needs its seeded schema to declare the status it uses, not a
-regression in the decision path — but it is a **real red that must be
-fixed**, not waved through, and it is recorded here because it was found by
-this sweep. It is skipped entirely when live Postgres is unavailable, which
-is why earlier task-level runs did not surface it.
+`test_real_endpoint_returns_clean_409_not_500_when_it_loses_the_race`, **was
+caused by Task 3 of this same plan — the paragraph previously here, calling
+it pre-existing and reproducing it at pristine `02649e0`, was wrong and is
+withdrawn.** `02649e0` is this branch's own Task 7 commit, not a pristine
+baseline: reproducing the failure there shows only that it predates Task 8,
+not that it predates the work. A bisect in a throwaway worktree found the
+test passing at the merge-base `8e9ebfa`, passing at Task 1 (`3b8e710`) and
+Task 2 (`faede1a`), and failing from Task 3 (`802abc4`) onward through
+`c7852aa` and `c2ca1a7` (Tasks 4 and 6).
+
+The cause is in the fixture, which seeds a template declaring
+`"statuses": ["Not started"]` and then seeds the evidence row directly as
+`'Complete'` — a status that template never declares. Before `a834f64`
+readiness compared the literal and cleared it; Task 3 made readiness ask the
+template instead, so an undeclared status now fails closed — this is
+**intended behaviour, Ruling 11** (readiness must not honour a status its
+template never declared; see the spec's section 7 step 3), not a bug to
+revert. The defect was that the fixture itself had gone stale: it declared
+`["Not started"]` only, while directly seeding `'Complete'`, so the item was
+a hard blocker and the test's
+`assert preview.json()["hard_blockers"] == []` failed before the race it
+exists to test was ever exercised.
+
+**Why seven task reviews missed it: this file is in no task's regression
+set.** It needs live Postgres and is skipped entirely without it, and
+nothing in the plan's eight tasks named it as a file to re-check — it took
+a full chunked sweep outside any single task's scope to surface it. That is
+the process gap worth recording, not a review that looked at this file and
+missed the defect.
+
+**Fixed in `8f6c065`**: `minimal_schema` now declares `"Complete"` alongside
+`"Not started"` (plain string; `vocabulary_version` defaults to 1, which
+`TemplateSchema.status_lookup()` auto-resolves via
+`rule_engine._LEGACY_SATISFYING_STATUS` to `satisfies=True`, matching what
+the fixture always needed to assert). The `hard_blockers == []` precondition
+assertion was kept, not weakened or removed — it is load-bearing, since
+without it a readiness change could silently make the race untestable. A
+sibling search covered every other test that seeds or posts a status
+against a schema that might not declare it (raw-SQL seeding into
+`evidence_items` across the whole suite is limited to this file,
+`test_bgp_f03_decision_concurrency.py`, and `test_wp07_tenant_isolation_rls.py`
+— the other two either never route the seeded row through readiness or
+already use a status their own schema declares) plus every fixture JSON
+under `fixtures/synthetic/frameworks/` and every inline `"statuses"` schema
+literal in the test suite; the only other schema declaring `["Not started"]`
+only is `test_bgp_f03_decision_concurrency.py`'s, which drives its
+`'Complete'` writes through raw `UPDATE` statements proving lock behaviour
+and never through `_compute_readiness`, so it was never exposed to this
+gap. `test_bgp_f03_followup_app_level_concurrency.py` (1 test) and
+`test_bgp_f03_decision_concurrency.py` (5 tests) both re-run green after the
+fix.
 
 **No gate decision.** Evidence documents, fixtures and tests only — no
 `tracker_cli.py` invocation of any kind and no `tracker_cli.py gate`
