@@ -255,6 +255,55 @@ def test_v2_duplicate_and_overlength_statuses_still_validate():
     assert overlong is not None
 
 
+def test_structured_status_overlength_rejected_below_v3():
+    """I1's fix (whole-branch review): a STRUCTURED StatusDefinition entry
+    triggers the length-cap check at ANY vocabulary_version, not only v3 --
+    unlike a plain string, which stays exempt below v3 for G6
+    (test_v2_duplicate_and_overlength_statuses_still_validate above).
+    Regression pin for finding 2 of the fix-wave re-review: every
+    length/duplicate test above runs at v3, so nothing would go red if the
+    `or has_structured_status` clause protecting this were dropped."""
+    with pytest.raises(RuleValidationError) as exc:
+        validate_template_schema(
+            _schema(
+                vocabulary_version=2,
+                statuses=["Not started", {"id": "x" * 31, "satisfies": True}],
+                decision_outcomes=["Approve", "Hold"],
+            )
+        )
+    expected = f"status '{'x' * 31}' exceeds the 30-character limit imposed by EvidenceItem.status"
+    assert expected in _error_messages(exc.value)
+
+
+def test_structured_status_duplicate_rejected_below_v3():
+    """Same regression, the duplicate-id side, at vocabulary 1."""
+    with pytest.raises(RuleValidationError) as exc:
+        validate_template_schema(
+            _schema(
+                vocabulary_version=1,
+                statuses=[{"id": "Complete", "satisfies": True}, {"id": "Complete", "initial": True}],
+                decision_outcomes=["Approve", "Hold"],
+            )
+        )
+    assert "duplicate status id declared" in _error_messages(exc.value)
+
+
+def test_structured_outcome_overlength_rejected_below_v3():
+    """Same regression, the decision-outcome side: a structured
+    OutcomeDefinition over MAX_OUTCOME_ID_LENGTH must be rejected below
+    v3 too, guarded by `or has_structured_outcome`."""
+    with pytest.raises(RuleValidationError) as exc:
+        validate_template_schema(
+            _schema(
+                vocabulary_version=2,
+                statuses=["Not started", "Complete"],
+                decision_outcomes=["Approve", {"id": "x" * 31, "kind": "recording"}],
+            )
+        )
+    expected = f"decision outcome '{'x' * 31}' exceeds the 30-character limit imposed by DecisionRecord.outcome"
+    assert expected in _error_messages(exc.value)
+
+
 def test_vocabulary_three_has_the_same_operators_as_two():
     """The bump is about semantics, not operators."""
     from app.rule_engine import OPERATORS_BY_VOCABULARY_VERSION

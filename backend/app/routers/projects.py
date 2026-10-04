@@ -20,7 +20,9 @@ from app.models import (
     TemplateVersion,
 )
 from app.rule_engine import (
+    _LEGACY_SATISFYING_STATUS,
     RuleValidationError,
+    StatusDefinition,
     TemplateSchema,
     evaluate_condition,
     status_satisfies,
@@ -531,6 +533,7 @@ def my_work(
     # ITS OWN bound template version. One schema would silently apply one
     # framework's vocabulary to another's items.
     schema_by_project: dict[str, TemplateSchema] = {}
+    status_lookup_by_project: dict[str, dict[str, StatusDefinition]] = {}
     facts_by_occurrence: dict[str, dict[str, str]] = {}
 
     def _schema_for(item: EvidenceItem) -> TemplateSchema:
@@ -540,6 +543,14 @@ def my_work(
             project_row = projects_by_id[item.project_id]
             schema_by_project[item.project_id] = _load_bound_schema(db, tenant_id, project_row.template_version_id)
         return schema_by_project[item.project_id]
+
+    def _status_lookup_for(item: EvidenceItem) -> dict[str, StatusDefinition]:
+        # Mirrors schema_by_project: normalise once per project, not once
+        # per item -- status_lookup() rebuilds the whole dict from the
+        # schema's declared statuses every call.
+        if item.project_id not in status_lookup_by_project:
+            status_lookup_by_project[item.project_id] = _schema_for(item).status_lookup()
+        return status_lookup_by_project[item.project_id]
 
     def _satisfies(item: EvidenceItem) -> bool:
         """The SAME question `_compute_readiness` answers, asked the same
@@ -551,7 +562,7 @@ def my_work(
         fail-open direction: telling the assigned owner to stand down on
         the very item blocking the gate."""
         schema = _schema_for(item)
-        if not status_satisfies(schema.status_lookup().get(item.status)):
+        if not status_satisfies(_status_lookup_for(item).get(item.status)):
             return False
         # Condition evaluation is vocabulary 3 only (G6), so for every
         # v1/v2 project this returns above without the sibling query below.
@@ -560,14 +571,14 @@ def my_work(
         rules_by_id = {rule.rule_id: rule for gate in schema.gates for rule in gate.rules}
         if item.occurrence_id not in facts_by_occurrence:
             siblings = db.query(EvidenceItem).filter(EvidenceItem.occurrence_id == item.occurrence_id).all()
-            facts_by_occurrence[item.occurrence_id] = _evidence_facts(siblings, schema.status_lookup())
+            facts_by_occurrence[item.occurrence_id] = _evidence_facts(siblings, _status_lookup_for(item))
         return _conditions_hold(item, rules_by_id, facts_by_occurrence[item.occurrence_id], True)
 
     def _pending_exception(item: EvidenceItem) -> bool:
         """True when the item's status is one the template says satisfies
         only with an approved exception -- so the action text can say that
         instead of either claiming done or demanding a new revision."""
-        definition = _schema_for(item).status_lookup().get(item.status)
+        definition = _status_lookup_for(item).get(item.status)
         return definition is not None and definition.satisfies and definition.requires_exception
 
     q = db.query(EvidenceItem).filter(EvidenceItem.tenant_id == tenant_id, EvidenceItem.project_id.in_(my_project_ids))
@@ -730,11 +741,20 @@ def create_evidence_revision(
         )
 
     # REQ-018, keyed on what the status MEANS rather than on the literal
-    # "Complete". Owner ruling 2026-10-03: Complete is a state concept. An
-    # undeclared status (v1/v2 only, per the gate above) resolves to no
-    # definition and so does not satisfy -- exactly what the pre-DEC07
-    # `payload.status == "Complete"` test concluded about the same string.
-    if definition is not None and definition.satisfies and item.required and not payload.reference:
+    # "Complete" -- except for the one case vocabulary indirection cannot
+    # cover without becoming the v3 gate above: a v1/v2 template that never
+    # declares "Complete" resolves it to no definition, so
+    # `definition.satisfies` has nothing to go on. Pre-DEC07 the check was
+    # an unconditional `payload.status == "Complete"` that ignored the
+    # template entirely, so it DID demand a reference for that literal
+    # regardless of declaration. The second clause below restores exactly
+    # that, and only below vocabulary 3 -- at v3+ the gate above has already
+    # rejected an undeclared status outright, so `definition.satisfies` is
+    # the sole source of truth there.
+    needs_reference = (definition is not None and definition.satisfies) or (
+        schema.vocabulary_version < 3 and payload.status == _LEGACY_SATISFYING_STATUS
+    )
+    if needs_reference and item.required and not payload.reference:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY, "Cannot mark a required item Complete without a reference (REQ-018)"
         )

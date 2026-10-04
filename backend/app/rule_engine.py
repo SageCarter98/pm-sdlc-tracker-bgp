@@ -118,9 +118,11 @@ class RuleEvaluationTimeout(Exception):
         rolls its whole transaction back if evaluation raises -- a
         behaviour tests/test_projects.py pins independently.
       * `_conditions_hold` in `app/routers/decisions.py`, reached from
-        readiness. On the decision-commit path that transaction is likewise
-        rolled back; on `/preview` there is nothing to roll back, because
-        that request writes nothing.
+        readiness and, since I3's fix, from `my_work`
+        (`app/routers/projects.py`) too. On the decision-commit path that
+        transaction is likewise rolled back; on `/preview` and on
+        `my_work` -- a GET that writes nothing -- there is nothing to roll
+        back.
 
     This exception is caught NOWHERE, so either caller surfaces it as an
     unhandled 500 rather than a structured error. That is fail-closed -- no
