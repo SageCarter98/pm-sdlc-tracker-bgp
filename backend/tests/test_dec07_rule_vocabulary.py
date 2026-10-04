@@ -28,6 +28,7 @@ import pytest
 
 from app.rule_engine import (
     MAX_CONDITION_NODES,
+    OPERATORS_BY_VOCABULARY_VERSION,
     VOCABULARY_VERSION,
     Condition,
     RuleEvaluationTimeout,
@@ -354,10 +355,19 @@ def test_version_1_still_accepts_the_original_four_operators():
 
 
 def test_an_unknown_future_vocabulary_version_is_rejected():
-    with pytest.raises(RuleValidationError):
+    """One past the highest vocabulary this build KNOWS, not one past the
+    default it stamps. This used to say `VOCABULARY_VERSION + 1`, which
+    became 3 -- a known vocabulary -- the moment vocabulary 3 shipped, so
+    the test still passed but on v3's content rules instead of the
+    unknown-version path, leaving that path untested. The message is
+    asserted for the same reason: it is what proves WHICH rule fired."""
+    unknown = max(OPERATORS_BY_VOCABULARY_VERSION) + 1
+    assert unknown not in OPERATORS_BY_VOCABULARY_VERSION
+    with pytest.raises(RuleValidationError) as exc:
         validate_template_schema(
-            _template_with_condition({"op": "eq", "fact": "a", "value": 1}, vocabulary_version=VOCABULARY_VERSION + 1)
+            _template_with_condition({"op": "eq", "fact": "a", "value": 1}, vocabulary_version=unknown)
         )
+    assert f"vocabulary_version {unknown} is not a vocabulary this build knows" in str(exc.value)
 
 
 def test_the_authoring_ui_describes_the_new_operators_in_plain_language():

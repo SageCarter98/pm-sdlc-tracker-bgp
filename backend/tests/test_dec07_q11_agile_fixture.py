@@ -8,25 +8,35 @@ data model survive that without a special case, the model is genuinely
 general." Q12 asked for full parity on the model: tracks, items, rules,
 roles, statuses, decisions.
 
-It did not fully survive, and this file is the record of exactly where.
+Structurally it survived; on statuses and decisions it did not, and that
+history is the useful part. The gap was found by this fixture, recorded as
+"DEC07-Q11 vocabulary indirection" in docs/DEFECT_REGISTER.md, pinned here
+by characterization tests, and then fixed by the vocabulary-indirection
+work. Q12 closes in this file, against the vocabulary-3 fixture
+fixtures/synthetic/frameworks/agile.v3.json.
 
-The tests below come in two groups, and the distinction matters:
+There are three groups of tests below, and the distinction still matters:
 
-  * `test_works_*` -- real capability. These assert behaviour that should
-    keep working; if one breaks, something regressed.
+  * `test_works_*` -- real capability, asserted against the v1 fixture.
+    Structural generality that held from the start; if one breaks,
+    something regressed.
 
-  * `test_gap_*` -- CHARACTERIZATION tests. They pin the CURRENT, WRONG
-    behaviour so that fixing it shows up as a deliberate, visible change to
-    this file instead of a silent diff elsewhere. They are NOT a claim that
-    this behaviour is correct, and NOT a spec to preserve. Each is expected
-    to be rewritten when the vocabulary-indirection work lands (see
-    DEFECT_REGISTER.md, "DEC07-Q11 vocabulary indirection"). If you are
-    here because one failed after you generalised the status/outcome
-    vocabularies: good -- that is the point. Update the assertion; do not
-    restore the old behaviour.
+  * the positive counterparts -- six of the seven former `test_gap_*`
+    tests, rewritten (not restored) against the v3 fixture exactly as their
+    own docstrings instructed. Each names the gap test it replaces.
 
-Q12 is therefore NOT satisfied by this fixture alone: it reaches parity on
-tracks, items, rules and roles, but not on statuses or decisions.
+  * `test_required_fields_remains_declared_but_inert` -- the one
+    characterization test that STAYS one, because the gap it pins is still
+    open. `required_fields` is declared on every rule and consumed by
+    nothing, and no part of this work gives it a consumer; the
+    `required_fields` half of sub-finding 6 in DEFECT_REGISTER.md is
+    deliberately left open to match. Do not convert it to a positive test
+    until something actually enforces the named fields.
+
+agile.json itself is unchanged: published and immutable under REQ-011, and
+the artefact that demonstrated the gap. It keeps failing closed, which is
+also G6's proof at the fixture level
+(test_the_v1_fixture_is_retained_and_still_fails_closed).
 """
 
 import json
@@ -34,8 +44,9 @@ from pathlib import Path
 
 import pytest
 
-from app.rule_engine import evaluate_condition, validate_template_schema
-from tests.conftest import enable_mfa, register_and_login
+from app.rule_engine import validate_template_schema
+from tests.conftest import enable_mfa, login, register_and_login
+from tests.test_projects import _invite_and_accept
 
 FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "synthetic" / "frameworks" / "agile.json"
 
@@ -76,6 +87,20 @@ class AgileProject:
             payload["reference"] = reference
         return self.client.post(f"/orgs/{self.tenant_id}/evidence/{self.items[rule_id]['id']}/revisions", json=payload)
 
+    def detail(self, rule_id: str) -> dict:
+        """The item as STORED now, with its revisions -- `self.items` is the
+        snapshot taken at project creation and never refreshed, so a test
+        asserting about state after a revision has to re-read it."""
+        resp = self.client.get(f"/orgs/{self.tenant_id}/evidence/{self.items[rule_id]['id']}")
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    def current_status(self, rule_id: str) -> str:
+        return self.detail(rule_id)["item"]["status"]
+
+    def latest_revision_actor(self, rule_id: str) -> str:
+        return self.detail(rule_id)["revisions"][-1]["actor_user_id"]
+
     def preview(self, gate_id: str, outcome: str | None = None) -> dict:
         resp = self.client.post(
             f"/orgs/{self.tenant_id}/projects/{self.project_id}/occurrences/{self.occurrences[gate_id]['id']}/preview",
@@ -91,6 +116,9 @@ class AgileProject:
             json={"outcome": outcome, "manifest_digest": digest},
             headers={"Idempotency-Key": key},
         )
+
+    def me(self) -> str:
+        return self.client.get("/auth/me").json()["id"]
 
     def hard_rules_of(self, gate_id: str) -> list[str]:
         return [
@@ -190,168 +218,285 @@ def test_works_triggered_checks_do_not_auto_seed(agile):
 
 
 # --------------------------------------------------------------------------
-# The gaps. CHARACTERIZATION ONLY -- see this module's docstring.
-# Expected to be rewritten by the vocabulary-indirection fix, not preserved.
+# These were CHARACTERIZATION tests pinning the vocabulary-indirection
+# defect. The vocabulary-indirection work landed, so six of the seven are
+# now their positive counterparts against the v3 fixture -- rewritten, not
+# restored, exactly as the previous docstrings instructed. The seventh
+# (required_fields) is still a gap test, because its gap is still open.
 # --------------------------------------------------------------------------
 
+FIXTURE_V3 = FIXTURE.parent / "agile.v3.json"
 
-def test_gap_declared_statuses_are_not_honoured_by_readiness(agile):
-    """PINS CURRENT WRONG BEHAVIOUR. The fixture declares its completion
-    word as "Met". Readiness hardcodes the literal "Complete"
-    (routers/decisions.py `item.status == "Complete"`), so marking every
-    hard check "Met" leaves every one of them a hard blocker.
 
-    It fails CLOSED -- no unready decision slips through, which is why this
-    is a generality gap rather than a control bypass. But the framework's
-    own vocabulary is not honoured, and `TemplateSchema.statuses` is read
-    nowhere in any readiness path."""
-    hard = agile.hard_rules_of(DOD)
+def _schema_v3() -> dict:
+    data = json.loads(FIXTURE_V3.read_text(encoding="utf-8"))
+    data.pop("_meta", None)
+    return data
+
+
+def _publish_v3_project(client, tenant_id: str, members: list[dict]) -> AgileProject:
+    imported = client.post(
+        f"/orgs/{tenant_id}/templates/import",
+        json={"name": "Agile DoR/DoD v3", "schema_json": _schema_v3()},
+    ).json()
+    pub = client.post(f"/orgs/{tenant_id}/templates/{imported['template_id']}/versions/{imported['id']}/publish")
+    assert pub.status_code == 200, pub.text
+    created = client.post(
+        f"/orgs/{tenant_id}/projects",
+        json={
+            "name": "Platform squad",
+            "template_version_id": imported["id"],
+            "class_id": "Team",
+            "members": members,
+        },
+    )
+    assert created.status_code == 201, created.text
+    return AgileProject(client, tenant_id, created.json())
+
+
+@pytest.fixture()
+def agile_v3(client) -> AgileProject:
+    register_and_login(client, "admin@squadv3.example")
+    enable_mfa(client)
+    tenant_id = client.post("/orgs", json={"name": "Squad V3 Co"}).json()["id"]
+    return _publish_v3_project(client, tenant_id, [])
+
+
+V3_SOD_ADMIN = "admin@squadv3sod.example"
+V3_SOD_SECOND = "developer2@squadv3sod.example"
+
+
+@pytest.fixture()
+def agile_v3_two_person(client) -> AgileProject:
+    """The same v3 project, but with a SECOND project member, so a decision
+    can be reached without tripping REQ-006. Every seeded evidence item's
+    revision 1 is attributed to whoever created the project, so in the
+    single-user `agile_v3` fixture the admin is the only preparer of every
+    required item -- which is self-only approval by definition."""
+    register_and_login(client, V3_SOD_ADMIN)
+    enable_mfa(client)
+    tenant_id = client.post("/orgs", json={"name": "Squad V3 SoD Co"}).json()["id"]
+    second_id = _invite_and_accept(client, tenant_id, V3_SOD_SECOND, "approver")
+    enable_mfa(client)
+    login(client, V3_SOD_ADMIN)
+    return _publish_v3_project(client, tenant_id, [{"user_id": second_id, "role": "approver"}])
+
+
+def test_the_v3_fixture_declares_vocabulary_3_and_its_own_semantics():
+    """The fixture is what makes vocabulary 3 reachable at all:
+    VOCABULARY_VERSION (the stamp on new guided-authoring drafts) stays 2
+    per spec Sec.7 rollout step 1, so a template only evaluates as v3 when
+    its own JSON says so."""
+    schema = validate_template_schema(_schema_v3())
+    assert schema.vocabulary_version == 3
+    statuses = schema.status_lookup()
+    assert schema.initial_status() == "Not met"
+    assert statuses["Met"].satisfies is True
+    assert statuses["Waived"].satisfies is True
+    assert statuses["Waived"].requires_exception is True
+    assert {o.id: o.kind for o in schema.outcome_lookup().values()} == {
+        "Increment accepted": "approving",
+        "Accepted with follow-ups": "conditional_approving",
+        "Not accepted": "recording",
+    }
+    # Every status id has to fit EvidenceItem.status (String(30)), so the
+    # cap is worth asserting. It is NOT why v1's "Waived for this
+    # increment" became "Waived": that string is 25 characters and was
+    # already within the limit. The rename is an editorial choice available
+    # in a new template version -- a shorter id that reads the same in a
+    # status control -- and nothing forced it.
+    assert all(len(status_id) <= 30 for status_id in statuses)
+    assert len("Waived for this increment") <= 30, "the v1 id fitted; the cap did not drive the rename"
+
+
+def test_declared_statuses_now_drive_readiness(agile_v3):
+    """Was test_gap_declared_statuses_are_not_honoured_by_readiness."""
+    hard = agile_v3.hard_rules_of(DOD)
+    assert hard, "this test is meaningless if the gate has no hard items"
     for rule_id in hard:
-        assert agile.revise(rule_id, "Met", reference="https://ci.example/run/1").status_code == 201
-
-    preview = agile.preview(DOD)
-    assert len(preview["hard_blockers"]) == len(hard), (
-        "if this now reports fewer blockers, the status vocabulary was generalised -- "
-        "rewrite this test to assert the correct behaviour"
-    )
-    assert "has not been marked Complete" in preview["blocker_explanations"][0]["explanation"]
+        assert agile_v3.revise(rule_id, "Met", reference="https://ci.example/run/1").status_code == 201
+    assert agile_v3.preview(DOD)["hard_blockers"] == []
 
 
-def test_gap_only_the_literal_word_complete_clears_a_blocker(agile):
-    """PINS CURRENT WRONG BEHAVIOUR. The same item with the same reference
-    clears its blocker only when the status string is exactly "Complete" --
-    a word this framework never declares."""
-    rule_id = agile.hard_rules_of(DOD)[0]
-    item_id = agile.items[rule_id]["id"]
-
-    assert agile.revise(rule_id, "Met", reference="https://ci.example/run/1").status_code == 201
-    assert item_id in agile.preview(DOD)["hard_blockers"]
-
-    assert agile.revise(rule_id, "Complete", reference="https://ci.example/run/1", base_revision=2).status_code == 201
-    assert item_id not in agile.preview(DOD)["hard_blockers"]
+def test_items_start_in_the_declared_initial_status(agile_v3):
+    """Was part of the same gap: the platform wrote "Not started" into a
+    framework that never declared it."""
+    assert {i["status"] for i in agile_v3.items.values()} == {"Not met"}
 
 
-def test_gap_an_undeclared_status_is_accepted(agile):
-    """PINS CURRENT WRONG BEHAVIOUR. `statuses` constrains nothing: a status
-    the template never declared is stored without complaint. The authoring
-    UI offers the declared list (webapp/router.py passes `schema.statuses`
-    into the evidence form), so that list looks authoritative while being
-    advisory."""
-    rule_id = agile.hard_rules_of(DOD)[0]
-    assert "Bananas" not in _schema()["statuses"]
-    assert agile.revise(rule_id, "Bananas", reference="x").status_code == 201
+def test_an_undeclared_status_is_now_rejected(agile_v3):
+    """Was test_gap_an_undeclared_status_is_accepted."""
+    rule_id = agile_v3.hard_rules_of(DOD)[0]
+    resp = agile_v3.revise(rule_id, "Bananas", reference="x")
+    assert resp.status_code == 422
+    assert "Bananas" in resp.text
 
 
-def test_gap_req018_reference_requirement_is_keyed_to_the_literal_word(agile):
-    """PINS CURRENT WRONG BEHAVIOUR, and this is the sharpest edge of the
-    five. REQ-018 ("do not allow a required item to be Complete without a
-    reference") is enforced as `payload.status == "Complete"`
-    (routers/projects.py). A framework whose completion word differs walks
-    straight past it: a required hard check reaches a done-meaning status
-    with no reference at all.
-
-    Readiness still blocks the decision, so no unready gate gets approved --
-    but the evidence record itself now carries exactly the unreferenced
-    "done" this control exists to forbid."""
-    rule_id = agile.hard_rules_of(DOD)[0]
-    assert agile.items[rule_id]["required"] is True
-
-    bypassed = agile.revise(rule_id, "Met")  # no reference whatsoever
-    assert bypassed.status_code == 201, (
-        "if this is now rejected, REQ-018 was generalised beyond the literal "
-        "word -- rewrite this test to assert the correct behaviour"
-    )
-
-    enforced = agile.revise(rule_id, "Complete", base_revision=2)
-    assert enforced.status_code == 422
-    assert "REQ-018" in enforced.text
+def test_req018_now_catches_a_satisfying_status_without_a_reference(agile_v3):
+    """Was test_gap_req018_reference_requirement_is_keyed_to_the_literal_word."""
+    rule_id = agile_v3.hard_rules_of(DOD)[0]
+    assert agile_v3.items[rule_id]["required"] is True
+    resp = agile_v3.revise(rule_id, "Met")
+    assert resp.status_code == 422
+    assert "REQ-018" in resp.text
 
 
-def test_gap_declared_decision_outcomes_cannot_be_recorded(agile):
-    """PINS CURRENT WRONG BEHAVIOUR. With every hard blocker cleared the
-    only way the engine accepts, this fixture's declared outcomes are still
-    unusable: `_outcome_eligibility` matches the Blueprint's five English
-    outcome words, so `permitted_outcomes` comes back empty and recording
-    either declared outcome 422s.
+def test_declared_decision_outcomes_can_now_be_recorded(agile_v3_two_person):
+    """Was test_gap_declared_decision_outcomes_cannot_be_recorded. This
+    assertion closes DEC07 Q12.
 
-    The engine is honest about it -- the message says the outcome is
-    "declared by the template but not handled by this prototype's decision
-    logic" -- so this is a known, deliberate limit rather than a surprise.
-    This fixture is simply the first thing to reach it."""
-    for rule_id in agile.hard_rules_of(DOD):
-        agile.revise(rule_id, "Complete", reference="https://ci.example/run/1")
+    It reaches the decision THROUGH REQ-006, not around it: the second
+    project member prepares one of the two hard items, so the deciding
+    admin is not the only preparer and separation of duties is satisfied
+    without an override. The self-only case is the next test, and it is
+    refused."""
+    agile_v3 = agile_v3_two_person
+    hard = agile_v3.hard_rules_of(DOD)
+    assert len(hard) >= 2, "this test needs two hard items so the two members can prepare one each"
 
-    preview = agile.preview(DOD)
+    login(agile_v3.client, V3_SOD_SECOND)
+    assert agile_v3.revise(hard[0], "Met", reference="https://ci.example/run/1").status_code == 201
+    login(agile_v3.client, V3_SOD_ADMIN)
+    for rule_id in hard[1:]:
+        assert agile_v3.revise(rule_id, "Met", reference="https://ci.example/run/1").status_code == 201
+
+    preview = agile_v3.preview(DOD)
     assert preview["hard_blockers"] == []
-    assert preview["permitted_outcomes"] == [], (
-        "if this is now non-empty, decision outcomes were generalised -- "
-        "rewrite this test to assert the correct behaviour"
+    assert "Increment accepted" in preview["permitted_outcomes"]
+    assert agile_v3.latest_revision_actor(hard[0]) != agile_v3.me(), (
+        "separation of duties has to be genuinely satisfied here, not skipped"
     )
 
-    for outcome in _schema()["decision_outcomes"]:
-        refused = agile.decide(DOD, outcome, preview["manifest_digest"], key=f"q11-{outcome}")
-        assert refused.status_code == 422
-        assert "not handled by this prototype's decision logic" in refused.text
+    recorded = agile_v3.decide(DOD, "Increment accepted", preview["manifest_digest"], key="q12-closed")
+    assert recorded.status_code == 201, recorded.text
+    assert recorded.json()["outcome"] == "Increment accepted"
 
 
-def test_gap_rule_conditions_are_never_evaluated_at_runtime(agile):
-    """PINS CURRENT WRONG BEHAVIOUR, and this is the widest of the findings.
+def test_a_declared_approving_outcome_is_refused_for_a_self_only_approver(agile_v3):
+    """REQ-006 keyed on the outcome's declared `kind` rather than on the
+    Blueprint's literal words.
 
-    `evaluate_condition` has exactly one call site in the whole application
-    (`routers/projects.py`, on `rule.applicability`). A rule's `conditions`
-    tree -- the part that says what actually has to be true -- is validated
-    for depth, the 200-node cap and the operator vocabulary, then never
-    walked by any readiness path. Readiness is decided purely by the
-    human-set `status` string.
+    This assertion used to be the other way round. `_record_decision` gated
+    `_check_separation_of_duties` on `payload.outcome in ("Approve",
+    "Approve with conditions")` while `_outcome_eligibility` above it
+    already resolved outcomes by `kind`, so a template-declared `approving`
+    outcome committed an approval with no self-approval check at all -- the
+    identical evidence state under the word "Approve" being refused 403 by
+    test_decisions.py::test_full_approval_flow_with_separation_of_duties_override.
+    The register row "DEC07 SoD outcome literal" carries the history. This
+    test now pins the control instead of the bypass."""
+    hard = agile_v3.hard_rules_of(DOD)
+    for rule_id in hard:
+        assert agile_v3.revise(rule_id, "Met", reference="https://ci.example/run/1").status_code == 201
+    preview = agile_v3.preview(DOD)
+    assert preview["hard_blockers"] == [], "the refusal below must be about REQ-006, not about a blocker"
 
-    So all of DEC07 Q10's machinery (the new operators, the node cap, the
-    evaluation timeout) currently governs a tree nothing evaluates for
-    readiness. This test proves the consequence in three steps: the rule
-    HAS a conditions tree; that tree is False against the only facts the
-    application ever supplies; and the item's blocker clears anyway, on
-    status alone."""
-    schema = validate_template_schema(_schema())
-    rule = next(
-        r for g in schema.gates if g.gate_id == DOD for r in g.rules if r.rule_id == "definition-of-done.checks-pass"
+    # The precondition, asserted rather than assumed: one user authored
+    # every required item's current revision and is now the decider.
+    assert {agile_v3.latest_revision_actor(r) for r in hard} == {agile_v3.me()}
+
+    denied = agile_v3.decide(DOD, "Increment accepted", preview["manifest_digest"], key="sod-v3-approving")
+    assert denied.status_code == 403, denied.text
+    assert "compensating review" in denied.text, denied.text
+
+
+def test_waived_requires_a_real_exception(agile_v3):
+    """New, and the reason `requires_exception` exists: a second
+    satisfying status must not become a way around a hard blocker."""
+    rule_id = agile_v3.hard_rules_of(DOD)[0]
+    assert agile_v3.revise(rule_id, "Waived", reference="waiver").status_code == 201
+    assert agile_v3.items[rule_id]["id"] in agile_v3.preview(DOD)["hard_blockers"]
+
+
+def test_rule_conditions_are_now_evaluated_for_readiness(agile_v3):
+    """Was test_gap_rule_conditions_are_never_evaluated_at_runtime, the
+    widest of the findings: `conditions` used to be validated and then
+    never walked by any readiness path.
+
+    The v3 fixture's `definition-of-ready.acceptance-criteria` carries the
+    one condition tree that survived retranslation into DEC07's closed
+    `item:<rule_id>` fact namespace -- at least two of its two sibling DoR
+    checks satisfied. The second half of this test is the assertion that
+    matters: regress one sibling and the summary item blocks AGAIN while
+    its own status still says "Met". Without that half, the test would
+    pass whether or not conditions are evaluated at all."""
+    summary = f"{DOR}.acceptance-criteria"
+    sibling = f"{DOR}.no-blocking-unknowns"
+    other = f"{DOR}.sized"
+    summary_item_id = agile_v3.items[summary]["id"]
+
+    for rule_id in (sibling, other, summary):
+        assert agile_v3.revise(rule_id, "Met", reference="ready-1").status_code == 201
+    assert summary_item_id not in agile_v3.preview(DOR)["hard_blockers"]
+
+    # One sibling regresses. The summary item's OWN status is untouched and
+    # still satisfying, so only condition evaluation can block it.
+    assert agile_v3.revise(sibling, "Not met", base_revision=2).status_code == 201
+    assert agile_v3.current_status(summary) == "Met", "the summary item's own status must be untouched here"
+    assert summary_item_id in agile_v3.preview(DOR)["hard_blockers"], (
+        "the summary item must block again once a sibling regresses, despite its own satisfying status -- "
+        "if it does not, rule.conditions is no longer being evaluated"
     )
 
-    assert rule.conditions is not None, "this test is meaningless if the rule has no conditions tree"
 
-    # The predicate itself is sound and satisfiable -- this matters, because
-    # it rules out the alternative reading that the condition is simply
-    # malformed. Fed the fact it asks for, it is True.
-    assert evaluate_condition(rule.conditions, {"automated_checks_passing": True}) is True
+def test_required_fields_remains_declared_but_inert(agile_v3):
+    """STILL A CHARACTERIZATION TEST -- the one of the seven that did not
+    become a positive counterpart, because its gap is still open.
 
-    # But the only facts any call site ever supplies are these (projects.py
-    # seeds applicability with exactly `{"class_id": ...}`), so the fact is
-    # unknown and the condition fails closed. No project state reaches it.
-    assert evaluate_condition(rule.conditions, {"class_id": "Team"}) is False
+    `required_fields` is declared on every rule in the approved Sec.5.5
+    schema and read by nothing: one line in `rule_engine.py` defines the
+    field, and there is no other reference anywhere in the application.
+    There is no mechanism to supply the named fields at all, so a revision
+    naming none of them satisfies the item. The vocabulary-indirection work
+    did not change that and did not claim to -- see the `required_fields`
+    half of sub-finding 6 in docs/DEFECT_REGISTER.md, which stays open.
 
-    # ...and yet:
-    assert agile.revise(rule.rule_id, "Complete", reference="https://ci.example/run/1").status_code == 201
-    assert agile.items[rule.rule_id]["id"] not in agile.preview(DOD)["hard_blockers"], (
-        "if this item is still blocked, rule.conditions is now actually "
-        "evaluated -- rewrite this test to assert the correct behaviour"
-    )
-
-
-def test_gap_required_fields_is_declared_but_has_no_consumers(agile):
-    """PINS CURRENT WRONG BEHAVIOUR. `required_fields` is declared on every
-    rule in the approved Sec.5.5 schema and read by nothing: one line in
-    `rule_engine.py` defines it, and there is no other reference anywhere in
-    the application. There is no mechanism to supply the named fields at
-    all, so a revision naming none of them satisfies the item."""
-    rule_id = "definition-of-done.checks-pass"
-    schema = validate_template_schema(_schema())
-    rule = next(r for g in schema.gates if g.gate_id == DOD for r in g.rules if r.rule_id == rule_id)
-
+    Run against the v3 fixture only because the v1 fixture no longer
+    accepts the literal "Complete" (a status it never declared); the gap
+    being pinned is unchanged."""
+    rule_id = f"{DOD}.checks-pass"
+    rule = next(r for g in validate_template_schema(_schema_v3()).gates for r in g.rules if r.rule_id == rule_id)
     assert rule.required_fields == ["run_url"], "the fixture should declare a required field for this to mean anything"
 
     # Nothing supplies `run_url`; the revision carries only the platform's
-    # own generic fields. Accepted regardless.
-    accepted = agile.revise(rule_id, "Complete", reference="not-a-run-url")
+    # own generic fields, and `reference` is not even URL-shaped. Accepted
+    # regardless, and the item's blocker clears.
+    accepted = agile_v3.revise(rule_id, "Met", reference="not-a-run-url")
     assert accepted.status_code == 201, (
         "if this is now rejected, required_fields gained an enforcer -- "
-        "rewrite this test to assert the correct behaviour"
+        "rewrite this test as its positive counterpart and close the register row"
     )
-    assert agile.items[rule_id]["id"] not in agile.preview(DOD)["hard_blockers"]
+    assert agile_v3.items[rule_id]["id"] not in agile_v3.preview(DOD)["hard_blockers"]
+
+
+def test_the_v1_fixture_seeds_its_own_first_declared_status(agile):
+    """An ACCEPTED vocabulary-1/2 behaviour change, pinned so it cannot be
+    silent (docs/DEFECT_REGISTER.md, the DEC07-Q11 row's G6 exceptions).
+
+    Seeding used to write the literal "Not started" into every new evidence
+    item; it now calls `TemplateSchema.initial_status()`. agile.json is
+    vocabulary 2 and declares ['Not met', 'Met', 'Waived for this
+    increment'] -- it never declared "Not started" -- so its projects now
+    seed 'Not met'. That is arguably more correct than before (the platform
+    was writing a status this framework does not recognise), but it IS a
+    change for any v1/v2 template that omits "Not started", and the three
+    gate-based fixtures keep seeding "Not started" only because they all
+    declare it (test_dec07_vocabulary_backcompat.py pins that side)."""
+    assert {i["status"] for i in agile.items.values()} == {"Not met"}
+    schema = validate_template_schema(_schema())
+    assert "Not started" not in schema.status_lookup(), (
+        "this test only means something while agile.json omits the old seeding literal"
+    )
+
+
+def test_the_v1_fixture_is_retained_and_still_fails_closed(agile):
+    """Was test_gap_only_the_literal_word_complete_clears_a_blocker.
+    agile.json is published and immutable (REQ-011); it must keep behaving
+    exactly as it did, which is also G6's proof at the fixture level.
+
+    At vocabulary 2 a plain-string status only satisfies if it is the
+    literal "Complete", so this fixture's own "Met" is stored happily and
+    still blocks -- failing closed, the behaviour the finding described."""
+    rule_id = agile.hard_rules_of(DOD)[0]
+    assert agile.revise(rule_id, "Met", reference="https://ci.example/run/1").status_code == 201
+    assert agile.items[rule_id]["id"] in agile.preview(DOD)["hard_blockers"]

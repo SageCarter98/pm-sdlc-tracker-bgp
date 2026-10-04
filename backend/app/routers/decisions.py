@@ -25,12 +25,18 @@ from app.models import (
     ProjectMembership,
     User,
 )
-from app.rule_engine import TemplateSchema
+from app.rule_engine import TemplateSchema, evaluate_condition, status_satisfies
 from app.routers.projects import _get_owned_project_or_404, _load_bound_schema, _require_project_member
 
 router = APIRouter(tags=["decisions"])
 
 DECISION_AUTHORITY_ROLES = {"approver", "sponsor", "tenant_administrator"}
+
+# REQ-006 separation of duties applies to an outcome that APPROVES, whatever
+# word a template uses for it. These are the two OutcomeDefinition kinds that
+# mean approval; "recording" (Hold/Redirect/Terminate and their equivalents)
+# records a decision without granting one.
+APPROVING_OUTCOME_KINDS = {"approving", "conditional_approving"}
 
 
 def _now() -> datetime:
@@ -92,7 +98,70 @@ def _exception_is_currently_valid(db: Session, exc: ExceptionRecord, *, lock: bo
     return approver_membership is not None and approver_membership.role in DECISION_AUTHORITY_ROLES
 
 
-def _compute_readiness(db: Session, project: Project, occurrence: GateOccurrence, *, lock: bool = False) -> dict:
+def _has_valid_exception(db: Session, item: EvidenceItem, *, lock: bool = False) -> bool:
+    """Re-checked on the locked path too, so an exception that expired
+    between preview and commit cannot silently approve."""
+    query = db.query(ExceptionRecord).filter(ExceptionRecord.evidence_item_id == item.id).order_by(ExceptionRecord.id)
+    if lock:
+        query = query.with_for_update()
+    return any(_exception_is_currently_valid(db, exc, lock=lock) for exc in query.all())
+
+
+# DEC07 narrow-scope condition facts. The namespace is CLOSED: only
+# `item:<rule_id>` exists, scoped to this occurrence. Cross-occurrence and
+# project-state facts are deliberately absent -- a sprint-2 check must not
+# depend on sprint-1's answers (REQ-016), and a general project-state fact
+# pipeline is its own work package.
+_ITEM_FACT_PREFIX = "item:"
+
+
+def _evidence_facts(items: list[EvidenceItem], status_lookup: dict) -> dict[str, str]:
+    """Facts are derived from STORED statuses only -- never from other
+    items' freshly-derived condition results. That is what makes this a
+    single pass with no fixpoint, no ordering dependence and no cycle: an
+    item's conditions can read whether a sibling's status satisfies, but
+    not whether that sibling's own conditions passed.
+
+    A `requires_exception` status (e.g. a "Waived" that declares
+    satisfies=True) is deliberately reported as "unsatisfied" here even
+    though its definition sets satisfies=True -- this mirrors
+    `directly_satisfied` in `_compute_readiness` exactly. Reporting it as
+    satisfied would let a sibling's condition tree be granted on the
+    strength of a waiver nobody has actually approved yet (this function
+    takes no `db` and cannot check), which is fail-open and would violate
+    both "fail closed everywhere" and spec 4.4's "withhold, never grant"."""
+    facts: dict[str, str] = {}
+    for item in items:
+        satisfied = status_satisfies(status_lookup.get(item.status))
+        facts[f"{_ITEM_FACT_PREFIX}{item.rule_id}"] = "satisfied" if satisfied else "unsatisfied"
+    return facts
+
+
+def _conditions_hold(item: EvidenceItem, rules_by_id: dict, facts: dict[str, str], conditions_enabled: bool) -> bool:
+    """Conditions may only WITHHOLD satisfaction, never grant it (spec 4.4),
+    so this is only ever consulted for an item whose status already
+    satisfies directly. Off entirely below vocabulary 3 (G6).
+
+    Deliberately NOT consulted on the exception path (`_has_valid_exception`
+    below): that is REQ-020's universal human-approved escape valve, and
+    letting a condition tree override an approved exception would narrow
+    REQ-020 without a mandate to do so."""
+    if not conditions_enabled:
+        return True
+    rule = rules_by_id.get(item.rule_id)
+    if rule is None or rule.conditions is None:
+        return True
+    return evaluate_condition(rule.conditions, facts)
+
+
+def _compute_readiness(
+    db: Session,
+    project: Project,
+    occurrence: GateOccurrence,
+    schema: TemplateSchema,
+    *,
+    lock: bool = False,
+) -> dict:
     """Returns {manifest, manifest_digest, hard_blockers, conditional_blockers,
     advisory_unsatisfied} -- always computed fresh against current evidence
     and exception state, never cached. This *is* REQ-021's reassessment
@@ -119,26 +188,47 @@ def _compute_readiness(db: Session, project: Project, occurrence: GateOccurrence
         query = query.with_for_update()
     items = query.all()
 
+    # DEC07: ask the bound template what a status MEANS instead of matching
+    # the literal word "Complete" -- the whole point of this task.
+    status_lookup = schema.status_lookup()
+
+    # Vocabulary 3 turns condition evaluation on. At 1/2 it stays off, so a
+    # published template keeps evaluating identically (G6).
+    conditions_enabled = schema.vocabulary_version >= 3
+    facts = _evidence_facts(items, status_lookup) if conditions_enabled else {}
+    rules_by_id = {rule.rule_id: rule for gate in schema.gates for rule in gate.rules}
+
     hard_blockers, conditional_blockers, advisory_unsatisfied = [], [], []
     blocker_explanations = []
     for item in items:
-        if item.status == "Complete":
+        # Fail closed on a status the bound template does not declare --
+        # reachable for rows written before this template version, and the
+        # same unknown-fact rule the condition evaluator already uses. A
+        # requires_exception status is deliberately never "directly"
+        # satisfying either; it falls through to the exception check below
+        # just like an unsatisfied status does. Both properties live in
+        # rule_engine.status_satisfies, shared with _evidence_facts above
+        # and my_work's action text (app/routers/projects.py).
+        directly_satisfied = status_satisfies(status_lookup.get(item.status))
+        if directly_satisfied and _conditions_hold(item, rules_by_id, facts, conditions_enabled):
             continue
         if item.blocker_level == "advisory":
+            # Advisory items were never excused by an exception before this
+            # task (the old code's advisory branch ran before the exception
+            # check existed at all) -- preserve that: no exception lookup
+            # for advisory, just direct-status satisfaction above.
             advisory_unsatisfied.append(item.id)
             continue
-        exception_query = (
-            db.query(ExceptionRecord).filter(ExceptionRecord.evidence_item_id == item.id).order_by(ExceptionRecord.id)
-        )
-        if lock:
-            # BGP-F03 follow-up: locked in the same fixed order as evidence
-            # rows above (evidence, then exceptions, then the approver
-            # membership inside _exception_is_currently_valid) so concurrent
-            # decision-committing transactions can still only ever wait on
-            # each other, never deadlock.
-            exception_query = exception_query.with_for_update()
-        excepted = any(_exception_is_currently_valid(db, exc, lock=lock) for exc in exception_query.all())
-        if excepted:
+        # REQ-020: a valid exception excuses ANY hard/conditional blocker
+        # not already directly satisfied by its status -- the pre-existing
+        # universal escape valve (test_decisions.py's exception tests) --
+        # and is also the ONLY way a requires_exception status (e.g.
+        # "Waived") can ever count as satisfied (checked in the same
+        # BGP-F03 locked order -- evidence, then exceptions, then the
+        # approver membership inside _exception_is_currently_valid -- so
+        # concurrent decision-committing transactions can still only ever
+        # wait on each other, never deadlock).
+        if _has_valid_exception(db, item, lock=lock):
             continue
         (hard_blockers if item.blocker_level == "hard" else conditional_blockers).append(item.id)
         blocker_explanations.append(
@@ -151,9 +241,11 @@ def _compute_readiness(db: Session, project: Project, occurrence: GateOccurrence
                 # a member of by the time this function runs).
                 "explanation": (
                     f"Gate {item.gate_id}: a {item.blocker_level} '{item.evidence_kind}' item "
-                    f"(currently '{item.status}') has not been marked Complete."
+                    f"(currently '{item.status}') is not in a status this framework treats as satisfied."
                 ),
-                "corrective_action": f"POST /orgs/{{tenant_id}}/evidence/{item.id}/revisions with status 'Complete' and a reference",
+                "corrective_action": (
+                    f"POST /orgs/{{tenant_id}}/evidence/{item.id}/revisions with a satisfying status and a reference"
+                ),
             }
         )
 
@@ -257,52 +349,57 @@ class DecisionOut(BaseModel):
 def _outcome_eligibility(
     schema: TemplateSchema, outcome: str, readiness: dict, conditions: ConditionsIn | None
 ) -> tuple[bool, str | None]:
-    if outcome not in schema.decision_outcomes:
+    definition = schema.outcome_lookup().get(outcome)
+    if definition is None:
+        declared = [e if isinstance(e, str) else e.id for e in schema.decision_outcomes]
+        if outcome in declared:
+            # Declared but with no resolvable kind -- only reachable for a
+            # v1/v2 template naming an outcome this prototype never
+            # handled. Same honest refusal as before, deliberately kept.
+            return False, (
+                f"outcome '{outcome}' is declared by the template but not handled by this prototype's decision logic"
+            )
         return False, f"'{outcome}' is not a decision outcome declared by this template version"
 
-    if outcome in ("Hold", "Redirect", "Terminate"):
-        return True, None  # Blueprint Sec.2.2: recorded outcomes, not approvals -- no blocker requirement
+    if definition.kind == "recording":
+        # Blueprint Sec.2.2: recorded outcomes, not approvals -- no blocker
+        # requirement.
+        return True, None
 
     if readiness["hard_blockers"]:
         return False, "unresolved hard blocker(s) deny any approval outcome"
 
-    if outcome == "Approve":
+    if definition.kind == "approving":
         if readiness["conditional_blockers"]:
             return False, "unresolved conditional blocker(s) -- use 'Approve with conditions' or resolve them first"
         return True, None
 
-    if outcome == "Approve with conditions":
-        if conditions is None:
-            return (
-                False,
-                "missing deadline or condition owner",
-            )  # TST-022 wording, covers the whole missing-conditions case
-        if not conditions.conditions or not conditions.owner_user_id:
-            return False, "missing deadline or condition owner"
-        if _as_utc(conditions.deadline) <= _now():
-            return False, "missing deadline or condition owner"
-        return True, None
-
-    return False, f"outcome '{outcome}' is declared by the template but not handled by this prototype's decision logic"
+    # conditional_approving
+    if conditions is None:
+        return False, "missing deadline or condition owner"
+    if not conditions.conditions or not conditions.owner_user_id:
+        return False, "missing deadline or condition owner"
+    if _as_utc(conditions.deadline) <= _now():
+        return False, "missing deadline or condition owner"
+    return True, None
 
 
 def _permitted_outcomes(schema: TemplateSchema, readiness: dict) -> list[str]:
     """REQ-037's confirmation-summary list. Deliberately more lenient than
-    _outcome_eligibility for 'Approve with conditions': that outcome is
-    structurally reachable whenever no hard blocker exists, even before
-    the caller has actually supplied conditions -- the summary's job is to
-    tell the user which *paths* are open, not to pre-validate a specific
-    conditions payload they haven't written yet."""
+    _outcome_eligibility for conditional_approving: that outcome is
+    structurally reachable whenever no hard blocker exists, even before the
+    caller has supplied conditions -- the summary's job is to say which
+    PATHS are open, not to pre-validate a payload nobody has written yet."""
     permitted = []
-    for outcome in schema.decision_outcomes:
-        if outcome in ("Hold", "Redirect", "Terminate"):
-            permitted.append(outcome)
+    for definition in schema.outcome_lookup().values():
+        if definition.kind == "recording":
+            permitted.append(definition.id)
         elif readiness["hard_blockers"]:
             continue
-        elif outcome == "Approve" and not readiness["conditional_blockers"]:
-            permitted.append(outcome)
-        elif outcome == "Approve with conditions":
-            permitted.append(outcome)
+        elif definition.kind == "approving" and not readiness["conditional_blockers"]:
+            permitted.append(definition.id)
+        elif definition.kind == "conditional_approving":
+            permitted.append(definition.id)
     return permitted
 
 
@@ -490,7 +587,7 @@ def preview_decision(
     _require_project_member(db, project_id, membership.user_id)
     occurrence = _get_occurrence_or_404(db, project_id, occurrence_id)
     schema = _load_bound_schema(db, tenant_id, project.template_version_id)
-    readiness = _compute_readiness(db, project, occurrence)
+    readiness = _compute_readiness(db, project, occurrence, schema)
 
     outcome_allowed = outcome_denial_reason = None
     if payload.outcome:
@@ -601,7 +698,7 @@ def _record_decision(
     # BGP-F03: locked -- see _compute_readiness's docstring. Held from here
     # through the commit below, so nothing can change these evidence items
     # out from under this decision between reading them and committing.
-    readiness = _compute_readiness(db, project, occurrence, lock=True)
+    readiness = _compute_readiness(db, project, occurrence, schema, lock=True)
 
     def _deny(reason_text: str, http_status: int) -> None:
         db.add(
@@ -644,8 +741,25 @@ def _record_decision(
     if not allowed:
         _deny(denial_reason, status.HTTP_422_UNPROCESSABLE_ENTITY)
 
+    # REQ-006 keys on what the outcome MEANS, not on the Blueprint's two
+    # English words. This used to read `payload.outcome in ("Approve",
+    # "Approve with conditions")`, which let a template-declared `approving`
+    # outcome commit an approval without the self-only-approval check the
+    # identical evidence state under "Approve" is refused 403 for (register
+    # row "DEC07 SoD outcome literal").
+    #
+    # v1/v2 behaviour is unchanged by construction: the legacy map in
+    # rule_engine resolves "Approve" -> approving and "Approve with
+    # conditions" -> conditional_approving, so exactly those two literals
+    # still trigger the check for a plain-string template.
+    #
+    # Fail closed: an outcome whose kind cannot be resolved gets the check
+    # APPLIED, not skipped. Unreachable today -- _outcome_eligibility above
+    # already refuses an unresolvable outcome -- but the ordering of these
+    # two blocks is not a safety property worth depending on.
+    outcome_definition = schema.outcome_lookup().get(payload.outcome)
     compensating_review = None
-    if payload.outcome in ("Approve", "Approve with conditions"):
+    if outcome_definition is None or outcome_definition.kind in APPROVING_OUTCOME_KINDS:
         try:
             compensating_review = _check_separation_of_duties(
                 db,
@@ -1093,7 +1207,8 @@ def create_compensating_review(
     project = _get_owned_project_or_404(db, tenant_id, project_id)
     membership = _require_decision_authority(db, project_id, user, mfa_verified)
     occurrence = _get_occurrence_or_404(db, project_id, occurrence_id)
-    readiness = _compute_readiness(db, project, occurrence)
+    schema = _load_bound_schema(db, tenant_id, project.template_version_id)
+    readiness = _compute_readiness(db, project, occurrence, schema)
 
     review = CompensatingReview(
         tenant_id=tenant_id,

@@ -130,8 +130,32 @@ def _describe_condition(cond: dict | None) -> str:
     return "Unrecognised condition shape -- edit via Advanced JSON"
 
 
+def _conditional_outcome_ids(db, tenant_id: str, project_id: str) -> list[str]:
+    """Which of a template's declared outcomes mean "approve, with
+    conditions attached". The decide form needs this because its conditions
+    fieldset -- and the ConditionsIn it builds on submit -- used to key on
+    the literal "Approve with conditions", so a vocabulary-3 template's own
+    `conditional_approving` outcome collected no conditions and was then
+    denied by `_outcome_eligibility` for "missing deadline or condition
+    owner". Resolved through `outcome_lookup()`, the same indirection the
+    status list already goes through. Returns [] when the bound template
+    declares no such outcome."""
+    project = projects_router._get_owned_project_or_404(db, tenant_id, project_id)
+    schema = projects_router._load_bound_schema(db, tenant_id, project.template_version_id)
+    return [d.id for d in schema.outcome_lookup().values() if d.kind == "conditional_approving"]
+
+
+def _bgp_status_id(entry):
+    """A status/decision-outcome entry is either a bare string (vocabulary
+    1/2) or a structured object with an `id` (DEC07 vocabulary 3). Without
+    this, Jinja's `join` filter stringifies the dict and renders its repr
+    straight into the page."""
+    return entry["id"] if isinstance(entry, dict) else entry
+
+
 templates.env.globals["describe_condition"] = _describe_condition
 templates.env.filters["tojson"] = lambda value, indent=2: json.dumps(value, indent=indent, default=str)
+templates.env.filters["bgp_status_id"] = _bgp_status_id
 
 
 # ---------------------------------------------------------------- Login/MFA
@@ -440,7 +464,7 @@ def evidence_form_page(
         tenant_id=tenant_id,
         item=detail.item,
         revisions=detail.revisions,
-        statuses=schema.statuses,
+        statuses=list(schema.status_lookup()),
         draft=draft,
         flash=flash,
         rule=rule,
@@ -524,7 +548,7 @@ def evidence_submit_revision(
             tenant_id=tenant_id,
             item=detail.item,
             revisions=detail.revisions,
-            statuses=schema.statuses,
+            statuses=list(schema.status_lookup()),
             draft=None,
             errors=[exc.detail if isinstance(exc.detail, str) else str(exc.detail)],
         )
@@ -571,7 +595,7 @@ async def evidence_upload_attachment(
             tenant_id=tenant_id,
             item=detail.item,
             revisions=detail.revisions,
-            statuses=schema.statuses,
+            statuses=list(schema.status_lookup()),
             draft=None,
             rule=_find_rule(schema, detail.item.gate_id, detail.item.rule_id),
             attachments=attachments,
@@ -614,6 +638,9 @@ def decide_page(
         project_id=project_id,
         occurrence=occurrence,
         preview=preview,
+        conditional_outcomes=[
+            o for o in _conditional_outcome_ids(db, tenant_id, project_id) if o in preview.permitted_outcomes
+        ],
         idempotency_key=str(uuid.uuid4()),
     )
 
@@ -643,8 +670,17 @@ def decide_submit(
 
     mfa_verified = get_session_mfa_verified(request.cookies.get("bgp_session"))
 
+    # Resolved through the bound template's own vocabulary, not the
+    # literal "Approve with conditions" -- otherwise a vocabulary-3
+    # template's `conditional_approving` outcome collects no conditions
+    # here and is denied downstream for "missing deadline or condition
+    # owner". For a v1/v2 template the legacy outcome map resolves
+    # "Approve with conditions" to `conditional_approving`, so exactly the
+    # outcome this used to match still matches.
+    conditional_outcomes = _conditional_outcome_ids(db, tenant_id, project_id)
+
     conditions = None
-    if outcome == "Approve with conditions":
+    if outcome in conditional_outcomes:
         conditions = decisions_router.ConditionsIn(
             conditions=[c.strip() for c in condition_items.replace(",", "\n").splitlines() if c.strip()],
             owner_user_id=condition_owner_user_id,
@@ -672,6 +708,7 @@ def decide_submit(
             project_id=project_id,
             occurrence=occurrence,
             preview=preview,
+            conditional_outcomes=[o for o in conditional_outcomes if o in preview.permitted_outcomes],
             errors=[str(detail)],
             # REQ-035/IPA03: a fresh key here, not the one that just failed --
             # this is a re-rendered form the user may resubmit with genuinely

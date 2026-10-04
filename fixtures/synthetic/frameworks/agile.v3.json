@@ -1,0 +1,178 @@
+{
+  "_meta": {
+    "name": "Cadence Agile DoR/DoD v3 (synthetic validation fixture)",
+    "validation_fixture": true,
+    "note": "Vocabulary-3 version of agile.json, written once the vocabulary-indirection work made declared statuses and outcomes real. agile.json itself is published and immutable (REQ-011) and is retained unchanged: it is the artefact that demonstrated the gap, and deleting it would delete the evidence.",
+    "closes": "DEC07 Q12 -- full parity on the model including statuses and decisions.",
+    "status_id_note": "\"Waived\" replaces v1's \"Waived for this increment\" purely as an editorial choice available in a NEW version -- a shorter id that reads the same in a status control -- and not an edit to the published one. The 30-character EvidenceItem.status limit did NOT force it: the v1 string is 25 characters and was already within the limit.",
+    "conditions_note": "v1's condition trees referenced project-state facts (has_acceptance_criteria, automated_checks_passing, peer_reviewed, increment_demonstrated). DEC07's narrow scope provides a closed item:<rule_id> fact namespace only, and unknown facts fail closed, so those trees are retranslated against sibling evidence items where a faithful translation exists and set to null where it does not. A project-state fact pipeline is its own work package.",
+    "applicability_note": "Known open, carried over from agile.json unchanged and recorded here rather than fixed: definition-of-done.documented-where-it-matters carries applicability {\"op\":\"eq\",\"fact\":\"changes_public_behaviour\",\"value\":true}, and nothing supplies that fact. evaluate_condition fails closed on an unknown fact, so this rule has never produced an evidence item at any vocabulary version, in either agile fixture. It is symmetric across both files and fails closed (an item is omitted, never wrongly cleared), so it is logged, not silently carried: the same project-state fact pipeline conditions_note describes is what would make it live.",
+  "why_this_shape": "Q11 chose an agile framework with no gates deliberately, as the harder test: 'if the rule engine and data model survive that without a special case, the model is genuinely general.' This file keeps every gate_id, rule_id, required_fields list and guidance string byte-identical to agile.json, so the diff between the two files is exactly the semantics -- which is also why it is deliberately NOT counted as a structurally distinct framework by test_framework_fixtures.py."
+  },
+  "schema_version": 1,
+  "vocabulary_version": 3,
+  "tracks": ["Increment"],
+  "classes": ["Team"],
+  "roles": ["product_owner", "developer", "facilitator"],
+  "statuses": [
+    {"id": "Not met", "initial": true},
+    {"id": "Met", "satisfies": true},
+    {"id": "Waived", "satisfies": true, "requires_exception": true}
+  ],
+  "decision_outcomes": [
+    {"id": "Increment accepted", "kind": "approving"},
+    {"id": "Accepted with follow-ups", "kind": "conditional_approving"},
+    {"id": "Not accepted", "kind": "recording"}
+  ],
+  "gates": [
+    {
+      "gate_id": "definition-of-ready",
+      "name": "Definition of Ready",
+      "sequence": 1,
+      "class_ids": ["Team"],
+      "description": "A recurring check, applied to work entering an increment -- not a checkpoint the project passes once. Re-run every sprint.",
+      "rules": [
+        {
+          "version": 1,
+          "rule_id": "definition-of-ready.acceptance-criteria",
+          "class_ids": ["Team"],
+          "occurrence_type": "routine",
+          "evidence_kind": "checklist",
+          "required_fields": ["criteria"],
+          "permitted_role_ids": ["product_owner"],
+          "blocker_level": "hard",
+          "conditions": {
+            "op": "count",
+            "compare": "gte",
+            "value": 2,
+            "conditions": [
+              {"op": "eq", "fact": "item:definition-of-ready.no-blocking-unknowns", "value": "satisfied"},
+              {"op": "eq", "fact": "item:definition-of-ready.sized", "value": "satisfied"}
+            ]
+          },
+          "guidance": "An item is ready when at least two of these hold: it states how it will be judged done, it produces something you can show, and its dependencies are known.",
+          "evidence_example": "The story's own acceptance-criteria checklist, linked from the board."
+        },
+        {
+          "version": 1,
+          "rule_id": "definition-of-ready.no-blocking-unknowns",
+          "class_ids": ["Team"],
+          "occurrence_type": "routine",
+          "evidence_kind": "note",
+          "required_fields": ["note"],
+          "permitted_role_ids": ["developer", "facilitator"],
+          "blocker_level": "hard",
+          "conditions": null,
+          "guidance": "Say plainly whether anything unknown would stop this item mid-sprint. If something would, it is not ready yet -- that is a normal answer, not a failure.",
+          "evidence_example": "A one-line note: 'No blocking unknowns -- auth library already proven in the last increment.'"
+        },
+        {
+          "version": 1,
+          "rule_id": "definition-of-ready.sized",
+          "class_ids": ["Team"],
+          "occurrence_type": "routine",
+          "evidence_kind": "note",
+          "required_fields": ["estimate"],
+          "permitted_role_ids": ["developer"],
+          "blocker_level": "advisory",
+          "guidance": "Record a rough size. Advisory on purpose: an unsized item is a smell, not a stop.",
+          "evidence_example": "'Roughly two days, one developer.'"
+        }
+      ]
+    },
+    {
+      "gate_id": "definition-of-done",
+      "name": "Definition of Done",
+      "sequence": 2,
+      "class_ids": ["Team"],
+      "description": "The recurring check that finished work is genuinely finished. Re-run every sprint, against that sprint's own evidence.",
+      "rules": [
+        {
+          "version": 1,
+          "rule_id": "definition-of-done.checks-pass",
+          "class_ids": ["Team"],
+          "occurrence_type": "routine",
+          "evidence_kind": "link",
+          "required_fields": ["run_url"],
+          "permitted_role_ids": ["developer"],
+          "blocker_level": "hard",
+          "conditions": null,
+          "guidance": "Link the run that passed, not a screenshot of it -- a link can be re-checked later, an image cannot.",
+          "evidence_example": "A link to the passing pipeline run for the merge commit."
+        },
+        {
+          "version": 1,
+          "rule_id": "definition-of-done.peer-reviewed",
+          "class_ids": ["Team"],
+          "occurrence_type": "routine",
+          "evidence_kind": "link",
+          "required_fields": ["review_url"],
+          "permitted_role_ids": ["developer", "facilitator"],
+          "blocker_level": "hard",
+          "conditions": null,
+          "guidance": "Link the review itself. Someone other than the author needs to have actually looked.",
+          "evidence_example": "A link to the approved review on the change."
+        },
+        {
+          "version": 1,
+          "rule_id": "definition-of-done.documented-where-it-matters",
+          "class_ids": ["Team"],
+          "occurrence_type": "routine",
+          "evidence_kind": "note",
+          "required_fields": ["note"],
+          "permitted_role_ids": ["developer"],
+          "blocker_level": "conditional",
+          "applicability": {"op": "eq", "fact": "changes_public_behaviour", "value": true},
+          "guidance": "Only applies when the change alters behaviour someone outside the team can see. Internal refactors skip this.",
+          "evidence_example": "'Updated the API reference and the changelog entry for the new export parameter.'"
+        },
+        {
+          "version": 1,
+          "rule_id": "definition-of-done.no-known-regressions",
+          "class_ids": ["Team"],
+          "occurrence_type": "routine",
+          "evidence_kind": "checklist",
+          "required_fields": ["note"],
+          "permitted_role_ids": ["developer", "facilitator"],
+          "blocker_level": "advisory",
+          "guidance": "Note anything you know broke and chose to accept. Advisory because recording a known regression honestly is better than hiding one to keep a check green.",
+          "evidence_example": "'Export ordering changed; accepted, noted for the next increment.'"
+        }
+      ]
+    },
+    {
+      "gate_id": "increment-review",
+      "name": "Increment Review",
+      "sequence": 3,
+      "class_ids": ["Team"],
+      "description": "An increment-level check, called when the team holds its review -- deliberately all triggered, so it is never auto-created at project start the way the per-story checks are.",
+      "rules": [
+        {
+          "version": 1,
+          "rule_id": "increment-review.demonstrated",
+          "class_ids": ["Team"],
+          "occurrence_type": "triggered",
+          "evidence_kind": "note",
+          "required_fields": ["note"],
+          "permitted_role_ids": ["product_owner"],
+          "blocker_level": "hard",
+          "conditions": null,
+          "guidance": "Record that the increment was actually shown to someone outside the team, and to whom.",
+          "evidence_example": "'Shown to the two pilot teams; notes in the review doc.'"
+        },
+        {
+          "version": 1,
+          "rule_id": "increment-review.feedback-captured",
+          "class_ids": ["Team"],
+          "occurrence_type": "triggered",
+          "evidence_kind": "link",
+          "required_fields": ["link"],
+          "permitted_role_ids": ["product_owner", "facilitator"],
+          "blocker_level": "conditional",
+          "guidance": "Link where the feedback landed, so the next increment's readiness check can reach it.",
+          "evidence_example": "A link to the review notes or the newly raised items."
+        }
+      ]
+    }
+  ]
+}

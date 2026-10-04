@@ -83,9 +83,19 @@ def seeded_decidable_project():
     # calls _load_bound_schema -- TemplateSchema requires at least one gate,
     # so an empty "gates": [] (fine for the raw-SQL sibling) fails here with
     # a 422 before the race is ever exercised.
+    # "Complete" must be declared here -- the fixture seeds the evidence
+    # item with status 'Complete' below, and since DEC07 Task 3, readiness
+    # resolves a status through what the bound template actually declares
+    # (app/routers/decisions.py's `_compute_readiness`) rather than matching
+    # the literal word. A template that never declares "Complete" now fails
+    # closed on it (the intended Ruling 11 behaviour), so the schema must
+    # name the status this fixture actually uses for the precondition below
+    # to hold. Plain string + vocabulary_version defaulting to 1 is enough:
+    # TemplateSchema.status_lookup() auto-resolves the literal "Complete" to
+    # satisfies=True for vocabulary <= 2 (rule_engine._LEGACY_SATISFYING_STATUS).
     minimal_schema = (
         '{"schema_version": 1, "tracks": ["Delivery"], "classes": ["A"], "roles": ["contributor"], '
-        '"statuses": ["Not started"], "decision_outcomes": ["Approve"], '
+        '"statuses": ["Not started", "Complete"], "decision_outcomes": ["Approve"], '
         '"gates": [{"gate_id": "G1", "name": "G1", "sequence": 1, "class_ids": ["A"], "rules": []}]}'
     )
 

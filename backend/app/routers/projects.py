@@ -19,7 +19,15 @@ from app.models import (
     Role,
     TemplateVersion,
 )
-from app.rule_engine import RuleValidationError, TemplateSchema, evaluate_condition, validate_template_schema
+from app.rule_engine import (
+    _LEGACY_SATISFYING_STATUS,
+    RuleValidationError,
+    StatusDefinition,
+    TemplateSchema,
+    evaluate_condition,
+    status_satisfies,
+    validate_template_schema,
+)
 
 router = APIRouter(tags=["projects"])
 
@@ -201,7 +209,7 @@ def _seed_evidence_for_occurrence(
             required=rule.blocker_level != "advisory",
             blocker_level=rule.blocker_level,
             permitted_role_ids=rule.permitted_role_ids,
-            status="Not started",
+            status=schema.initial_status(),
             owner_user_id=None,
             due_date=None,
             completed_date=None,
@@ -215,7 +223,7 @@ def _seed_evidence_for_occurrence(
                 tenant_id=tenant_id,
                 evidence_item_id=item.id,
                 revision_number=1,
-                status="Not started",
+                status=schema.initial_status(),
                 owner_user_id=None,
                 due_date=None,
                 completed_date=None,
@@ -511,7 +519,67 @@ def my_work(
         pm.project_id: pm.role
         for pm in db.query(ProjectMembership).filter(ProjectMembership.project_id.in_(my_project_ids)).all()
     }
-    project_names = {p.id: p.name for p in db.query(Project).filter(Project.id.in_(my_project_ids)).all()}
+    projects_by_id = {p.id: p for p in db.query(Project).filter(Project.id.in_(my_project_ids)).all()}
+    project_names = {pid: p.name for pid, p in projects_by_id.items()}
+
+    # Deferred, because app/routers/decisions.py imports FROM this module
+    # at import time (`_load_bound_schema` and friends), so a module-level
+    # import here would be circular. Imported rather than reimplemented on
+    # purpose: readiness and this endpoint disagreeing about what
+    # "satisfied" means is exactly the defect being fixed here.
+    from app.routers.decisions import _conditions_hold, _evidence_facts
+
+    # DEC07: my_work spans projects, so resolve each item's status against
+    # ITS OWN bound template version. One schema would silently apply one
+    # framework's vocabulary to another's items.
+    schema_by_project: dict[str, TemplateSchema] = {}
+    status_lookup_by_project: dict[str, dict[str, StatusDefinition]] = {}
+    facts_by_occurrence: dict[str, dict[str, str]] = {}
+
+    def _schema_for(item: EvidenceItem) -> TemplateSchema:
+        if item.project_id not in schema_by_project:
+            # Reuse the Project row already loaded above (project_names'
+            # source) instead of re-querying it per item.
+            project_row = projects_by_id[item.project_id]
+            schema_by_project[item.project_id] = _load_bound_schema(db, tenant_id, project_row.template_version_id)
+        return schema_by_project[item.project_id]
+
+    def _status_lookup_for(item: EvidenceItem) -> dict[str, StatusDefinition]:
+        # Mirrors schema_by_project: normalise once per project, not once
+        # per item -- status_lookup() rebuilds the whole dict from the
+        # schema's declared statuses every call.
+        if item.project_id not in status_lookup_by_project:
+            status_lookup_by_project[item.project_id] = _schema_for(item).status_lookup()
+        return status_lookup_by_project[item.project_id]
+
+    def _satisfies(item: EvidenceItem) -> bool:
+        """The SAME question `_compute_readiness` answers, asked the same
+        way -- `status_satisfies` plus the rule's condition tree. It
+        deliberately does NOT look for a valid ExceptionRecord, so a
+        `requires_exception` status reads as unsatisfied here; that is
+        fail-closed and only ever understates what the owner has left to
+        do. Claiming satisfaction readiness disagrees with would be the
+        fail-open direction: telling the assigned owner to stand down on
+        the very item blocking the gate."""
+        schema = _schema_for(item)
+        if not status_satisfies(_status_lookup_for(item).get(item.status)):
+            return False
+        # Condition evaluation is vocabulary 3 only (G6), so for every
+        # v1/v2 project this returns above without the sibling query below.
+        if schema.vocabulary_version < 3:
+            return True
+        rules_by_id = {rule.rule_id: rule for gate in schema.gates for rule in gate.rules}
+        if item.occurrence_id not in facts_by_occurrence:
+            siblings = db.query(EvidenceItem).filter(EvidenceItem.occurrence_id == item.occurrence_id).all()
+            facts_by_occurrence[item.occurrence_id] = _evidence_facts(siblings, _status_lookup_for(item))
+        return _conditions_hold(item, rules_by_id, facts_by_occurrence[item.occurrence_id], True)
+
+    def _pending_exception(item: EvidenceItem) -> bool:
+        """True when the item's status is one the template says satisfies
+        only with an approved exception -- so the action text can say that
+        instead of either claiming done or demanding a new revision."""
+        definition = _status_lookup_for(item).get(item.status)
+        return definition is not None and definition.satisfies and definition.requires_exception
 
     q = db.query(EvidenceItem).filter(EvidenceItem.tenant_id == tenant_id, EvidenceItem.project_id.in_(my_project_ids))
     if status_filter:
@@ -529,11 +597,16 @@ def my_work(
         else:
             continue
 
-        if item.status == "Complete":
-            direct_action = "No action needed -- already Complete."
+        if _satisfies(item):
+            direct_action = f"No action needed -- already '{item.status}'."
+        elif _pending_exception(item):
+            direct_action = (
+                f"'{item.status}' counts only once an exception is approved for this item -- "
+                f"it still blocks until then."
+            )
         else:
             direct_action = (
-                f"POST /orgs/{tenant_id}/evidence/{item.id}/revisions with status 'Complete' and a reference"
+                f"POST /orgs/{tenant_id}/evidence/{item.id}/revisions with a satisfying status and a reference"
             )
 
         results.append(
@@ -646,7 +719,42 @@ def create_evidence_revision(
             f"base_revision {payload.base_revision} is stale -- current is {item.latest_revision_number}",
         )
 
-    if payload.status == "Complete" and item.required and not payload.reference:
+    project_row = db.query(Project).filter(Project.id == item.project_id).one()
+    schema = _load_bound_schema(db, tenant_id, project_row.template_version_id)
+    status_lookup = schema.status_lookup()
+
+    definition = status_lookup.get(payload.status)
+    if definition is None and schema.vocabulary_version >= 3:
+        # Spec Sec.4.6 rejects a status the bound template never declared,
+        # and Sec.7 states the containment for it explicitly: "it applies
+        # only to projects bound to a v3 template version, of which there
+        # are none until step 3. No existing caller can be broken by steps
+        # 1-2." This gate is that containment. Without it, every v1/v2
+        # caller sending an arbitrary status string starts getting a 422 --
+        # an undocumented G6 breach the spec specifically ruled out, and a
+        # pointless one, because an undeclared status already fails closed
+        # in readiness (it can never satisfy) rather than being trusted.
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"status '{payload.status}' is not declared by this project's template version "
+            f"(declared: {sorted(status_lookup)})",
+        )
+
+    # REQ-018, keyed on what the status MEANS rather than on the literal
+    # "Complete" -- except for the one case vocabulary indirection cannot
+    # cover without becoming the v3 gate above: a v1/v2 template that never
+    # declares "Complete" resolves it to no definition, so
+    # `definition.satisfies` has nothing to go on. Pre-DEC07 the check was
+    # an unconditional `payload.status == "Complete"` that ignored the
+    # template entirely, so it DID demand a reference for that literal
+    # regardless of declaration. The second clause below restores exactly
+    # that, and only below vocabulary 3 -- at v3+ the gate above has already
+    # rejected an undeclared status outright, so `definition.satisfies` is
+    # the sole source of truth there.
+    needs_reference = (definition is not None and definition.satisfies) or (
+        schema.vocabulary_version < 3 and payload.status == _LEGACY_SATISFYING_STATUS
+    )
+    if needs_reference and item.required and not payload.reference:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY, "Cannot mark a required item Complete without a reference (REQ-018)"
         )

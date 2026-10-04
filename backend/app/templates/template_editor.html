@@ -42,11 +42,11 @@
   </div>
   <div class="field">
     <label for="statuses">Statuses (comma-separated)</label>
-    <input type="text" id="statuses" name="statuses" value="{{ version.schema_json.statuses|join(', ') }}" required>
+    <input type="text" id="statuses" name="statuses" value="{{ version.schema_json.statuses|map('bgp_status_id')|join(', ') }}" required>
   </div>
   <div class="field">
     <label for="decision_outcomes">Decision outcomes (comma-separated)</label>
-    <input type="text" id="decision_outcomes" name="decision_outcomes" value="{{ version.schema_json.decision_outcomes|join(', ') }}" required>
+    <input type="text" id="decision_outcomes" name="decision_outcomes" value="{{ version.schema_json.decision_outcomes|map('bgp_status_id')|join(', ') }}" required>
   </div>
   <button type="submit">Save classification</button>
 </form>
@@ -55,8 +55,8 @@
   <dt>Tracks</dt><dd>{{ version.schema_json.tracks|join(', ') }}</dd>
   <dt>Classes</dt><dd>{{ version.schema_json.classes|join(', ') }}</dd>
   <dt>Roles</dt><dd>{{ version.schema_json.roles|join(', ') }}</dd>
-  <dt>Statuses</dt><dd>{{ version.schema_json.statuses|join(', ') }}</dd>
-  <dt>Decision outcomes</dt><dd>{{ version.schema_json.decision_outcomes|join(', ') }}</dd>
+  <dt>Statuses</dt><dd>{{ version.schema_json.statuses|map('bgp_status_id')|join(', ') }}</dd>
+  <dt>Decision outcomes</dt><dd>{{ version.schema_json.decision_outcomes|map('bgp_status_id')|join(', ') }}</dd>
 </dl>
 {% endif %}
 
