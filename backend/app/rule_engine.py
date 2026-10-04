@@ -109,10 +109,23 @@ class RuleValidationError(ValueError):
 class RuleEvaluationTimeout(Exception):
     """DEC07's "hard evaluation timeout" fired. Deliberately an exception
     rather than a silent False: a rule that cannot be evaluated inside its
-    budget is an operational anomaly, not a readiness answer, and the one
-    production caller (app/routers/projects.py) already rolls its whole
-    transaction back if evaluation raises -- a behaviour
-    tests/test_projects.py pins independently."""
+    budget is an operational anomaly, not a readiness answer.
+
+    There are TWO production callers of `evaluate_condition`, and they are
+    not equally covered:
+
+      * `app/routers/projects.py` (rule applicability at project creation)
+        rolls its whole transaction back if evaluation raises -- a
+        behaviour tests/test_projects.py pins independently.
+      * `_conditions_hold` in `app/routers/decisions.py`, reached from
+        readiness. On the decision-commit path that transaction is likewise
+        rolled back; on `/preview` there is nothing to roll back, because
+        that request writes nothing.
+
+    This exception is caught NOWHERE, so either caller surfaces it as an
+    unhandled 500 rather than a structured error. That is fail-closed -- no
+    readiness answer is produced and no decision commits -- but it is not a
+    handled error path, and calling it one would overstate it."""
 
 
 class Condition(BaseModel):
@@ -262,6 +275,12 @@ class GateDefinition(BaseModel):
 # revision time as a database error, so it is rejected here instead.
 MAX_STATUS_ID_LENGTH = 30
 
+# DecisionRecord.outcome is String(30) too (app/models.py), with the same
+# consequence one step later: a longer declared outcome id validates, is
+# offered in the UI, and then fails at decision-commit time as a database
+# error.
+MAX_OUTCOME_ID_LENGTH = 30
+
 # v1/v2 templates declare bare strings. These two maps are what make
 # "old templates evaluate identically forever" (DEC07 Q10) true with no
 # migration: today's hardcoded literals, expressed as data.
@@ -304,6 +323,24 @@ class OutcomeDefinition(BaseModel):
 
     id: str = Field(min_length=1)
     kind: Literal["approving", "conditional_approving", "recording"]
+
+
+def status_satisfies(definition: "StatusDefinition | None") -> bool:
+    """The single answer to "does this status satisfy on its own?", shared
+    by every caller that asks (readiness, the condition-fact pass, and
+    my_work's assigned-action text) so they cannot drift apart.
+
+    Two deliberate properties:
+
+      * `None` -- a status the bound template does not declare, reachable
+        for rows written before this template version -- fails CLOSED.
+      * a `requires_exception` status is never "directly" satisfying: it
+        has to be justified by a valid ExceptionRecord (REQ-020), which
+        this function has no database access to check, so it withholds
+        satisfaction and leaves the exception lookup to the caller that
+        can do it.
+    """
+    return definition is not None and definition.satisfies and not definition.requires_exception
 
 
 class TemplateSchema(BaseModel):
@@ -365,13 +402,20 @@ class TemplateSchema(BaseModel):
         for definition in self.status_lookup().values():
             if definition.initial:
                 return definition.id
-        # A defensive default, not a claim about today's behaviour: today's
-        # seeding (routers/projects.py) writes the literal "Not started"
-        # regardless of what the template declares, so this fallback would
-        # only ever be exercised by a v1/v2 template that omits "Not
-        # started" entirely -- a case nothing today actually produces.
-        # Unreachable for v3 (validated to have exactly one initial status)
-        # and for any v1/v2 template that declares "Not started".
+        # This fallback is LIVE, not defensive: routers/projects.py seeds
+        # every evidence item and its first revision from this method, so a
+        # v1/v2 template that omits "Not started" entirely now seeds its
+        # first declared status instead. `fixtures/synthetic/frameworks/
+        # agile.json` is exactly that case -- vocabulary 2, declaring
+        # ['Not met', 'Met', 'Waived for this increment'] -- and its
+        # projects seed 'Not met' where they used to seed the literal
+        # 'Not started'. That is a recorded, accepted vocabulary-1/2
+        # behaviour change (docs/DEFECT_REGISTER.md, the DEC07-Q11 row's G6
+        # exceptions), pinned by the agile-fixture seeding test in
+        # backend/tests/test_dec07_q11_agile_fixture.py. Unreachable for v3
+        # (validated to have exactly one initial status) and for any v1/v2
+        # template that does declare "Not started" (the three gate-based
+        # fixtures all do).
         return next(iter(self.status_lookup()))
 
     @model_validator(mode="after")
@@ -429,20 +473,55 @@ class TemplateSchema(BaseModel):
             if definition.requires_exception and not definition.satisfies:
                 errors.append(f"status '{definition.id}': requires_exception is meaningless without satisfies")
 
-        # Both checks below are gated behind vocabulary_version >= 3 on
-        # purpose (controller ruling, fix round 2/5): spec Sec.5 enforces
-        # the length cap "at publish time", not on every re-read, and
-        # routers/projects.py re-validates a template's stored schema_json
-        # on every single project binding. A duplicate status id or a
-        # >30-character status id was never checked before this task, so
-        # a published, immutable (REQ-011) v1/v2 template that happens to
-        # carry either must keep validating exactly as it always did (G6)
-        # -- gating behind v3 is airtight for that, since no v3 template
-        # can be published yet (VOCABULARY_VERSION stays 2; see its own
-        # comment). A NEW v3 template still gets both checks, in full.
-        if self.vocabulary_version >= 3:
+        declared_outcome_ids = [
+            entry.id if isinstance(entry, OutcomeDefinition) else entry for entry in self.decision_outcomes
+        ]
+
+        # Why the duplicate-id and length-cap checks are conditional at all
+        # (G6): spec Sec.5 enforces the length cap "at publish time", not on
+        # every re-read, and routers/projects.py re-validates a template's
+        # stored schema_json on every single project binding. Neither check
+        # existed before this task, so a published, immutable (REQ-011)
+        # v1/v2 template that happens to carry a duplicate or an
+        # over-length id must keep validating exactly as it always did.
+        #
+        # That protection is only needed for PLAIN STRINGS. `statuses` and
+        # `decision_outcomes` were `list[str]` before this branch, so a
+        # STRUCTURED entry cannot occur in any already-published template --
+        # gating it behind v3 protected nothing and left a real hole, since
+        # a structured entry is accepted at ANY vocabulary version while
+        # every v3 rule sat behind the version check: routers/projects.py
+        # then writes initial_status() straight into EvidenceItem.status
+        # (String(30)), and a decision writes an outcome id into
+        # DecisionRecord.outcome (String(30)). So: enforce on every declared
+        # id as soon as the template carries a structured entry of that
+        # kind, or declares vocabulary 3.
+        has_structured_status = any(isinstance(entry, StatusDefinition) for entry in self.statuses)
+        has_structured_outcome = any(isinstance(entry, OutcomeDefinition) for entry in self.decision_outcomes)
+
+        if self.vocabulary_version >= 3 or has_structured_status:
             if len(declared_ids) != len(set(declared_ids)):
                 errors.append("duplicate status id declared")
+            for status_id in declared_ids:
+                if len(status_id) > MAX_STATUS_ID_LENGTH:
+                    errors.append(
+                        f"status '{status_id}' exceeds the {MAX_STATUS_ID_LENGTH}-character limit "
+                        f"imposed by EvidenceItem.status"
+                    )
+
+        if self.vocabulary_version >= 3 or has_structured_outcome:
+            if len(declared_outcome_ids) != len(set(declared_outcome_ids)):
+                errors.append("duplicate decision outcome id declared")
+            for outcome_id in declared_outcome_ids:
+                if len(outcome_id) > MAX_OUTCOME_ID_LENGTH:
+                    errors.append(
+                        f"decision outcome '{outcome_id}' exceeds the {MAX_OUTCOME_ID_LENGTH}-character limit "
+                        f"imposed by DecisionRecord.outcome"
+                    )
+
+        # These three are genuinely about what vocabulary 3 MEANS, not about
+        # a storage limit, so they stay keyed to the declared version.
+        if self.vocabulary_version >= 3:
             if sum(1 for d in status_defs if d.initial) != 1:
                 errors.append("vocabulary 3 requires exactly one status with initial: true")
             if not any(d.satisfies for d in status_defs):
@@ -452,12 +531,6 @@ class TemplateSchema(BaseModel):
                     errors.append(
                         f"decision outcome '{entry}': vocabulary 3 requires an explicit kind "
                         f"(approving | conditional_approving | recording)"
-                    )
-            for status_id in declared_ids:
-                if len(status_id) > MAX_STATUS_ID_LENGTH:
-                    errors.append(
-                        f"status '{status_id}' exceeds the {MAX_STATUS_ID_LENGTH}-character limit "
-                        f"imposed by EvidenceItem.status"
                     )
 
         if errors:

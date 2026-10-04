@@ -130,7 +130,7 @@ def _error_messages(exc_value: RuleValidationError) -> list[str]:
     pydantic prefix and split the rest back into individual messages, so
     a parametrized case can assert on the ONE message that actually
     proves its point, instead of a vague substring that a different
-    firing rule could also satisfy (fix round 2/5, Important 4)."""
+    firing rule could also satisfy."""
     out: list[str] = []
     for joined in exc_value.errors:
         joined = re.sub(r"^.*?Value error,\s*", "", joined, count=1)
@@ -180,11 +180,11 @@ def test_v3_status_validation_rules(statuses, expected_message):
 
 
 def test_status_id_length_boundary_is_thirty():
-    """REVIEW FOCUS 2. EvidenceItem.status is String(30); an off-by-one
+    """EvidenceItem.status is String(30); an off-by-one
     here reaches the database as an error instead of a message. Uses a
     structured entry; test_v3_plain_string_status_over_length_is_rejected
     below covers the plain-string route specifically, since StatusDefinition
-    no longer enforces the cap itself (fix round 2/5, Critical 2)."""
+    does not enforce the cap itself."""
     ok = "x" * 30
     s = validate_template_schema(
         _schema(
@@ -208,7 +208,7 @@ def test_status_id_length_boundary_is_thirty():
 
 
 def test_v3_plain_string_status_over_length_is_rejected_with_the_evidence_item_reason():
-    """Critical 2 (fix round 2/5): StatusDefinition no longer enforces
+    """StatusDefinition deliberately does not enforce
     max_length, so a structured entry's cap is enforced purely by the
     explicit loop. A PLAIN STRING over 30 characters has no Pydantic field
     to catch it at all -- this is the only path that ever catches it, and
@@ -228,9 +228,9 @@ def test_v3_plain_string_status_over_length_is_rejected_with_the_evidence_item_r
 
 
 def test_v2_duplicate_and_overlength_statuses_still_validate():
-    """G6 made explicit (fix round 2/5, controller-requested proof for
-    Critical 1): gating the duplicate-id and length-cap checks behind
-    vocabulary_version >= 3 must not newly reject a vocabulary-2 template
+    """G6 made explicit: gating the duplicate-id and length-cap checks for
+    PLAIN-STRING entries behind vocabulary_version >= 3 must not newly
+    reject a vocabulary-2 template
     that happens to declare a duplicate status id or an id longer than 30
     characters -- nothing ever checked either before this task, so a
     published, immutable (REQ-011) v1/v2 template carrying one must keep

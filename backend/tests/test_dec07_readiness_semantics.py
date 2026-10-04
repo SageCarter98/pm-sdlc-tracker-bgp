@@ -60,17 +60,13 @@ def v3_project(client):
     return tenant_id, project.json()
 
 
-# REVIEW FOCUS 5's exception-expiry test needs an outcome that actually
-# resolves: a v3 template's decision_outcomes are OutcomeDefinition
-# OBJECTS (previous task), but _outcome_eligibility still checks
-# `outcome not in schema.decision_outcomes` as a literal membership test
-# against that list -- so a v3 outcome string never matches and the
-# request 422s on "not a declared outcome" before blockers are even
-# consulted. That object-awareness lands in the NEXT task
-# (`_outcome_eligibility`/`_permitted_outcomes` are off limits here), so
-# this one test runs at vocabulary 2, where decision_outcomes are plain
-# strings and the outcome check actually passes -- the only way to reach
-# the blocker-denial code path this test is meant to exercise.
+# The exception-expiry test below uses a plain vocabulary-2 template
+# ("Approve"/"Hold" as bare strings) rather than the module's v3_project
+# fixture. `_outcome_eligibility` now resolves an outcome through
+# `schema.outcome_lookup()`'s declared kind (commit 55831e3), so a v3
+# outcome would reach the same blocker check just as well -- this fixture
+# was simply never rewritten once that landed, and there is no need to
+# churn a working test to prove a point the fixture doesn't need to make.
 V2_TEMPLATE = {
     "vocabulary_version": 2,
     "tracks": ["Increment"],
@@ -195,17 +191,15 @@ def test_requires_exception_status_satisfies_with_a_valid_exception(client, v3_p
 
 
 def test_an_expired_exception_does_not_satisfy_on_the_locked_commit_path(client, v2_project):
-    """REVIEW FOCUS 5. An exception valid at preview time but expired by
+    """An exception valid at preview time but expired by
     commit time must not approve. The locked readiness path re-checks
     validity rather than trusting the earlier read.
 
-    Runs at VOCABULARY 2, not V3: see V2_TEMPLATE's comment above --
-    `_outcome_eligibility` is not object-aware yet (next task's job), so a
-    v3 outcome 422s on "not a declared outcome" before readiness is even
-    consulted, which would make this test pass for the wrong reason. At
-    vocabulary 2, "Approve" is a plain string, the outcome check passes,
-    and execution actually reaches the blocker check this test exists to
-    exercise."""
+    Runs at VOCABULARY 2, not V3: see V2_TEMPLATE's comment above. This
+    predates `_outcome_eligibility` resolving outcomes through their
+    declared kind and was never rewritten since -- "Approve" as a plain
+    string still reaches the blocker check this test exists to exercise,
+    which is all that matters here."""
     from app.db import get_db
     from app.main import app
     from app.models import ExceptionRecord
@@ -265,7 +259,7 @@ def test_an_expired_exception_does_not_satisfy_on_the_locked_commit_path(client,
 
 
 def test_an_undeclared_stored_status_fails_closed(client, v3_project):
-    """REVIEW FOCUS 3. Reachable for legacy rows. Readiness must treat an
+    """Reachable for legacy rows. Readiness must treat an
     unknown status as not satisfying and must not raise."""
     from app.db import get_db
     from app.main import app

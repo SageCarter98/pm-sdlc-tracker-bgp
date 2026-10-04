@@ -25,12 +25,18 @@ from app.models import (
     ProjectMembership,
     User,
 )
-from app.rule_engine import TemplateSchema, evaluate_condition
+from app.rule_engine import TemplateSchema, evaluate_condition, status_satisfies
 from app.routers.projects import _get_owned_project_or_404, _load_bound_schema, _require_project_member
 
 router = APIRouter(tags=["decisions"])
 
 DECISION_AUTHORITY_ROLES = {"approver", "sponsor", "tenant_administrator"}
+
+# REQ-006 separation of duties applies to an outcome that APPROVES, whatever
+# word a template uses for it. These are the two OutcomeDefinition kinds that
+# mean approval; "recording" (Hold/Redirect/Terminate and their equivalents)
+# records a decision without granting one.
+APPROVING_OUTCOME_KINDS = {"approving", "conditional_approving"}
 
 
 def _now() -> datetime:
@@ -93,8 +99,8 @@ def _exception_is_currently_valid(db: Session, exc: ExceptionRecord, *, lock: bo
 
 
 def _has_valid_exception(db: Session, item: EvidenceItem, *, lock: bool = False) -> bool:
-    """REVIEW FOCUS 5: re-checked on the locked path too, so an exception
-    that expired between preview and commit cannot silently approve."""
+    """Re-checked on the locked path too, so an exception that expired
+    between preview and commit cannot silently approve."""
     query = db.query(ExceptionRecord).filter(ExceptionRecord.evidence_item_id == item.id).order_by(ExceptionRecord.id)
     if lock:
         query = query.with_for_update()
@@ -126,8 +132,7 @@ def _evidence_facts(items: list[EvidenceItem], status_lookup: dict) -> dict[str,
     both "fail closed everywhere" and spec 4.4's "withhold, never grant"."""
     facts: dict[str, str] = {}
     for item in items:
-        definition = status_lookup.get(item.status)
-        satisfied = definition is not None and definition.satisfies and not definition.requires_exception
+        satisfied = status_satisfies(status_lookup.get(item.status))
         facts[f"{_ITEM_FACT_PREFIX}{item.rule_id}"] = "satisfied" if satisfied else "unsatisfied"
     return facts
 
@@ -196,17 +201,15 @@ def _compute_readiness(
     hard_blockers, conditional_blockers, advisory_unsatisfied = [], [], []
     blocker_explanations = []
     for item in items:
-        definition = status_lookup.get(item.status)
         # Fail closed on a status the bound template does not declare --
         # reachable for rows written before this template version, and the
-        # same unknown-fact rule the condition evaluator already uses.
-        #
-        # A status unconditionally satisfies only when it declares
-        # satisfies=True AND does not also require an exception -- a
+        # same unknown-fact rule the condition evaluator already uses. A
         # requires_exception status is deliberately never "directly"
-        # satisfying, it falls through to the exception check below just
-        # like an unsatisfied status does.
-        directly_satisfied = definition is not None and definition.satisfies and not definition.requires_exception
+        # satisfying either; it falls through to the exception check below
+        # just like an unsatisfied status does. Both properties live in
+        # rule_engine.status_satisfies, shared with _evidence_facts above
+        # and my_work's action text (app/routers/projects.py).
+        directly_satisfied = status_satisfies(status_lookup.get(item.status))
         if directly_satisfied and _conditions_hold(item, rules_by_id, facts, conditions_enabled):
             continue
         if item.blocker_level == "advisory":
@@ -738,8 +741,25 @@ def _record_decision(
     if not allowed:
         _deny(denial_reason, status.HTTP_422_UNPROCESSABLE_ENTITY)
 
+    # REQ-006 keys on what the outcome MEANS, not on the Blueprint's two
+    # English words. This used to read `payload.outcome in ("Approve",
+    # "Approve with conditions")`, which let a template-declared `approving`
+    # outcome commit an approval without the self-only-approval check the
+    # identical evidence state under "Approve" is refused 403 for (register
+    # row "DEC07 SoD outcome literal").
+    #
+    # v1/v2 behaviour is unchanged by construction: the legacy map in
+    # rule_engine resolves "Approve" -> approving and "Approve with
+    # conditions" -> conditional_approving, so exactly those two literals
+    # still trigger the check for a plain-string template.
+    #
+    # Fail closed: an outcome whose kind cannot be resolved gets the check
+    # APPLIED, not skipped. Unreachable today -- _outcome_eligibility above
+    # already refuses an unresolvable outcome -- but the ordering of these
+    # two blocks is not a safety property worth depending on.
+    outcome_definition = schema.outcome_lookup().get(payload.outcome)
     compensating_review = None
-    if payload.outcome in ("Approve", "Approve with conditions"):
+    if outcome_definition is None or outcome_definition.kind in APPROVING_OUTCOME_KINDS:
         try:
             compensating_review = _check_separation_of_duties(
                 db,

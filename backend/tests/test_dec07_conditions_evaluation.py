@@ -92,7 +92,7 @@ def _meet(client, tenant_id, item):
 def _waive(client, tenant_id, item):
     """Sets a `requires_exception` status with deliberately NO
     ExceptionRecord ever created for it -- the exact unapproved-waiver
-    shape Amendment 2 exists to keep out of a sibling's facts."""
+    shape that must stay out of a sibling's facts."""
     resp = client.post(
         f"/orgs/{tenant_id}/evidence/{item['id']}/revisions",
         json={"base_revision": 1, "status": "Waived", "reference": "note-1"},
@@ -135,7 +135,7 @@ def test_conditions_can_only_withhold_never_grant(client, count_project):
 
 
 def test_a_fact_for_an_unseeded_rule_fails_closed(client, count_project):
-    """REVIEW FOCUS 4. `item:dod.missing` names no seeded rule, so the
+    """`item:dod.missing` names no seeded rule, so the
     fact is unknown. It must evaluate false without raising -- which the
     count test above already relies on, since 2 of 3 is only reachable if
     the third is false rather than an error."""
@@ -145,7 +145,7 @@ def test_a_fact_for_an_unseeded_rule_fails_closed(client, count_project):
 
 
 def test_an_unapproved_waiver_reads_as_unsatisfied_to_a_siblings_condition(client, count_project):
-    """Amendment 2 tripwire. `dod.a`'s status is "Waived" -- satisfies=True,
+    """Fail-closed tripwire. `dod.a`'s status is "Waived" -- satisfies=True,
     requires_exception=True -- with no ExceptionRecord ever created for it.
     `_evidence_facts` must still report `item:dod.a` as "unsatisfied", not
     "satisfied", or dod.summary's count would wrongly read 2-of-2 (dod.a

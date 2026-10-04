@@ -68,7 +68,7 @@ def test_an_undeclared_status_is_rejected(client, v3_project):
 
 @pytest.mark.parametrize("near_miss", ["met", " Met", "MET", "Met "])
 def test_near_miss_status_ids_are_rejected_not_silently_stored(client, v3_project, near_miss):
-    """REVIEW FOCUS 1. Exact match only. A near-miss stored as a
+    """Exact match only. A near-miss stored as a
     non-satisfying status would look accepted and never satisfy, which is
     the confusing failure this whole change exists to remove."""
     tenant_id, created = v3_project

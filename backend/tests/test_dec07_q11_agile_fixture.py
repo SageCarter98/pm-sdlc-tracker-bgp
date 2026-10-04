@@ -45,7 +45,8 @@ from pathlib import Path
 import pytest
 
 from app.rule_engine import validate_template_schema
-from tests.conftest import enable_mfa, register_and_login
+from tests.conftest import enable_mfa, login, register_and_login
+from tests.test_projects import _invite_and_accept
 
 FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "synthetic" / "frameworks" / "agile.json"
 
@@ -115,6 +116,9 @@ class AgileProject:
             json={"outcome": outcome, "manifest_digest": digest},
             headers={"Idempotency-Key": key},
         )
+
+    def me(self) -> str:
+        return self.client.get("/auth/me").json()["id"]
 
     def hard_rules_of(self, gate_id: str) -> list[str]:
         return [
@@ -230,11 +234,7 @@ def _schema_v3() -> dict:
     return data
 
 
-@pytest.fixture()
-def agile_v3(client) -> AgileProject:
-    register_and_login(client, "admin@squadv3.example")
-    enable_mfa(client)
-    tenant_id = client.post("/orgs", json={"name": "Squad V3 Co"}).json()["id"]
+def _publish_v3_project(client, tenant_id: str, members: list[dict]) -> AgileProject:
     imported = client.post(
         f"/orgs/{tenant_id}/templates/import",
         json={"name": "Agile DoR/DoD v3", "schema_json": _schema_v3()},
@@ -243,10 +243,43 @@ def agile_v3(client) -> AgileProject:
     assert pub.status_code == 200, pub.text
     created = client.post(
         f"/orgs/{tenant_id}/projects",
-        json={"name": "Platform squad", "template_version_id": imported["id"], "class_id": "Team", "members": []},
+        json={
+            "name": "Platform squad",
+            "template_version_id": imported["id"],
+            "class_id": "Team",
+            "members": members,
+        },
     )
     assert created.status_code == 201, created.text
     return AgileProject(client, tenant_id, created.json())
+
+
+@pytest.fixture()
+def agile_v3(client) -> AgileProject:
+    register_and_login(client, "admin@squadv3.example")
+    enable_mfa(client)
+    tenant_id = client.post("/orgs", json={"name": "Squad V3 Co"}).json()["id"]
+    return _publish_v3_project(client, tenant_id, [])
+
+
+V3_SOD_ADMIN = "admin@squadv3sod.example"
+V3_SOD_SECOND = "developer2@squadv3sod.example"
+
+
+@pytest.fixture()
+def agile_v3_two_person(client) -> AgileProject:
+    """The same v3 project, but with a SECOND project member, so a decision
+    can be reached without tripping REQ-006. Every seeded evidence item's
+    revision 1 is attributed to whoever created the project, so in the
+    single-user `agile_v3` fixture the admin is the only preparer of every
+    required item -- which is self-only approval by definition."""
+    register_and_login(client, V3_SOD_ADMIN)
+    enable_mfa(client)
+    tenant_id = client.post("/orgs", json={"name": "Squad V3 SoD Co"}).json()["id"]
+    second_id = _invite_and_accept(client, tenant_id, V3_SOD_SECOND, "approver")
+    enable_mfa(client)
+    login(client, V3_SOD_ADMIN)
+    return _publish_v3_project(client, tenant_id, [{"user_id": second_id, "role": "approver"}])
 
 
 def test_the_v3_fixture_declares_vocabulary_3_and_its_own_semantics():
@@ -266,10 +299,14 @@ def test_the_v3_fixture_declares_vocabulary_3_and_its_own_semantics():
         "Accepted with follow-ups": "conditional_approving",
         "Not accepted": "recording",
     }
-    # Every status id has to fit EvidenceItem.status (String(30)) -- which
-    # is why v1's "Waived for this increment" became "Waived" here rather
-    # than being carried over.
+    # Every status id has to fit EvidenceItem.status (String(30)), so the
+    # cap is worth asserting. It is NOT why v1's "Waived for this
+    # increment" became "Waived": that string is 25 characters and was
+    # already within the limit. The rename is an editorial choice available
+    # in a new template version -- a shorter id that reads the same in a
+    # status control -- and nothing forced it.
     assert all(len(status_id) <= 30 for status_id in statuses)
+    assert len("Waived for this increment") <= 30, "the v1 id fitted; the cap did not drive the rename"
 
 
 def test_declared_statuses_now_drive_readiness(agile_v3):
@@ -304,36 +341,63 @@ def test_req018_now_catches_a_satisfying_status_without_a_reference(agile_v3):
     assert "REQ-018" in resp.text
 
 
-def test_declared_decision_outcomes_can_now_be_recorded(agile_v3):
+def test_declared_decision_outcomes_can_now_be_recorded(agile_v3_two_person):
     """Was test_gap_declared_decision_outcomes_cannot_be_recorded. This
-    assertion closes DEC07 Q12."""
-    for rule_id in agile_v3.hard_rules_of(DOD):
-        agile_v3.revise(rule_id, "Met", reference="https://ci.example/run/1")
+    assertion closes DEC07 Q12.
+
+    It reaches the decision THROUGH REQ-006, not around it: the second
+    project member prepares one of the two hard items, so the deciding
+    admin is not the only preparer and separation of duties is satisfied
+    without an override. The self-only case is the next test, and it is
+    refused."""
+    agile_v3 = agile_v3_two_person
+    hard = agile_v3.hard_rules_of(DOD)
+    assert len(hard) >= 2, "this test needs two hard items so the two members can prepare one each"
+
+    login(agile_v3.client, V3_SOD_SECOND)
+    assert agile_v3.revise(hard[0], "Met", reference="https://ci.example/run/1").status_code == 201
+    login(agile_v3.client, V3_SOD_ADMIN)
+    for rule_id in hard[1:]:
+        assert agile_v3.revise(rule_id, "Met", reference="https://ci.example/run/1").status_code == 201
+
     preview = agile_v3.preview(DOD)
     assert preview["hard_blockers"] == []
     assert "Increment accepted" in preview["permitted_outcomes"]
+    assert agile_v3.latest_revision_actor(hard[0]) != agile_v3.me(), (
+        "separation of duties has to be genuinely satisfied here, not skipped"
+    )
 
     recorded = agile_v3.decide(DOD, "Increment accepted", preview["manifest_digest"], key="q12-closed")
     assert recorded.status_code == 201, recorded.text
     assert recorded.json()["outcome"] == "Increment accepted"
 
-    # CHARACTERIZATION of a gap NO task in this plan covered, pinned here
-    # because this test is the first thing to reach it. The same user
-    # prepared every required revision above and then decided. For the
-    # Blueprint's literal "Approve" that is REQ-006 self-only approval and
-    # is refused 403 until an independent compensating review exists --
-    # test_decisions.py::test_full_approval_flow_with_separation_of_duties_override
-    # pins exactly that. But `_record_decision` gates
-    # `_check_separation_of_duties` on
-    # `payload.outcome in ("Approve", "Approve with conditions")`, so a
-    # template-declared `approving` outcome commits without it. Recorded as
-    # its own open row in docs/DEFECT_REGISTER.md ("DEC07 SoD outcome
-    # literal"); when that is fixed this assertion goes red, which is the
-    # intent.
-    actor = recorded.json()["actor_user_id"]
-    assert {agile_v3.latest_revision_actor(r) for r in agile_v3.hard_rules_of(DOD)} == {actor}, (
-        "the self-only-approval precondition must actually hold for this characterization to mean anything"
-    )
+
+def test_a_declared_approving_outcome_is_refused_for_a_self_only_approver(agile_v3):
+    """REQ-006 keyed on the outcome's declared `kind` rather than on the
+    Blueprint's literal words.
+
+    This assertion used to be the other way round. `_record_decision` gated
+    `_check_separation_of_duties` on `payload.outcome in ("Approve",
+    "Approve with conditions")` while `_outcome_eligibility` above it
+    already resolved outcomes by `kind`, so a template-declared `approving`
+    outcome committed an approval with no self-approval check at all -- the
+    identical evidence state under the word "Approve" being refused 403 by
+    test_decisions.py::test_full_approval_flow_with_separation_of_duties_override.
+    The register row "DEC07 SoD outcome literal" carries the history. This
+    test now pins the control instead of the bypass."""
+    hard = agile_v3.hard_rules_of(DOD)
+    for rule_id in hard:
+        assert agile_v3.revise(rule_id, "Met", reference="https://ci.example/run/1").status_code == 201
+    preview = agile_v3.preview(DOD)
+    assert preview["hard_blockers"] == [], "the refusal below must be about REQ-006, not about a blocker"
+
+    # The precondition, asserted rather than assumed: one user authored
+    # every required item's current revision and is now the decider.
+    assert {agile_v3.latest_revision_actor(r) for r in hard} == {agile_v3.me()}
+
+    denied = agile_v3.decide(DOD, "Increment accepted", preview["manifest_digest"], key="sod-v3-approving")
+    assert denied.status_code == 403, denied.text
+    assert "compensating review" in denied.text, denied.text
 
 
 def test_waived_requires_a_real_exception(agile_v3):
@@ -403,6 +467,26 @@ def test_required_fields_remains_declared_but_inert(agile_v3):
         "rewrite this test as its positive counterpart and close the register row"
     )
     assert agile_v3.items[rule_id]["id"] not in agile_v3.preview(DOD)["hard_blockers"]
+
+
+def test_the_v1_fixture_seeds_its_own_first_declared_status(agile):
+    """An ACCEPTED vocabulary-1/2 behaviour change, pinned so it cannot be
+    silent (docs/DEFECT_REGISTER.md, the DEC07-Q11 row's G6 exceptions).
+
+    Seeding used to write the literal "Not started" into every new evidence
+    item; it now calls `TemplateSchema.initial_status()`. agile.json is
+    vocabulary 2 and declares ['Not met', 'Met', 'Waived for this
+    increment'] -- it never declared "Not started" -- so its projects now
+    seed 'Not met'. That is arguably more correct than before (the platform
+    was writing a status this framework does not recognise), but it IS a
+    change for any v1/v2 template that omits "Not started", and the three
+    gate-based fixtures keep seeding "Not started" only because they all
+    declare it (test_dec07_vocabulary_backcompat.py pins that side)."""
+    assert {i["status"] for i in agile.items.values()} == {"Not met"}
+    schema = validate_template_schema(_schema())
+    assert "Not started" not in schema.status_lookup(), (
+        "this test only means something while agile.json omits the old seeding literal"
+    )
 
 
 def test_the_v1_fixture_is_retained_and_still_fails_closed(agile):

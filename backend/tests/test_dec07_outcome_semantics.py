@@ -3,8 +3,9 @@ resolved by declared kind rather than by matching English words."""
 
 import pytest
 
-from tests.conftest import enable_mfa, register_and_login
+from tests.conftest import enable_mfa, login, register_and_login
 from tests.test_dec07_readiness_semantics import V3
+from tests.test_projects import _invite_and_accept
 
 
 @pytest.fixture()
@@ -45,8 +46,46 @@ def test_declared_outcomes_are_permitted_once_blockers_clear(client, ready_v3):
     assert set(body["permitted_outcomes"]) == {"Increment accepted", "Not accepted"}
 
 
-def test_an_approving_outcome_can_actually_be_recorded(client, ready_v3):
-    tenant_id, project = ready_v3
+def test_an_approving_outcome_can_actually_be_recorded(client):
+    """A template-declared `approving` outcome must clear REQ-006/BGP-F02's
+    separation-of-duties gate exactly as the Blueprint's own "Approve" does
+    -- see docs/DEFECT_REGISTER.md's "DEC07 SoD outcome literal" row, fixed
+    by keying `_record_decision`'s SoD check on `outcome_lookup()`'s
+    declared `kind` instead of the two English literals. This exercises
+    the ordinary (non-self-only) approval path: the decider here is NOT
+    the evidence's sole preparer. The self-only-approval case has its own
+    pin in test_dec07_q11_agile_fixture.py's
+    test_a_declared_approving_outcome_is_refused_for_a_self_only_approver,
+    which this test does not duplicate."""
+    register_and_login(client, "admin@v3out2.example")
+    enable_mfa(client)
+    tenant_id = client.post("/orgs", json={"name": "V3 Out Co 2"}).json()["id"]
+    approver_id = _invite_and_accept(client, tenant_id, "approver@v3out2.example", "approver")
+    enable_mfa(client)
+
+    login(client, "admin@v3out2.example")
+    created = client.post(f"/orgs/{tenant_id}/templates/import", json={"name": "V3", "schema_json": V3}).json()
+    client.post(f"/orgs/{tenant_id}/templates/{created['template_id']}/versions/{created['id']}/publish")
+    project = client.post(
+        f"/orgs/{tenant_id}/projects",
+        json={
+            "name": "Squad",
+            "template_version_id": created["id"],
+            "class_id": "Team",
+            "members": [{"user_id": approver_id, "role": "approver"}],
+        },
+    ).json()
+    item = project["evidence_items"][0]
+    resp = client.post(
+        f"/orgs/{tenant_id}/evidence/{item['id']}/revisions",
+        json={"base_revision": 1, "status": "Met", "reference": "https://ci/1"},
+    )
+    assert resp.status_code == 201, resp.text
+
+    # admin prepared (and is the sole preparer of) the only required item;
+    # the approver -- who touched no evidence -- is the decider, so this is
+    # deliberately not a self-only-approval case.
+    login(client, "approver@v3out2.example")
     body = _preview(client, tenant_id, project, outcome="Increment accepted")
     assert body["outcome_allowed"] is True, body["outcome_denial_reason"]
 
@@ -100,7 +139,7 @@ def test_an_outcome_the_template_never_declared_is_still_refused(client, ready_v
 
 
 def test_a_v3_outcome_is_found_not_reported_undeclared(client, ready_v3):
-    """CONTROLLER NOTE: after Task 2, `decision_outcomes` holds
+    """At vocabulary 3, `decision_outcomes` holds
     OutcomeDefinition OBJECTS for a v3 template, not strings. A stale
     `outcome in schema.decision_outcomes` string-membership check would
     MISS every v3 entry and refuse it as undeclared even though it is
