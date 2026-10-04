@@ -235,3 +235,49 @@ def test_a_tenant_administrator_may_submit_without_a_permitted_role(client, proj
 
     assert resp.status_code == 201, resp.text
     assert resp.json()["item"]["status"] == "Complete"
+
+
+def test_a_non_permitted_role_cannot_displace_the_active_attachment(client, project_with_roles):
+    """Attachment upload answers the same question and so gets the same
+    control -- because an upload SUPERSEDES whatever was active.
+
+    Probed 2026-10-04 before the check existed: a contributor's upload to an
+    approver-only item returned 201, leaving the approver's file
+    'superseded' and the contributor's 'active'. The displacement was
+    attributed (`uploaded_by_user_id`) and reversible (nothing is deleted),
+    which is why it was Medium rather than High -- but the active evidence a
+    reviewer sees must not be swappable by a role the template never
+    permitted."""
+    tenant_id, item, _, _ = project_with_roles
+    url = f"/orgs/{tenant_id}/evidence/{item['id']}/attachments"
+
+    login(client, APPROVER, PASSWORD)
+    first = client.post(url, files={"file": ("approved.txt", b"approver evidence", "text/plain")})
+    assert first.status_code == 201, first.text
+
+    login(client, CONTRIB, PASSWORD)
+    refused = client.post(url, files={"file": ("contributor.txt", b"contributor evidence", "text/plain")})
+    assert refused.status_code == 403, refused.text
+
+    # The point of the test: the approver's attachment is still the active
+    # one. A refusal that still superseded would be worse than useless.
+    listing = client.get(url)
+    assert listing.status_code == 200, listing.text
+    active = [a for a in listing.json() if a["status"] == "active"]
+    assert len(active) == 1, listing.json()
+    assert active[0]["filename"] == "approved.txt"
+
+
+def test_a_permitted_role_may_still_upload_an_attachment(client, project_with_roles):
+    """The positive half -- the attachment check must not lock out the people
+    the template nominates."""
+    tenant_id, item, _, _ = project_with_roles
+    login(client, APPROVER, PASSWORD)
+
+    resp = client.post(
+        f"/orgs/{tenant_id}/evidence/{item['id']}/attachments",
+        files={"file": ("approved.txt", b"approver evidence", "text/plain")},
+    )
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["status"] == "active"

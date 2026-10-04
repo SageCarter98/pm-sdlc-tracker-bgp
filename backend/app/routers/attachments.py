@@ -28,7 +28,7 @@ from app.core.config import settings
 from app.db import get_db
 from app.deps import get_active_membership
 from app.models import EvidenceAttachment, EvidenceItem, Membership
-from app.routers.projects import _require_project_member
+from app.routers.projects import _require_permitted_to_attest, _require_project_member
 
 router = APIRouter(tags=["attachments"])
 
@@ -89,7 +89,17 @@ async def upload_attachment(
     membership: Membership = Depends(get_active_membership),
 ) -> EvidenceAttachment:
     item = _get_evidence_item_or_404(db, tenant_id, evidence_item_id)
-    _require_project_member(db, item.project_id, membership.user_id)
+    pm = _require_project_member(db, item.project_id, membership.user_id)
+    # Same question, same answer as submitting a revision: an upload here
+    # SUPERSEDES whatever attachment was active (below), so a member the
+    # template never permitted could otherwise displace the document backing
+    # an approver-only item. Probed 2026-10-04 before this check existed: a
+    # contributor's upload to an approver-only item returned 201 and left the
+    # approver's file 'superseded' with the contributor's 'active'. The
+    # displacement was attributed and reversible (nothing is deleted), which
+    # is why this is not higher than Medium -- but the active evidence a
+    # reviewer sees should not be swappable by a non-permitted role.
+    _require_permitted_to_attest(item, pm, membership)
 
     data = await file.read()
     if len(data) == 0:
