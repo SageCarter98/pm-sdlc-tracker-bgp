@@ -201,8 +201,13 @@ def test_only_explicit_project_members_can_submit_evidence(client):
     outsider_id = _invite_and_accept(client, tenant_id, "outsider@tenant-a.example", "contributor")
 
     register_and_login(client, "admin@tenant-a.example")
+    # Project role "approver" because S1.R1 declares permitted_role_ids
+    # ["approver"] and that is enforced on submission since 2026-10-04. This
+    # test's subject is the MEMBERSHIP boundary -- an explicit member may
+    # submit, an outsider may not -- so the role just has to be one the item
+    # permits; standard.json declares no contributor-permitted rule at all.
     created = _create_project(
-        client, tenant_id, version_id, "Standard-High", members=[{"user_id": member_id, "role": "contributor"}]
+        client, tenant_id, version_id, "Standard-High", members=[{"user_id": member_id, "role": "approver"}]
     ).json()
     s1_item_id = next(e["id"] for e in created["evidence_items"] if e["gate_id"] == "S1")
 
