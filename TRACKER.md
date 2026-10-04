@@ -2646,3 +2646,187 @@ contention.
 **No gate decision.** Evidence items and this narrative only — no
 `tracker_cli.py gate` action taken, and the DEC07-Q11 register row is a
 finding, not an approval.
+
+## DEC07 vocabulary indirection fixed: a template's own words now govern readiness; Q12 closed (2026-10-04)
+
+The `DEC07-Q11 vocabulary indirection` finding logged the day before
+(2026-10-03, `docs/DEFECT_REGISTER.md`) is now fixed, across thirteen
+commits on `SageCarter98/dec07-vocabulary-indirection-impl` against the
+spec and plan at
+`docs/superpowers/specs/2026-10-03-dec07-vocabulary-indirection-design.md`
+and `docs/superpowers/plans/2026-10-03-dec07-vocabulary-indirection.md`:
+`ee9472b`, `3b8e710`, `cd83fdb`, `28747f3`, `faede1a`, `a834f64`,
+`802abc4`, `c7852aa`, `55831e3`, `9546229`, `c2ca1a7`, `02649e0`, and the
+commit carrying this entry.
+
+**What changed, in one sentence.** `statuses` and `decision_outcomes` now
+accept structured entries that carry their own meaning — `satisfies`,
+`requires_exception`, `initial` on a status; `kind` (`approving` /
+`conditional_approving` / `recording`) on an outcome — and every readiness
+and eligibility path asks the bound template what a word means instead of
+comparing it to a hardcoded English literal.
+
+**Six of the six sub-findings are closed; the seventh thing the row named
+is not, and is not claimed to be.** Sub-findings (1)-(5) — statuses unread
+by readiness, the authoring UI offering a list that did nothing, undeclared
+statuses stored without complaint, REQ-018 keyed to the literal, declared
+outcomes unrecordable — are all closed. Sub-finding (6) had two halves:
+`rule.conditions` never being evaluated, which is now closed, and
+`required_fields` having no consumers, which is **still open**. Spec §1
+decision 4 put `required_fields` out of scope deliberately, and nothing in
+this plan gave it a consumer: `grep -rn required_fields backend/app/`
+still returns exactly one line, `app/rule_engine.py:218`, the field
+declaration itself. The register row's Status cell says so, and the
+characterization test for it was deliberately **kept as a gap test**
+(`test_required_fields_remains_declared_but_inert`) rather than rewritten
+as a positive one. The plan's own Step 7 commit message had claimed all
+seven characterization tests "became positive counterparts"; that was
+corrected to six before the commit was made, because a governance record
+does not get to round up.
+
+**DEC07 Q12 is closed, and this is its evidence.**
+`fixtures/synthetic/frameworks/agile.v3.json` is a new validation fixture
+declaring `"vocabulary_version": 3`, its own statuses (`Not met` initial,
+`Met` satisfying, `Waived` satisfying-but-`requires_exception`) and its own
+three outcomes. `test_declared_decision_outcomes_can_now_be_recorded`
+drives it through preview and a committed decision on the outcome
+"Increment accepted" — the assertion Q12's "full parity on the model
+including statuses and decisions" was waiting for.
+
+**`agile.json` was NOT edited, and that is the point.** It is published and
+immutable under REQ-011, and it is the artefact that demonstrated the gap;
+editing or deleting it would delete the evidence.
+`test_the_v1_fixture_is_retained_and_still_fails_closed` asserts it still
+behaves exactly as the finding described — "Met" stores happily and still
+blocks — which is also G6's proof at the fixture level.
+
+**The v3 fixture is not a verbatim copy, and the reason is worth
+recording.** Its `gate_id`s, `rule_id`s, `required_fields` lists and every
+guidance string are byte-identical to `agile.json` (checked
+programmatically: the two files are identical once the vocabulary block and
+`conditions` are removed). But its condition trees had to be retranslated.
+Condition evaluation at vocabulary 3 reads a deliberately **closed** fact
+namespace — only `item:<rule_id>`, values `"satisfied"`/`"unsatisfied"`,
+scoped to one occurrence — and unknown facts fail closed. `agile.json`'s
+trees reference project-state facts (`has_acceptance_criteria`,
+`automated_checks_passing`, `peer_reviewed`, `increment_demonstrated`) that
+nothing supplies, so copying them into a v3 file would have made four of
+its nine rules **permanently unclearable by any status**. One tree was
+retranslated faithfully — `definition-of-ready.acceptance-criteria` now
+requires at least two of its sibling DoR checks satisfied — and the other
+four are set to `null`, an honestly inert condition in preference to one
+that is unsatisfiable by construction. Recorded in the fixture's own
+`_meta.conditions_note`; a project-state fact pipeline is its own work
+package.
+
+**The REQ-018 interpretation ruling that licensed this.** Spec §1 decision
+7 records an owner ruling, in session on 2026-10-03: *"Complete is a state
+concept not a literal."* That is the recorded interpretation decision the
+spec's §8 required before implementation, and it is what licenses G3 —
+REQ-018's "do not allow a required item to be Complete without a
+reference" now keys on `satisfies`, so a framework whose completion word is
+"Met" is caught by it exactly as one saying "Complete" is. The literal
+string keeps its meaning for vocabulary 1 and 2 templates only, through
+normalisation, which is a compatibility mechanism and not a statement
+about the requirement.
+
+**Back-compat was the constraint the design was built around, and it is
+tested, not asserted.** `VOCABULARY_VERSION` — the stamp every new
+guided-authoring draft gets — stays deliberately at **2**, per spec §7
+rollout step 1: vocabulary 3 ships accepted but not default, because the
+guided authoring form can only emit comma-separated strings and would
+produce invalid v3. A template reaches v3 only by declaring it in its own
+JSON, which `agile.v3.json` is currently the only artefact to do, and it is
+a validation fixture that `seed_starter_frameworks.py` never seeds to a
+tenant. `backend/tests/test_dec07_vocabulary_backcompat.py` (10 tests,
+written before any production change and green through every task) pins
+the v1/v2 side: `Not started` seeding, the literal `Complete` clearing a
+blocker, `Approve` staying permitted, and an inline vocabulary-2 template
+whose populated `conditions` are **false** still satisfying on status
+alone.
+
+**TST-010's own verification gap is closed too, and it is the root cause.**
+TST-010 asked for fixtures with distinct "classes, roles and gates".
+REQ-010 also requires templates to version their *status* and *decision*
+schemes, and nothing ever asserted the fixtures differed in those — so
+three fixtures that all declared `"Complete"` and the Blueprint's outcome
+words satisfied the verification for six work packages while leaving this
+defect invisible. `test_fixtures_differ_in_status_and_outcome_schemes_too`
+in `backend/tests/test_framework_fixtures.py` now asserts the omitted half.
+It is not decorative: with `agile.v3.json` excluded, the set of satisfying
+status words across every other fixture is exactly `{"Complete"}` and the
+assertion fails (checked by running it both ways).
+
+One honest consequence of adding the fixture, recorded rather than
+smoothed: `test_fixtures_have_distinct_classes_roles_and_gate_counts` now
+counts `DISTINCT_FRAMEWORK_FILES`, which excludes `agile.v3`. That is by
+construction, not a weakening — the v3 fixture is required to keep every
+`gate_id` and `rule_id` identical to `agile.json`, so it *cannot* add a
+distinct class set, role set or gate count, and counting it would have
+forced a structural difference the fixture is specifically forbidden to
+have. The collision-detecting form of that assertion (tied to a file count,
+not a hardcoded 3) is unchanged for the four real frameworks.
+
+**A new High finding, logged not fixed.** Generalising outcomes by declared
+`kind` (`55831e3`) left REQ-006's separation-of-duties gate keyed to the
+Blueprint's literal words: `_record_decision` runs
+`_check_separation_of_duties` only inside `if payload.outcome in
+("Approve", "Approve with conditions")`, immediately below an
+`_outcome_eligibility` call that now resolves the outcome by `kind`. So a
+template-declared `approving` outcome reaches a committed approval without
+the self-only-approval check. This is confirmed by a paired pin rather than
+by reading the code. In `backend/tests/test_decisions.py`,
+`test_full_approval_flow_with_separation_of_duties_override` shows the
+identical self-only-approval state under `"Approve"` refused **403**; in
+`backend/tests/test_dec07_q11_agile_fixture.py`,
+`test_declared_decision_outcomes_can_now_be_recorded` shows it under
+`"Increment accepted"` committing **201** —
+that test now also asserts the precondition explicitly (every hard item's
+latest revision authored by the deciding actor), so it cannot pass
+vacuously and it goes red when the gap is fixed. Logged as its own open row
+("DEC07 SoD outcome literal", High, Open) in `docs/DEFECT_REGISTER.md`. It
+was found while writing Task 8's decision test; no task of this plan
+covered it, and Task 8 had no mandate to change `decisions.py` and did not.
+
+**Verified.** `test_dec07_q11_agile_fixture.py` 16 tests,
+`test_framework_fixtures.py` 10, `test_dec07_vocabulary_backcompat.py` 10 —
+36 passing together. Ruff `check` and `format` both clean across 98 files.
+Non-vacuity was probed, not assumed: with the fixture's own
+`vocabulary_version` temporarily flipped 3 → 2,
+`test_rule_conditions_are_now_evaluated_for_readiness` fails at exactly its
+second-half assertion (the summary item must block again once a sibling
+regresses, *despite its own satisfying status*) — which is the half that
+distinguishes real condition evaluation from a test that would pass either
+way.
+
+**Full suite: 319 of 320 pass, by chunked execution, and the one red is
+pre-existing.** Nine sequential chunks of 5 test files covered all 44 test
+files; the chunk totals sum to 320, matching `pytest --collect-only -q`
+exactly, so no chunk silently skipped files. Chunking is not a convenience
+— this machine has 3.46 GB RAM and cannot complete a single-process run
+(two earlier attempts were OOM-killed). Both perf-budget files
+(`test_dec08_performance_budgets.py` in chunk 3,
+`test_wp12_render_and_export_budgets.py` in chunk 8) **passed** this time.
+
+The single failure is, in
+`backend/tests/test_bgp_f03_followup_app_level_concurrency.py`,
+`test_real_endpoint_returns_clean_409_not_500_when_it_loses_the_race`,
+and it is **not** caused by this
+work: it was reproduced at pristine `02649e0` with every change of this
+commit stashed. Its cause is in its own fixture, which seeds a template
+declaring `"statuses": ["Not started"]` and then seeds the evidence row
+directly as `'Complete'` — a status that template never declares. Before
+`a834f64` readiness compared the literal and cleared it; now readiness asks
+the template, finds the status undeclared, and fails closed, so the item is
+a hard blocker and the test's `assert preview.json()["hard_blockers"] == []`
+fails before the race it exists to test is ever exercised. It is a test
+fixture that needs its seeded schema to declare the status it uses, not a
+regression in the decision path — but it is a **real red that must be
+fixed**, not waved through, and it is recorded here because it was found by
+this sweep. It is skipped entirely when live Postgres is unavailable, which
+is why earlier task-level runs did not surface it.
+
+**No gate decision.** Evidence documents, fixtures and tests only — no
+`tracker_cli.py` invocation of any kind and no `tracker_cli.py gate`
+action. The register rows above are findings and closures of findings, not
+approvals; a gate decision remains a named human authority's sign-off.

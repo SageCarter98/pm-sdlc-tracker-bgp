@@ -1,7 +1,15 @@
-"""TST-010: four distinct framework fixtures represent expected classes,
-roles and gates without application code changes -- these are read and
-validated exactly as a tenant's imported JSON would be (app.rule_engine),
-with no framework-specific code anywhere in this test or the app."""
+"""TST-010: distinct framework fixtures represent expected classes, roles
+and gates without application code changes -- these are read and validated
+exactly as a tenant's imported JSON would be (app.rule_engine), with no
+framework-specific code anywhere in this test or the app.
+
+TST-010 as originally written asked only for distinct "classes, roles and
+gates", and that omission is the root cause of the vocabulary-indirection
+defect: REQ-010 also requires templates to version their status and
+decision schemes, but nothing here ever asserted the fixtures differed in
+those, so three fixtures that all declared "Complete" satisfied the
+verification for six work packages. The omitted half is now asserted by
+test_fixtures_differ_in_status_and_outcome_schemes_too below."""
 
 import json
 from pathlib import Path
@@ -13,9 +21,22 @@ from app.rule_engine import validate_template_schema
 FIXTURES_DIR = Path(__file__).resolve().parents[2] / "fixtures" / "synthetic" / "frameworks"
 FIXTURE_FILES = sorted(FIXTURES_DIR.glob("*.json"))
 
+# agile.v3.json is deliberately the SAME framework as agile.json re-expressed
+# in vocabulary 3: identical gate_ids, rule_ids, required_fields and guidance
+# by design, so that the diff between the two files is exactly the semantics
+# (see its _meta.why_this_shape). It therefore cannot contribute a distinct
+# class set, role set or gate count, and must not be counted as if it could
+# -- what it earns its place with is the status/outcome distinctness asserted
+# by test_fixtures_differ_in_status_and_outcome_schemes_too, which it is the
+# only fixture able to satisfy.
+DISTINCT_FRAMEWORK_FILES = [p for p in FIXTURE_FILES if p.stem != "agile.v3"]
+
 
 def test_fixture_files_exist():
-    assert len(FIXTURE_FILES) == 4, f"expected 4 fixture frameworks, found {len(FIXTURE_FILES)}: {FIXTURE_FILES}"
+    assert len(FIXTURE_FILES) == 5, f"expected 5 fixture frameworks, found {len(FIXTURE_FILES)}: {FIXTURE_FILES}"
+    assert len(DISTINCT_FRAMEWORK_FILES) == 4, (
+        f"expected 4 structurally distinct frameworks, found {len(DISTINCT_FRAMEWORK_FILES)}"
+    )
 
 
 @pytest.mark.parametrize("fixture_path", FIXTURE_FILES, ids=lambda p: p.stem)
@@ -31,19 +52,25 @@ def test_fixtures_have_distinct_classes_roles_and_gate_counts():
     not from one code path per framework -- so assert the fixtures actually
     differ from each other, not just that each independently validates.
 
-    Counted against `len(FIXTURE_FILES)` rather than a hardcoded number on
-    purpose. These assertions previously read `== 3`, which a fourth
-    fixture could satisfy while *colliding* with an existing one (four
-    fixtures with gate counts {2, 2, 4, 6} still give a set of size 3 and
-    would have passed for entirely the wrong reason). Tied to the file
-    count, a collision fails instead of hiding."""
+    Counted against `len(DISTINCT_FRAMEWORK_FILES)` rather than a
+    hardcoded number on purpose. These assertions previously read `== 3`,
+    which a fourth fixture could satisfy while *colliding* with an existing
+    one (four fixtures with gate counts {2, 2, 4, 6} still give a set of
+    size 3 and would have passed for entirely the wrong reason). Tied to
+    the file count, a collision fails instead of hiding.
+
+    agile.v3.json is excluded by construction, not waved through: it is
+    agile.json's own framework restated in vocabulary 3 and is required to
+    keep every gate_id and rule_id identical, so counting it here would
+    force a structural difference the fixture is specifically forbidden to
+    have. See DISTINCT_FRAMEWORK_FILES."""
     parsed = []
-    for path in FIXTURE_FILES:
+    for path in DISTINCT_FRAMEWORK_FILES:
         data = json.loads(path.read_text(encoding="utf-8"))
         data.pop("_meta", None)
         parsed.append(validate_template_schema(data))
 
-    expected = len(FIXTURE_FILES)
+    expected = len(DISTINCT_FRAMEWORK_FILES)
     class_sets = [frozenset(s.classes) for s in parsed]
     role_sets = [frozenset(s.roles) for s in parsed]
     gate_counts = [len(s.gates) for s in parsed]
@@ -68,11 +95,41 @@ def test_only_non_validation_fixtures_are_shipped_as_starters():
         meta = json.loads(path.read_text(encoding="utf-8")).get("_meta", {})
         (validation_only if meta.get("validation_fixture") else starters).append(path.stem)
 
-    assert "agile" in validation_only, (
-        "the agile DoR/DoD fixture must stay flagged as a validation fixture until DEC07 Q12's own review has passed"
-    )
+    for stem in ("agile", "agile.v3"):
+        assert stem in validation_only, (
+            f"the {stem} DoR/DoD fixture must stay flagged as a validation fixture "
+            "until DEC07 Q12's own review has passed"
+        )
     assert sorted(starters) == ["lightweight", "regulated", "standard"], (
         f"unexpected set of shipped starter fixtures: {sorted(starters)}"
+    )
+
+
+def test_fixtures_differ_in_status_and_outcome_schemes_too():
+    """G8, and the root cause of the whole vocabulary-indirection defect.
+    REQ-010 requires templates to version "status" and "decision" schemes,
+    but TST-010 only ever asked for "classes, roles and gates" -- so three
+    fixtures were built that all declared "Complete" and the Blueprint's
+    outcome words, and nothing exercised the difference for six work
+    packages. This asserts the part the original verification omitted.
+
+    One pass over the fixtures rather than the three the plan's draft used:
+    parsing five files three times is the same assertion at three times the
+    cost, and memory on this machine is the binding constraint."""
+    status_sets, outcome_sets, satisfying_words = set(), set(), set()
+    for path in FIXTURE_FILES:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data.pop("_meta", None)
+        schema = validate_template_schema(data)
+        status_sets.add(frozenset(schema.status_lookup()))
+        outcome_sets.add(frozenset(schema.outcome_lookup()))
+        satisfying_words |= {d.id for d in schema.status_lookup().values() if d.satisfies}
+
+    assert len(status_sets) > 1, "no fixture exercises a non-default status scheme"
+    assert len(outcome_sets) > 1, "no fixture exercises a non-default outcome scheme"
+    assert satisfying_words - {"Complete"}, (
+        "every fixture's completion word is still 'Complete' -- the exact blind spot that let "
+        "the vocabulary-indirection defect survive"
     )
 
 

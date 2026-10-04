@@ -4,13 +4,15 @@ tenant's own bgp_app connection is allowed to create a tenant_id=NULL
 template (see the WITH CHECK clause in alembic/versions/0003_wp05_templates.py),
 so this administrative path is the only way starters get created.
 
-Not every fixture in fixtures/synthetic/frameworks/ is a starter. One
-marked `_meta.validation_fixture` is validated like the rest but never
-seeded: DEC07 Q12 requires the agile DoR/DoD fixture stay "a validation
-fixture, not a shipped starter template, until it has passed its own
-review", and seeding it here is precisely what would break that. The flag
-lives in the fixture rather than in a filename list here so a new
-validation fixture cannot be shipped by forgetting to update this script.
+Not every fixture in fixtures/synthetic/frameworks/ is a starter. Any
+fixture marked `_meta.validation_fixture` is validated like the rest but
+never seeded: DEC07 Q12 requires the agile DoR/DoD fixture stay "a
+validation fixture, not a shipped starter template, until it has passed its
+own review", and seeding it here is precisely what would break that. Two
+fixtures are flagged today -- agile.json and its vocabulary-3 counterpart
+agile.v3.json. The flag lives in the fixture rather than in a filename list
+here so a new validation fixture cannot be shipped by forgetting to update
+this script, which is why agile.v3.json needed no change to this file.
 
 Usage (from backend/, with BGP_MIGRATION_DATABASE_URL set in .env):
     python scripts/seed_starter_frameworks.py
