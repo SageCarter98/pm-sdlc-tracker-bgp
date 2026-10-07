@@ -21,19 +21,22 @@ from app.rule_engine import validate_template_schema
 FIXTURES_DIR = Path(__file__).resolve().parents[2] / "fixtures" / "synthetic" / "frameworks"
 FIXTURE_FILES = sorted(FIXTURES_DIR.glob("*.json"))
 
-# agile.v3.json is deliberately the SAME framework as agile.json re-expressed
-# in vocabulary 3: identical gate_ids, rule_ids, required_fields and guidance
-# by design, so that the diff between the two files is exactly the semantics
-# (see its _meta.why_this_shape). It therefore cannot contribute a distinct
-# class set, role set or gate count, and must not be counted as if it could
-# -- what it earns its place with is the status/outcome distinctness asserted
-# by test_fixtures_differ_in_status_and_outcome_schemes_too, which it is the
-# only fixture able to satisfy.
-DISTINCT_FRAMEWORK_FILES = [p for p in FIXTURE_FILES if p.stem != "agile.v3"]
+# agile.v3.json and agile.v4.json are deliberately the SAME framework as
+# agile.json re-expressed in a later vocabulary: identical gate_ids,
+# rule_ids, required_fields and guidance by design, so that the diff
+# between each pair is exactly the semantics (see their _meta notes).
+# Neither can contribute a distinct class set, role set or gate count, and
+# neither must be counted as if it could -- what they earn their place with
+# is semantics no other fixture expresses: v3 the status/outcome
+# distinctness asserted by test_fixtures_differ_in_status_and_outcome_schemes_too,
+# v4 the declared role capabilities (product_owner decides; developer and
+# facilitator attest) that REQ-010's role scheme requires.
+RESTATED_AGILE_STEMS = {"agile.v3", "agile.v4"}
+DISTINCT_FRAMEWORK_FILES = [p for p in FIXTURE_FILES if p.stem not in RESTATED_AGILE_STEMS]
 
 
 def test_fixture_files_exist():
-    assert len(FIXTURE_FILES) == 5, f"expected 5 fixture frameworks, found {len(FIXTURE_FILES)}: {FIXTURE_FILES}"
+    assert len(FIXTURE_FILES) == 6, f"expected 6 fixture frameworks, found {len(FIXTURE_FILES)}: {FIXTURE_FILES}"
     assert len(DISTINCT_FRAMEWORK_FILES) == 4, (
         f"expected 4 structurally distinct frameworks, found {len(DISTINCT_FRAMEWORK_FILES)}"
     )
@@ -59,11 +62,12 @@ def test_fixtures_have_distinct_classes_roles_and_gate_counts():
     size 3 and would have passed for entirely the wrong reason). Tied to
     the file count, a collision fails instead of hiding.
 
-    agile.v3.json is excluded by construction, not waved through: it is
-    agile.json's own framework restated in vocabulary 3 and is required to
-    keep every gate_id and rule_id identical, so counting it here would
-    force a structural difference the fixture is specifically forbidden to
-    have. See DISTINCT_FRAMEWORK_FILES."""
+    agile.v3.json and agile.v4.json are excluded by construction, not waved
+    through: each is agile.json's own framework restated in a later
+    vocabulary and is required to keep every gate_id and rule_id identical,
+    so counting them here would force a structural difference those
+    fixtures are specifically forbidden to have. See
+    DISTINCT_FRAMEWORK_FILES."""
     parsed = []
     for path in DISTINCT_FRAMEWORK_FILES:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -95,7 +99,7 @@ def test_only_non_validation_fixtures_are_shipped_as_starters():
         meta = json.loads(path.read_text(encoding="utf-8")).get("_meta", {})
         (validation_only if meta.get("validation_fixture") else starters).append(path.stem)
 
-    for stem in ("agile", "agile.v3"):
+    for stem in ("agile", "agile.v3", "agile.v4"):
         assert stem in validation_only, (
             f"the {stem} DoR/DoD fixture must stay flagged as a validation fixture "
             "until DEC07 Q12's own review has passed"
