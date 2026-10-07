@@ -38,6 +38,13 @@ ADMIN = "admin@roleenf.example"
 CONTRIB = "contrib@roleenf.example"
 APPROVER = "approver@roleenf.example"
 
+# Fresh users for the regulated.json/vocabulary-1 fixture below -- kept
+# separate from ADMIN/CONTRIB/APPROVER above, which belong to the
+# standard-framework fixture, so the two fixtures cannot interfere.
+REG_ADMIN = "regadmin@roleenf.example"
+REG_ASSURANCE = "regassurance@roleenf.example"
+REG_APPROVER = "regapprover@roleenf.example"
+
 
 def _invite(client, tenant_id, email, role):
     """Invites and accepts; leaves the client logged in as the invited user."""
@@ -93,6 +100,61 @@ def project_with_roles(client):
     return tenant_id, item, contributor_id, approver_id
 
 
+@pytest.fixture()
+def project_with_regulated_roles(client):
+    """TST-032 fix round 1, Finding 2 / Ruling 5: pins vocabulary-1 ("no
+    vocabulary_version key") attest enforcement using regulated.json's R2
+    gate, rule R2.R1, whose permitted_role_ids is exactly
+    ["assurance_reviewer"] -- a platform role that attests but is not a
+    decision authority (it is absent from
+    app.models.ROLES_REQUIRING_MFA and from
+    app.routers.decisions.DECISION_AUTHORITY_ROLES). An approver member is
+    also seeded, since approver IS a decision authority and IS in
+    ROLES_REQUIRING_MFA -- the second test below needs both facts true of
+    that member to prove deciding authority does not imply attest
+    authority."""
+    register_and_login(client, REG_ADMIN)
+    tenant_id = client.post("/orgs", json={"name": "Regulated Role Enforcement Co"}).json()["id"]
+    schema = json.loads((FIXTURES_DIR / "regulated.json").read_text(encoding="utf-8"))
+    schema.pop("_meta", None)
+    created = client.post(
+        f"/orgs/{tenant_id}/templates/import", json={"name": "Regulated", "schema_json": schema}
+    ).json()
+    assert (
+        client.post(
+            f"/orgs/{tenant_id}/templates/{created['template_id']}/versions/{created['id']}/publish"
+        ).status_code
+        == 200
+    )
+
+    assurance_id = _invite(client, tenant_id, REG_ASSURANCE, "assurance_reviewer")
+    # _invite leaves us as the invited user, and only a tenant administrator
+    # may issue an invitation -- so come back as the admin first.
+    login(client, REG_ADMIN, PASSWORD)
+    approver_id = _invite(client, tenant_id, REG_APPROVER, "approver")
+    enable_mfa(client)  # approver role requires MFA (models.ROLES_REQUIRING_MFA)
+
+    login(client, REG_ADMIN, PASSWORD)
+    project = client.post(
+        f"/orgs/{tenant_id}/projects",
+        json={
+            "name": "Regulated Role Enforcement",
+            "template_version_id": created["id"],
+            "class_id": "Regulated-Standard",
+            "members": [
+                {"user_id": assurance_id, "role": "assurance_reviewer"},
+                {"user_id": approver_id, "role": "approver"},
+            ],
+        },
+    ).json()
+
+    item = next(e for e in project["evidence_items"] if e["gate_id"] == "R2")
+    assert item["permitted_role_ids"] == ["assurance_reviewer"], (
+        f"these tests need R2.R1's declared permitted role; regulated.json gave {item['permitted_role_ids']}"
+    )
+    return tenant_id, item, assurance_id, approver_id
+
+
 def _submit(client, tenant_id, item_id, base_revision=1, **extra):
     body = {"base_revision": base_revision, "status": "Complete", "reference": "https://ci.example/run/1"}
     body.update(extra)
@@ -128,6 +190,46 @@ def test_a_permitted_project_role_is_allowed(client, project_with_roles):
 
     assert resp.status_code == 201, resp.text
     assert resp.json()["item"]["status"] == "Complete"
+
+
+def test_a_permitted_non_deciding_role_may_attest_at_vocabulary_1(client, project_with_regulated_roles):
+    """Pins that "permitted to attest" is driven by the template's declared
+    permitted_role_ids, not by whether a role can decide a gate.
+    assurance_reviewer attests R2.R1 but is absent from
+    DECISION_AUTHORITY_ROLES -- it may not decide any gate. If this ever
+    fails, attest authority has become tied to decision authority, which
+    would silently break every regulated-framework project relying on an
+    assurance reviewer (not an approver, sponsor, or tenant administrator)
+    to supply this evidence."""
+    tenant_id, item, _, _ = project_with_regulated_roles
+    login(client, REG_ASSURANCE, PASSWORD)
+
+    resp = _submit(client, tenant_id, item["id"])
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["item"]["status"] == "Complete"
+
+
+def test_an_unnamed_decider_is_refused_at_vocabulary_1(client, project_with_regulated_roles):
+    """The sharp half of the pin: a platform decider the rule does not name
+    is still refused. approver IS in DECISION_AUTHORITY_ROLES (may decide
+    gates) and IS in ROLES_REQUIRING_MFA, but R2.R1 names only
+    assurance_reviewer -- deciding authority must not imply attest
+    authority. If this ever fails, any approver could attest an item the
+    template deliberately restricted to assurance reviewers."""
+    tenant_id, item, _, _ = project_with_regulated_roles
+    login(client, REG_APPROVER, PASSWORD)
+
+    resp = _submit(client, tenant_id, item["id"])
+
+    assert resp.status_code == 403, resp.text
+    assert "role" in resp.text.lower()
+
+    # And nothing landed: the refusal must be before the insert, not after.
+    login(client, REG_ADMIN, PASSWORD)
+    detail = client.get(f"/orgs/{tenant_id}/evidence/{item['id']}").json()
+    assert detail["item"]["status"] != "Complete"
+    assert detail["item"]["latest_revision_number"] == 1
 
 
 def test_the_assigned_owner_may_submit_even_without_a_permitted_role(client, project_with_roles):
