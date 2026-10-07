@@ -26,7 +26,7 @@ from app.models import (
     Role,
     User,
 )
-from app.rule_engine import TemplateSchema, evaluate_condition, status_satisfies
+from app.rule_engine import _LEGACY_DECIDING_ROLES, TemplateSchema, evaluate_condition, status_satisfies
 from app.routers.projects import _get_owned_project_or_404, _load_bound_schema, _require_project_member
 
 router = APIRouter(tags=["decisions"])
@@ -79,21 +79,54 @@ def _get_occurrence_or_404(db: Session, project_id: str, occurrence_id: str) -> 
     return occurrence
 
 
-def _project_role_decides(schema: TemplateSchema, project_role: str, tenant_role: str) -> bool:
+def _project_role_decides(
+    schema: TemplateSchema, project_role: str, tenant_role: str, *, allow_tenant_admin: bool
+) -> bool:
     """PROJECT-layer decision authority, resolved through the bound
-    template (spec Sec.5.3). Together with the tenant-layer check this is
-    the intersection spec Sec.4 requires: the tenant role permits deciding
-    AND the bound template says this project role decides.
+    template (spec Sec.5.3) -- but never as a REPLACEMENT for the
+    TENANT-layer floor. Spec Sec.4's intersection requires BOTH: the tenant
+    role must already be a platform decider (TENANT_DECISION_AUTHORITY_ROLES)
+    AND the bound template must say this project role decides. The tenant
+    floor is checked first and returns False outright if it fails, before
+    the carve-out or any template resolution runs -- a v4 template may
+    declare a role literally named 'contributor' with decides=True, and
+    that must not let an actual tenant contributor decide anything; nothing
+    else on this path enforces that floor (decisions.py has no
+    Depends(require_role(...)), only require_mfa, which never restricts
+    role).
 
-    Tenant administrators always may, matching the attest path's existing
-    carve-out in routers/projects.py -- otherwise a template could lock its
-    own tenant's administrator out of its gates.
+    `allow_tenant_admin` is True only at the "may I act on my own project"
+    site (_require_decision_authority): create_project seeds a creator's
+    project role from their tenant role, so an admin-created v4 project can
+    leave its administrator holding a project role the template never
+    declares, and without this carve-out they would be locked out of their
+    own project -- matching the attest path's existing carve-out in
+    routers/projects.py. It is False at the stored-compensating-reviewer
+    check (_check_separation_of_duties): applying it there would quietly
+    widen REQ-006's reviewer eligibility to any tenant administrator
+    regardless of declared project role, which nobody asked this predicate
+    to do at that site.
 
-    Fails closed: a project role the bound template does not declare
-    decides nothing, the same rule status_satisfies applies to an
-    undeclared status."""
-    if tenant_role == Role.TENANT_ADMINISTRATOR:
+    vocabulary_version<=3 answers WITHOUT regard to declaration, by design
+    (spec G5, "old templates evaluate identically forever"): a v1-3
+    template's `roles` list was never written to enumerate the platform
+    deciders (lightweight.json declares only contributor/approver, omitting
+    sponsor entirely), so the project role is tested against the frozen
+    rule_engine._LEGACY_DECIDING_ROLES instead of schema.role_lookup().
+    _LEGACY_DECIDING_ROLES is deliberately a separate constant from
+    TENANT_DECISION_AUTHORITY_ROLES -- same values today, but a different
+    question (what a role name MEANT when a pre-this-work template was
+    published) that may legitimately diverge later.
+
+    vocabulary_version>=4 is declaration-driven: a project role the bound
+    template does not declare decides nothing, the same rule
+    status_satisfies applies to an undeclared status."""
+    if tenant_role not in TENANT_DECISION_AUTHORITY_ROLES:
+        return False
+    if allow_tenant_admin and tenant_role == Role.TENANT_ADMINISTRATOR:
         return True
+    if schema.vocabulary_version <= 3:
+        return project_role in _LEGACY_DECIDING_ROLES
     definition = schema.role_lookup().get(project_role)
     return definition is not None and definition.decides
 
@@ -540,7 +573,9 @@ def _check_separation_of_duties(
         .with_for_update()
         .one_or_none()
     )
-    if reviewer_pm is None or not _project_role_decides(schema, reviewer_pm.role, reviewer_membership.role):
+    if reviewer_pm is None or not _project_role_decides(
+        schema, reviewer_pm.role, reviewer_membership.role, allow_tenant_admin=False
+    ):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, "The compensating reviewer no longer holds approval authority on this project"
         )
@@ -548,7 +583,15 @@ def _check_separation_of_duties(
     return review
 
 
-def _require_decision_authority(db: Session, project_id: str, user: User, mfa_verified: bool) -> ProjectMembership:
+def _require_decision_authority(
+    db: Session,
+    project_id: str,
+    user: User,
+    mfa_verified: bool,
+    *,
+    project: Project | None = None,
+    schema: TemplateSchema | None = None,
+) -> ProjectMembership:
     """BGP-F03: locks the caller's ProjectMembership row FOR UPDATE (a
     no-op on SQLite) instead of using the shared, unlocked
     _require_project_member -- read-only paths (preview, get_decision,
@@ -559,7 +602,17 @@ def _require_decision_authority(db: Session, project_id: str, user: User, mfa_ve
     acquired before any evidence-row lock in the same request (fixed lock
     order: membership, then evidence -- see _compute_readiness's docstring)
     so two concurrent decision-committing transactions can only ever wait
-    on each other, never deadlock."""
+    on each other, never deadlock.
+
+    `project`/`schema` are optional pre-loaded values for callers that
+    already hold them (three of the five already fetch `project` via
+    _get_owned_project_or_404, and the decision-write callers additionally
+    reuse the same `schema` for _record_decision) -- this is a plain,
+    non-locking SELECT either way, so skipping the re-fetch when a caller
+    already has the answer changes no lock order, only avoids a second
+    Project SELECT and a second full template parse on the same request.
+    Loaded internally when not given, so a caller with nothing pays
+    exactly what it paid before."""
     pm = (
         db.query(ProjectMembership)
         .filter(ProjectMembership.project_id == project_id, ProjectMembership.user_id == user.id)
@@ -589,12 +642,15 @@ def _require_decision_authority(db: Session, project_id: str, user: User, mfa_ve
         raise HTTPException(status.HTTP_403_FORBIDDEN, "No active membership in this organisation")
     # PROJECT-layer decision authority is resolved through the bound
     # template (_project_role_decides), not the platform-fixed tenant set --
-    # loaded here, inside the helper, rather than threaded as a parameter
-    # through this function's five callers (preview/decide, the three
-    # exception endpoints, and compensating reviews).
-    project = db.query(Project).filter(Project.id == project_id).one()
-    schema = _load_bound_schema(db, project.tenant_id, project.template_version_id)
-    if not _project_role_decides(schema, pm.role, tenant_membership.role):
+    # loaded here (or reused from the caller, see the docstring) rather than
+    # threaded as a REQUIRED parameter through this function's five callers
+    # (create_decision, supersede_decision, the two exception endpoints
+    # create_exception/revoke_exception, and create_compensating_review).
+    if project is None:
+        project = db.query(Project).filter(Project.id == project_id).one()
+    if schema is None:
+        schema = _load_bound_schema(db, project.tenant_id, project.template_version_id)
+    if not _project_role_decides(schema, pm.role, tenant_membership.role, allow_tenant_admin=True):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Role does not permit recording decisions")
     # BGP-F01: session-bound, same reasoning as app/deps.py's require_mfa --
     # user.mfa_enabled alone (an account-level flag) is not evidence this
@@ -672,6 +728,7 @@ def _record_decision(
     supersedes_decision_id: str | None,
     reason: str | None,
     idempotency_key: str,
+    schema: TemplateSchema | None = None,
 ) -> DecisionOut:
     operation = "supersede_decision" if supersedes_decision_id else "create_decision"
     request_fingerprint = {
@@ -728,7 +785,12 @@ def _record_decision(
                 f"Occurrence already has decision {already_decided.id} -- use POST /decisions/{{id}}/superseding to correct it",
             )
 
-    schema = _load_bound_schema(db, tenant_id, project.template_version_id)
+    # Pre-loaded by callers that already resolved it for _require_decision_
+    # authority (Important 2, fix round 1: avoids a second full
+    # validate_template_schema parse on the same decision write); loaded
+    # here as a fallback for a hypothetical caller that has nothing.
+    if schema is None:
+        schema = _load_bound_schema(db, tenant_id, project.template_version_id)
     # BGP-F03: locked -- see _compute_readiness's docstring. Held from here
     # through the commit below, so nothing can change these evidence items
     # out from under this decision between reading them and committing.
@@ -953,7 +1015,8 @@ def create_decision(
     doesn't have; see the DEC05 design spec's non-goals for what's still
     honestly unbuilt."""
     project = _get_owned_project_or_404(db, tenant_id, project_id)
-    membership = _require_decision_authority(db, project_id, user, mfa_verified)
+    schema = _load_bound_schema(db, tenant_id, project.template_version_id)
+    membership = _require_decision_authority(db, project_id, user, mfa_verified, project=project, schema=schema)
     occurrence = _get_occurrence_or_404(db, project_id, occurrence_id)
 
     return _record_decision(
@@ -966,6 +1029,7 @@ def create_decision(
         supersedes_decision_id=None,
         reason=None,
         idempotency_key=idempotency_key,
+        schema=schema,
     )
 
 
@@ -1048,7 +1112,8 @@ def supersede_decision(
         )
 
     project = _get_owned_project_or_404(db, tenant_id, original.project_id)
-    membership = _require_decision_authority(db, project.id, user, mfa_verified)
+    schema = _load_bound_schema(db, tenant_id, project.template_version_id)
+    membership = _require_decision_authority(db, project.id, user, mfa_verified, project=project, schema=schema)
     occurrence = _get_occurrence_or_404(db, project.id, original.occurrence_id)
 
     return _record_decision(
@@ -1061,6 +1126,7 @@ def supersede_decision(
         supersedes_decision_id=decision_id,
         reason=payload.reason,
         idempotency_key=idempotency_key,
+        schema=schema,
     )
 
 
@@ -1240,9 +1306,9 @@ def create_compensating_review(
     if not payload.note.strip():
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "A review note is required")
     project = _get_owned_project_or_404(db, tenant_id, project_id)
-    membership = _require_decision_authority(db, project_id, user, mfa_verified)
-    occurrence = _get_occurrence_or_404(db, project_id, occurrence_id)
     schema = _load_bound_schema(db, tenant_id, project.template_version_id)
+    membership = _require_decision_authority(db, project_id, user, mfa_verified, project=project, schema=schema)
+    occurrence = _get_occurrence_or_404(db, project_id, occurrence_id)
     readiness = _compute_readiness(db, project, occurrence, schema)
 
     review = CompensatingReview(
