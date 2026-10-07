@@ -3026,3 +3026,142 @@ full `app`/`tests` tree.
 action. The register rows above (and in `docs/DEFECT_REGISTER.md`) are
 findings and closures of findings, not approvals; a gate decision remains
 a named human authority's sign-off.
+
+## Declared role vocabulary honoured: REQ-010's role scheme, the last field of its own list (2026-10-07)
+
+The sibling of DEC07's status/outcome work, in the one remaining field of
+REQ-010's list. A template could declare its own `roles` and
+`permitted_role_ids` had to reference them — but **project membership roles
+came from a fixed platform enum** (`models.Role`), so for any framework that
+brought its own role names (`agile.json`, `agile.v3.json`: product_owner,
+developer, facilitator) `permitted_role_ids` could never match any member's
+role. `docs/DEFECT_REGISTER.md`'s "Declared role vocabulary is not honoured"
+row is now **Closed**; the design spec is `1391069`
+(`docs/superpowers/specs/2026-10-04-role-vocabulary-indirection-design.md`)
+and the seven-task plan is `346950b`.
+
+**What shipped, in commit order.**
+
+- `6347078`, `b15b449` — golden pins written BEFORE any behaviour changed,
+  so a published vocabulary 1-3 template's role behaviour could not shift
+  quietly underneath this work. These are what make the back-compat claims
+  below checkable rather than asserted.
+- `47b900c` — `RoleDefinition` (`id`, `attests` defaulting true, `decides`
+  defaulting false), `TemplateSchema.role_lookup()` normalising mixed
+  strings and objects exactly as `status_lookup()` does, and vocabulary 4's
+  own validation rules (including §5.2's at-least-one-decider).
+- `1435a5c`, `6205009` — decision authority becomes the **intersection** of
+  tenant permission and declared capability. The second commit is the
+  tenant half, and it is a deliberate tightening: before it, a member whose
+  PROJECT role was `approver` but whose TENANT role was only `contributor`
+  — a pairing an admin can create today — could decide. That is the
+  privilege-escalation path spec Sec.4's intersection exists to close.
+- `00d474f` — the attest path resolves declared capability through the bound
+  template at both call sites: evidence revisions and **attachment upload**,
+  which supersedes the active attachment and so carries the same control.
+- `b646822` — declared roles become assignable project roles. `ProjectMemberIn.role`
+  stops being `Role`-typed and `create_project` validates against the
+  binding instead: at vocabulary 4 the permitted set is what the template
+  declares, below 4 it stays exactly the platform enum.
+- `489cde7` — `fixtures/synthetic/frameworks/agile.v4.json`, and the
+  narrowing invariant proved end to end.
+
+**The invariant the conversational design had missed, and that the
+Blueprint forced.** Blueprint Sec.2's six product roles are the platform
+authority model, not framework vocabulary. So a declared role **narrows**
+authority within that model and must never grant authority the holder's
+tenant role lacks — spec Sec.4. `test_role_invariant.py` proves it on a
+genuinely READY gate using the real manifest digest from preview, and pins
+the refusal's detail string, so the 403 cannot be readiness, a stale digest
+or the MFA dependency wearing a 403 ('contributor' is not in
+`ROLES_REQUIRING_MFA`, so that path is not even engaged).
+
+**Back-compat is structural, not asserted.** `role_lookup()` synthesises a
+`RoleDefinition` for every bare string and `attests` defaults true, so no
+vocabulary 1-3 template can lose an attester. Below vocabulary 4 the
+legacy branch answers deciding authority WITHOUT regard to declaration,
+testing the project role against `rule_engine._LEGACY_DECIDING_ROLES`
+directly — which is what keeps `lightweight.json` (declares
+`["contributor", "approver"]`, never written to enumerate `sponsor`)
+working for a tenant sponsor who held authority before this work.
+
+**Vocabulary 4 ships accepted but unused.** `rule_engine.VOCABULARY_VERSION`
+remains **2**, unchanged by this work, exactly as it remained 2 when
+vocabulary 3 shipped. That constant is the stamp every new guided-authoring
+draft gets (`routers/templates.py`'s `_BLANK_SCHEMA`), and the metadata
+form still emits plain comma-separated strings, so bumping it would make a
+vocabulary the authoring UI cannot express the default for all new
+templates. A template that explicitly declares `"vocabulary_version": 4`
+validates and behaves per v4 in full; it is simply not the default. The
+only v4 artefact in the repository is `agile.v4.json`, which carries
+`_meta.validation_fixture: true` and is therefore skipped by
+`scripts/seed_starter_frameworks.py` — the flag is the mechanism, not a
+filename list, which is why the new fixture needed no change to that script.
+
+**Two things went beyond the plan, deliberately, and are recorded as such.**
+
+1. **The UI that fronts project membership.** The plan's Task 5 named only
+   `ProjectMemberIn` and the `role=member.role.value` line. Loosening the
+   type exposed a form that then contradicted the API it fronts:
+   `webapp/router.py` coerced the submitted role through `Role(member_role)`
+   and rendered "Unrecognised role", so every valid v4 role was rejected
+   before `create_project` could see it; and `project_new.html` offered a
+   hardcoded `<select>` of the five platform roles, every one of which a v4
+   binding refuses, with no way to name a declared one. Both fixed —
+   `PublishedVersionOut` gained `member_roles` so the form's hint states
+   what the chosen binding actually accepts, and the field is now a text
+   input matching the idiom the class field on the same form already
+   established. Leaving it would have shipped an API-only feature behind a
+   form that could not reach it.
+2. **A test bug of this session's own making, pinned rather than papered
+   over.** The first draft of the webapp tests switched back to the admin
+   with `_register_and_login_ui` — but that posts `/ui/register`, and
+   registering a taken email leaves the session as whoever it already was,
+   so the rest of the test ran as the member and read an unrelated page.
+   Added a real `_login_ui` helper and an explicit assertion that
+   `/auth/me` is the invited member, so the same mistake fails loudly next
+   time instead of passing against the wrong page.
+
+**One wart tidied.** The `>= 3` validation blocks apply v3's content rules
+to every higher vocabulary — correct — but said "vocabulary 3 requires..."
+regardless of what the author declared, sending someone who wrote
+vocabulary 4 looking for a mistake in a version they are not using. The
+version *gates* are unchanged; only the wording now names the declared
+version. `test_dec07_status_semantics.py` needed no edit, because its cases
+declare `vocabulary_version=3` and so still correctly read "vocabulary 3".
+
+**Two items recorded Open rather than closed, honestly.**
+
+- **WP05 was nominally delivered while REQ-010's role scheme was never
+  implemented** — the same requirement-versus-verification shape TST-010
+  had for statuses and decisions. The instance is now fixed; what stays
+  open is that **nobody has checked whether other REQ/TST pairs share that
+  shape**. That audit has not been run and is not claimed.
+- **AC08/AC09 remain unverified.** They reference Directive v1.2, which is
+  not in this repository (spec §2.1). This work closes a register row and
+  an unmet REQ-010 Must; it is **not** claimed to satisfy WP05's acceptance
+  criteria, because the document those criteria are written against cannot
+  be read here to check them.
+
+**Verified: the whole suite, chunked.** Run two files per pytest process
+(this machine's 3.46GB RAM OOM-kills a single full-suite process, and as of
+2026-10-04 so do 5- and 3-file chunks), with
+`test_dec08_performance_budgets.py` run alone because its measurements are
+load-dependent: **25 chunks, 379 tests, all green, no failures, no errors
+and no skips**, plus the perf budgets 3 passed on their own. Nothing was
+skipped for want of Postgres this session -- real Postgres with
+`bgp_owner`/`bgp_app`/`bgp_backup` was available and used, so the RLS,
+durability and webapp files genuinely ran rather than skipping green.
+`ruff check` and `ruff format` clean across the full `app`/`tests` tree.
+
+Of those 379, this work's own additions are 30 tests across five new files
+(`test_role_vocabulary_backcompat.py` 4, `test_role_semantics.py` 11,
+`test_role_decision_authority.py` 9, `test_role_assignment.py` 5,
+`test_role_invariant.py` 1), plus `test_permitted_role_enforcement.py`
+extended from 9 to 11, `test_wp13_webapp_new_pages.py` by 2, and
+`test_framework_fixtures.py` updated for the sixth fixture.
+
+**No gate decision.** Evidence documents, fixtures, code and tests only —
+no `tracker_cli.py` invocation of any kind and no `tracker_cli.py gate`
+action. The register rows above are findings and closures of findings, not
+approvals; a gate decision remains a named human authority's sign-off.

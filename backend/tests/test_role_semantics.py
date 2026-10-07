@@ -145,3 +145,17 @@ def test_role_definition_defaults():
     definition = RoleDefinition(id="x")
     assert definition.attests is True
     assert definition.decides is False
+
+
+def test_a_v4_template_does_not_get_v3_phrasing():
+    """Spec Sec.7's recorded wart: the `>= 3` blocks apply v3's content
+    rules with v3's wording to every higher version, so a v4 template that
+    omits an initial status is told about 'vocabulary 3'."""
+    data = _schema([{"id": "po", "decides": True}], permitted=("po",))
+    data["statuses"] = [{"id": "Met", "satisfies": True}]  # no initial
+    with pytest.raises(RuleValidationError) as excinfo:
+        validate_template_schema(data)
+    message = str(excinfo.value)
+    assert "exactly one status with initial: true" in message
+    assert "vocabulary 3" not in message, message
+    assert "vocabulary 4" in message, message

@@ -613,16 +613,22 @@ class TemplateSchema(BaseModel):
 
         # These three are genuinely about what vocabulary 3 MEANS, not about
         # a storage limit, so they stay keyed to the declared version.
+        #
+        # The GATE stays `>= 3` -- these rules are inherited by every later
+        # vocabulary -- but the WORDING names the version the author
+        # actually declared. Telling someone who wrote vocabulary_version 4
+        # that "vocabulary 3 requires..." sends them looking for a mistake
+        # in a version they are not using.
         if self.vocabulary_version >= 3:
             if sum(1 for d in status_defs if d.initial) != 1:
-                errors.append("vocabulary 3 requires exactly one status with initial: true")
+                errors.append(f"vocabulary {self.vocabulary_version} requires exactly one status with initial: true")
             if not any(d.satisfies for d in status_defs):
-                errors.append("vocabulary 3 requires at least one status with satisfies: true")
+                errors.append(f"vocabulary {self.vocabulary_version} requires at least one status with satisfies: true")
             for entry in self.decision_outcomes:
                 if not isinstance(entry, OutcomeDefinition):
                     errors.append(
-                        f"decision outcome '{entry}': vocabulary 3 requires an explicit kind "
-                        f"(approving | conditional_approving | recording)"
+                        f"decision outcome '{entry}': vocabulary {self.vocabulary_version} requires an "
+                        f"explicit kind (approving | conditional_approving | recording)"
                     )
 
         if self.vocabulary_version >= 4:
