@@ -401,7 +401,9 @@ def _require_project_member(db: Session, project_id: str, user_id: str) -> Proje
     return pm
 
 
-def _require_permitted_to_attest(item: EvidenceItem, pm: ProjectMembership, membership: Membership) -> None:
+def _require_permitted_to_attest(
+    item: EvidenceItem, pm: ProjectMembership, membership: Membership, schema: TemplateSchema
+) -> None:
     """REQ-032/TST-032: `permitted_role_ids` says WHO MAY ATTEST an item, and
     this is where that is enforced.
 
@@ -435,7 +437,16 @@ def _require_permitted_to_attest(item: EvidenceItem, pm: ProjectMembership, memb
         return
 
     declared = item.permitted_role_ids or []
-    if pm.role in declared:
+    # At vocabulary 4 a declared role carries its own `attests` capability,
+    # so being named in permitted_role_ids is necessary but no longer
+    # sufficient -- the template must also say the role attests at all.
+    # Below 4 this is bit-identical: role_lookup() synthesises a definition
+    # for every bare string and RoleDefinition.attests defaults True, so no
+    # vocabulary 1-3 template can lose an attester here. Pinned by
+    # test_role_vocabulary_backcompat.py and by the vocabulary-1 cases in
+    # this function's own suite.
+    definition = schema.role_lookup().get(pm.role)
+    if definition is not None and definition.attests and pm.role in declared:
         return
 
     # The restriction is only enforceable against roles the platform can
@@ -455,7 +466,13 @@ def _require_permitted_to_attest(item: EvidenceItem, pm: ProjectMembership, memb
     # different field and needs the same indirection treatment to fix
     # properly. This fallback is the one place this control fails open; it is
     # pinned by test_an_unassignable_role_vocabulary_falls_back_to_membership.
-    if not (set(declared) & {role.value for role in Role}):
+    #
+    # At vocabulary 4 that indirection EXISTS: declared roles are assignable
+    # project roles (see the member-role validation in create_project), so a
+    # custom-role framework is no longer locked out and the fallback is
+    # neither needed nor wanted -- a role the rule does not name must be
+    # refused there rather than waved through (spec G6).
+    if schema.vocabulary_version < 4 and not (set(declared) & {role.value for role in Role}):
         return
 
     raise HTTPException(
@@ -776,7 +793,13 @@ def create_evidence_revision(
     if item is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Evidence item not found")
     pm = _require_project_member(db, item.project_id, membership.user_id)
-    _require_permitted_to_attest(item, pm, membership)
+    # Loaded BEFORE the attest check rather than after the 409 below: the
+    # check now resolves declared role capability through the bound
+    # template, and its 403 must keep preceding the staleness 409 it has
+    # always preceded.
+    project_row = db.query(Project).filter(Project.id == item.project_id).one()
+    schema = _load_bound_schema(db, tenant_id, project_row.template_version_id)
+    _require_permitted_to_attest(item, pm, membership, schema)
 
     if payload.base_revision != item.latest_revision_number:
         raise HTTPException(
@@ -784,8 +807,6 @@ def create_evidence_revision(
             f"base_revision {payload.base_revision} is stale -- current is {item.latest_revision_number}",
         )
 
-    project_row = db.query(Project).filter(Project.id == item.project_id).one()
-    schema = _load_bound_schema(db, tenant_id, project_row.template_version_id)
     status_lookup = schema.status_lookup()
 
     definition = status_lookup.get(payload.status)

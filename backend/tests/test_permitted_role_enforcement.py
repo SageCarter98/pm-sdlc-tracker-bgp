@@ -383,3 +383,102 @@ def test_a_permitted_role_may_still_upload_an_attachment(client, project_with_ro
 
     assert resp.status_code == 201, resp.text
     assert resp.json()["status"] == "active"
+
+
+V4_ATTEST = {
+    "schema_version": 1,
+    "vocabulary_version": 4,
+    "tracks": ["Delivery"],
+    "classes": ["Team"],
+    "roles": [
+        {"id": "product_owner", "attests": True, "decides": True},
+        {"id": "observer", "attests": False},
+    ],
+    "statuses": [{"id": "Not met", "initial": True}, {"id": "Met", "satisfies": True}],
+    "decision_outcomes": [{"id": "Accept", "kind": "approving"}],
+    "gates": [
+        {
+            "gate_id": "G1",
+            "name": "Done",
+            "sequence": 1,
+            "class_ids": ["Team"],
+            "rules": [
+                {
+                    "version": 1,
+                    "rule_id": "G1.R1",
+                    "evidence_kind": "document",
+                    "required": True,
+                    "blocker_level": "hard",
+                    "permitted_role_ids": ["product_owner"],
+                    "class_ids": ["Team"],
+                    "occurrence_type": "routine",
+                }
+            ],
+        }
+    ],
+}
+
+
+def test_a_v4_declared_role_may_attest_without_being_a_platform_role(client):
+    """The payoff: 'product_owner' is not a platform Role, and at v4 it no
+    longer has to be. This is the case the fallback used to swallow."""
+    register_and_login(client, "admin@v4attest.example")
+    tenant_id = client.post("/orgs", json={"name": "V4 Attest Co"}).json()["id"]
+    created = client.post(f"/orgs/{tenant_id}/templates/import", json={"name": "V4", "schema_json": V4_ATTEST}).json()
+    assert (
+        client.post(
+            f"/orgs/{tenant_id}/templates/{created['template_id']}/versions/{created['id']}/publish"
+        ).status_code
+        == 200
+    )
+    member_id = _invite(client, tenant_id, "po@v4attest.example", "contributor")
+    login(client, "admin@v4attest.example", PASSWORD)
+    project = client.post(
+        f"/orgs/{tenant_id}/projects",
+        json={
+            "name": "V4 Attest",
+            "template_version_id": created["id"],
+            "class_id": "Team",
+            "members": [{"user_id": member_id, "role": "product_owner"}],
+        },
+    ).json()
+    item = project["evidence_items"][0]
+
+    login(client, "po@v4attest.example", PASSWORD)
+    resp = _submit(client, tenant_id, item["id"], status="Met")
+
+    assert resp.status_code == 201, resp.text
+
+
+def test_the_unassignable_fallback_does_not_apply_at_v4(client):
+    """G6: below v4 the fallback is the only thing keeping custom-role
+    frameworks usable; at v4 declared roles are assignable, so a role the
+    rule does not name must be refused rather than waved through."""
+    register_and_login(client, "admin@v4fb.example")
+    tenant_id = client.post("/orgs", json={"name": "V4 FB Co"}).json()["id"]
+    schema = dict(V4_ATTEST)
+    created = client.post(f"/orgs/{tenant_id}/templates/import", json={"name": "V4", "schema_json": schema}).json()
+    assert (
+        client.post(
+            f"/orgs/{tenant_id}/templates/{created['template_id']}/versions/{created['id']}/publish"
+        ).status_code
+        == 200
+    )
+    # 'observer' declares attests: false and is not in permitted_role_ids.
+    member_id = _invite(client, tenant_id, "obs@v4fb.example", "contributor")
+    login(client, "admin@v4fb.example", PASSWORD)
+    project = client.post(
+        f"/orgs/{tenant_id}/projects",
+        json={
+            "name": "V4 FB",
+            "template_version_id": created["id"],
+            "class_id": "Team",
+            "members": [{"user_id": member_id, "role": "observer"}],
+        },
+    ).json()
+    item = project["evidence_items"][0]
+
+    login(client, "obs@v4fb.example", PASSWORD)
+    resp = _submit(client, tenant_id, item["id"], status="Met")
+
+    assert resp.status_code == 403, resp.text
