@@ -3165,3 +3165,72 @@ extended from 9 to 11, `test_wp13_webapp_new_pages.py` by 2, and
 no `tracker_cli.py` invocation of any kind and no `tracker_cli.py gate`
 action. The register rows above are findings and closures of findings, not
 approvals; a gate decision remains a named human authority's sign-off.
+
+## IPA04's stale DEC08 sub-part claim corrected; what actually keeps it Open (2026-10-07)
+
+Housekeeping with a real finding in it, done immediately after PR #18
+merged (`de06592`, CI run `37700760348` success, and — worth noting for the
+first time in this project's history — a genuine `APPROVED` review from
+kenAddme on commit `09c4da5`, checked via `gh pr view --json reviews`
+rather than inferred from "merged", per the EC-202 precedent that every
+previously sampled PR carried only `COMMENTED`).
+
+**The finding.** `docs/DEFECT_REGISTER.md`'s IPA04 row — the only High,
+explicitly release-blocking row still Open — listed two of DEC08's three
+numeric sub-parts as unbuilt:
+
+> render-timing (LCP/INP/CLS) and page-weight budgets (need a
+> Lighthouse-CI-style harness this project doesn't have) and the async
+> export-streaming budget (exports.py is synchronous in this prototype per
+> WP01's own scope limit, so there's no "begin streaming" moment to
+> measure yet)
+
+**Both were built on 2026-10-01 in `5e9baf5` (PR #9) and the row was never
+updated.** Verified against primary sources rather than the row's own
+prose, which is the whole point:
+
+- `tools/perf-budgets/` exists and is committed — `check.mjs` (16.9 KB),
+  `package.json`, `package-lock.json`, README — and is driven by a
+  **blocking** CI step, "Render-timing and page-weight budgets (DEC08
+  Q14/Q16)" in `.github/workflows/ci.yml`, alongside the Node-setup and
+  dev-server-health steps it needs. Measured with real headless Chrome via
+  Lighthouse, not simulated.
+- The export budget's premise no longer holds. `exports.py`'s download
+  endpoint streams incrementally through `_iter_archive_json` and a real
+  `StreamingResponse`, so the "begin streaming" moment exists and is
+  measured by `test_wp12_render_and_export_budgets.py` (2 tests, live
+  Postgres): one proving `_iter_archive_json` yields more than one chunk
+  and matches `json.dumps`, one proving the download does not buffer the
+  whole body first.
+
+So all three of REQ-043's numeric sub-parts are enforced, each in the only
+place able to measure it. The identical stale claim was also sitting in
+`backend/tests/test_dec08_performance_budgets.py`'s own docstring, where it
+was actively misleading — a reader of that file would have concluded the
+other two sub-parts did not exist — and is corrected in the same commit to
+name where each one IS enforced.
+
+**This changes nothing about IPA04's Status, and the row says so
+explicitly.** It stays **Open**. What keeps it open is the assurance half,
+untouched by this edit and not performable by an agent:
+
+- the manual WCAG audit (keyboard, screen reader, zoom, colour contrast —
+  the 2026-09-30 axe-core/jsdom pass found 0 violations after one real fix
+  but cannot evaluate paint-dependent rules, as that writeup states);
+- an independent security review;
+- usability sessions (kenAddme named reviewer 2026-09-30 — an assignment,
+  not a performance);
+- real cross-zone/cross-region replication, a named non-goal of the DEC05
+  design spec rather than an omission.
+
+**Why this matters beyond one row.** This is the exact failure mode
+`CLAUDE.md`'s backfill note describes — real work shipped, the governance
+record never caught up — and it was sitting in a High release-blocking row,
+where a stale "still unbuilt" list is worse than no list: it invites
+re-doing work already done, and it misrepresents readiness in the direction
+of under-claiming while the row's headline over-claims what remains. Found
+by checking the row against the repository, which is the only way these
+surface.
+
+**No gate decision.** A register correction and a docstring correction,
+both evidence-backed. No `tracker_cli.py` invocation of any kind.

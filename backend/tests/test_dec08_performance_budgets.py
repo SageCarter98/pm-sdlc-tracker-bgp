@@ -11,18 +11,28 @@ Budgets enforced here (Q15):
 - Ordinary writes: p95 <= 500 ms
 - Decision writes: p95 <= 800 ms, p99 <= 1.5 s
 
-Deliberately NOT enforced here: the export budget ("asynchronous; must
-begin streaming within 2 s") assumes an async worker queue. exports.py's
-own docstring says exports are synchronous in this prototype (no worker
-exists yet, WP01's own scope limit) -- there is no "begin streaming" moment
-to measure, so building a check against that premise would test something
-that doesn't exist rather than something real. Flagged, not faked.
+Not enforced HERE, but enforced ELSEWHERE -- corrected 2026-10-07, because
+this docstring described both of DEC08's other two numeric sub-parts as
+unbuilt and both were built on 2026-10-01 in `5e9baf5` (PR #9). What is
+true is only that pytest is the wrong place for them, not that they are
+missing:
 
-Also not built here: DEC08's render-timing budgets (LCP/INP/CLS, page-weight
-KB budgets under an emulated Fast-3G/mid-range-Android profile). Those need
-real browser tooling (a Lighthouse-CI-style harness) this project doesn't
-have wired up -- a separate, larger addition, not something this
-Postgres-backed API test can measure honestly.
+- The export budget ("asynchronous; must begin streaming within 2 s") is
+  enforced by `test_wp12_render_and_export_budgets.py`. The premise this
+  docstring previously rested on -- that exports are synchronous so there
+  is no "begin streaming" moment -- no longer holds: the download endpoint
+  now streams incrementally via `exports.py`'s `_iter_archive_json` through
+  a real `StreamingResponse`, so the moment exists and is measured.
+- DEC08's render-timing budgets (LCP/INP/CLS and page-weight KB under an
+  emulated Fast-3G/mid-range-Android profile) are enforced by the Lighthouse
+  Node harness in `tools/perf-budgets/` and its own blocking CI step
+  ("Render-timing and page-weight budgets (DEC08 Q14/Q16)" in
+  `.github/workflows/ci.yml`). Still correct that THIS Postgres-backed API
+  test cannot measure them honestly -- it needs a real headless browser,
+  which is exactly what that harness provides.
+
+So this file covers the first of REQ-043's three numeric sub-parts. The
+other two are covered, each in the only place that can measure it.
 
 Same live-Postgres requirement as every other IPA02/WP13+ webapp/API test in
 this suite -- server-side timing against the SQLite fixture (in-memory, no
