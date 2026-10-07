@@ -23,6 +23,7 @@ from app.models import (
     Membership,
     Project,
     ProjectMembership,
+    Role,
     User,
 )
 from app.rule_engine import TemplateSchema, evaluate_condition, status_satisfies
@@ -30,7 +31,13 @@ from app.routers.projects import _get_owned_project_or_404, _load_bound_schema, 
 
 router = APIRouter(tags=["decisions"])
 
-DECISION_AUTHORITY_ROLES = {"approver", "sponsor", "tenant_administrator"}
+# TENANT-layer decision authority: which org-level Membership.role may
+# decide at all. Platform-fixed on purpose (spec Sec.3.1) -- it gates MFA
+# (models.ROLES_REQUIRING_MFA) and endpoint access via require_role, and a
+# tenant exists before any template is bound, so there is nothing to
+# resolve a declared role against here. The PROJECT layer is the half that
+# became template-declared: see _project_role_decides below.
+TENANT_DECISION_AUTHORITY_ROLES = {"approver", "sponsor", "tenant_administrator"}
 
 # REQ-006 separation of duties applies to an outcome that APPROVES, whatever
 # word a template uses for it. These are the two OutcomeDefinition kinds that
@@ -72,6 +79,25 @@ def _get_occurrence_or_404(db: Session, project_id: str, occurrence_id: str) -> 
     return occurrence
 
 
+def _project_role_decides(schema: TemplateSchema, project_role: str, tenant_role: str) -> bool:
+    """PROJECT-layer decision authority, resolved through the bound
+    template (spec Sec.5.3). Together with the tenant-layer check this is
+    the intersection spec Sec.4 requires: the tenant role permits deciding
+    AND the bound template says this project role decides.
+
+    Tenant administrators always may, matching the attest path's existing
+    carve-out in routers/projects.py -- otherwise a template could lock its
+    own tenant's administrator out of its gates.
+
+    Fails closed: a project role the bound template does not declare
+    decides nothing, the same rule status_satisfies applies to an
+    undeclared status."""
+    if tenant_role == Role.TENANT_ADMINISTRATOR:
+        return True
+    definition = schema.role_lookup().get(project_role)
+    return definition is not None and definition.decides
+
+
 def _exception_is_currently_valid(db: Session, exc: ExceptionRecord, *, lock: bool = False) -> bool:
     """REQ-020: never trust `status` alone. Re-check expiry against server
     time and re-check the approving actor still holds an active,
@@ -95,7 +121,7 @@ def _exception_is_currently_valid(db: Session, exc: ExceptionRecord, *, lock: bo
     if lock:
         query = query.with_for_update()
     approver_membership = query.one_or_none()
-    return approver_membership is not None and approver_membership.role in DECISION_AUTHORITY_ROLES
+    return approver_membership is not None and approver_membership.role in TENANT_DECISION_AUTHORITY_ROLES
 
 
 def _has_valid_exception(db: Session, item: EvidenceItem, *, lock: bool = False) -> bool:
@@ -411,6 +437,7 @@ def _check_separation_of_duties(
     actor_user_id: str,
     manifest_digest: str,
     override: SeparationOverrideIn | None,
+    schema: TemplateSchema,
 ) -> CompensatingReview | None:
     """REQ-006/BGP-F02: self-only approval is rejected unless `override`
     names a CompensatingReview row -- and that row is re-validated here,
@@ -503,7 +530,7 @@ def _check_separation_of_duties(
         .with_for_update()
         .one_or_none()
     )
-    if reviewer_membership is None or reviewer_membership.role not in DECISION_AUTHORITY_ROLES:
+    if reviewer_membership is None or reviewer_membership.role not in TENANT_DECISION_AUTHORITY_ROLES:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, "The compensating reviewer no longer holds active approval authority"
         )
@@ -513,7 +540,7 @@ def _check_separation_of_duties(
         .with_for_update()
         .one_or_none()
     )
-    if reviewer_pm is None or reviewer_pm.role not in DECISION_AUTHORITY_ROLES:
+    if reviewer_pm is None or not _project_role_decides(schema, reviewer_pm.role, reviewer_membership.role):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, "The compensating reviewer no longer holds approval authority on this project"
         )
@@ -541,8 +568,6 @@ def _require_decision_authority(db: Session, project_id: str, user: User, mfa_ve
     )
     if pm is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Not a member of this project")
-    if pm.role not in DECISION_AUTHORITY_ROLES:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Role does not permit recording decisions")
     # REQ-024/BGP-IPA-001 IPA04: app/deps.py's get_active_membership only
     # ever checks the caller's ORG-level (tenant) Membership once, unlocked,
     # before this handler runs -- unlike the exception approver's and the
@@ -562,6 +587,15 @@ def _require_decision_authority(db: Session, project_id: str, user: User, mfa_ve
     )
     if tenant_membership is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "No active membership in this organisation")
+    # PROJECT-layer decision authority is resolved through the bound
+    # template (_project_role_decides), not the platform-fixed tenant set --
+    # loaded here, inside the helper, rather than threaded as a parameter
+    # through this function's five callers (preview/decide, the three
+    # exception endpoints, and compensating reviews).
+    project = db.query(Project).filter(Project.id == project_id).one()
+    schema = _load_bound_schema(db, project.tenant_id, project.template_version_id)
+    if not _project_role_decides(schema, pm.role, tenant_membership.role):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Role does not permit recording decisions")
     # BGP-F01: session-bound, same reasoning as app/deps.py's require_mfa --
     # user.mfa_enabled alone (an account-level flag) is not evidence this
     # session ever completed a second-factor check.
@@ -769,6 +803,7 @@ def _record_decision(
                 membership.user_id,
                 readiness["manifest_digest"],
                 payload.separation_override,
+                schema,
             )
         except HTTPException as exc:
             _deny(str(exc.detail), exc.status_code)

@@ -61,15 +61,15 @@ def test_agile_declares_no_platform_assignable_role():
 
 def test_the_platform_deciders_literal_matches_the_live_decision_authority_roles():
     """PLATFORM_DECIDERS above is deliberately a hand-copied literal, not an
-    import of app.routers.decisions.DECISION_AUTHORITY_ROLES -- a golden
-    file must encode its expectation independently, or editing the thing
-    under test would make this file agree with it automatically, which is
-    the opposite of a tripwire. This test is the ONLY place the two are
-    linked. A later task in this plan is expected to rename
-    DECISION_AUTHORITY_ROLES to TENANT_DECISION_AUTHORITY_ROLES; when it
-    does, this one assertion will fail here, which is correct -- it forces
-    that rename to confront this baseline as one deliberate edit, rather
-    than the baseline silently drifting out of sync."""
-    from app.routers.decisions import DECISION_AUTHORITY_ROLES
+    import of app.routers.decisions.TENANT_DECISION_AUTHORITY_ROLES -- a
+    golden file must encode its expectation independently, or editing the
+    thing under test would make this file agree with it automatically,
+    which is the opposite of a tripwire. This test is the ONLY place the
+    two are linked. DECISION_AUTHORITY_ROLES was renamed to
+    TENANT_DECISION_AUTHORITY_ROLES (role vocabulary indirection, Task 3)
+    precisely so that rename would have to confront this baseline as one
+    deliberate edit, rather than the baseline silently drifting out of
+    sync."""
+    from app.routers.decisions import TENANT_DECISION_AUTHORITY_ROLES
 
-    assert PLATFORM_DECIDERS == DECISION_AUTHORITY_ROLES
+    assert PLATFORM_DECIDERS == TENANT_DECISION_AUTHORITY_ROLES
