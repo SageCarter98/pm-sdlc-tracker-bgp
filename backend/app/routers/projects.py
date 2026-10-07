@@ -34,7 +34,13 @@ router = APIRouter(tags=["projects"])
 
 class ProjectMemberIn(BaseModel):
     user_id: str
-    role: Role
+    # Not `Role`: at vocabulary 4 a member's project role is any role the
+    # bound template version declares, which the handler validates against
+    # that binding (REQ-010's role scheme). Below v4 the handler restricts
+    # this to exactly the platform Role enum, so existing callers are
+    # unaffected. Enum-typing it here would make the v4 case unreachable
+    # before any template could be consulted.
+    role: str
 
 
 class CreateProjectRequest(BaseModel):
@@ -260,6 +266,24 @@ def create_project(
             f"class_id '{payload.class_id}' is not declared by this template version",
         )
 
+    # The type is now `str`, so this is the only thing standing between a
+    # request and an arbitrary project role -- and what counts as valid
+    # depends on the binding, not on the platform. Below v4 declared roles
+    # are not assignable, so the permitted set stays exactly the platform
+    # enum and no v1-v3 caller sees a change.
+    if schema.vocabulary_version >= 4:
+        permitted_member_roles = set(schema.role_lookup())
+        source = "declared by this template version"
+    else:
+        permitted_member_roles = {role.value for role in Role}
+        source = "a platform role"
+    unknown_member_roles = sorted({m.role for m in payload.members} - permitted_member_roles)
+    if unknown_member_roles:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"member role(s) {unknown_member_roles} are not {source} (permitted: {sorted(permitted_member_roles)})",
+        )
+
     for member in payload.members:
         exists = (
             db.query(Membership)
@@ -294,9 +318,7 @@ def create_project(
             if member.user_id == membership.user_id:
                 continue
             db.add(
-                ProjectMembership(
-                    tenant_id=tenant_id, project_id=project.id, user_id=member.user_id, role=member.role.value
-                )
+                ProjectMembership(tenant_id=tenant_id, project_id=project.id, user_id=member.user_id, role=member.role)
             )
 
         occurrences: list[GateOccurrence] = []
