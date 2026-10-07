@@ -3234,3 +3234,90 @@ surface.
 
 **No gate decision.** A register correction and a docstring correction,
 both evidence-backed. No `tracker_cli.py` invocation of any kind.
+
+## The REQ/TST verification audit, run: one real defect, one false alarm refused (2026-10-07)
+
+`docs/DEFECT_REGISTER.md`'s WP05 row asked a question it did not answer:
+REQ-010 named four schemes and TST-010 asserted three, so **do other
+REQ/TST pairs share that shape?** That audit is now run. The answer is yes,
+and it found one probed defect, one thing worse than first recorded, and
+one apparent high-severity hole that turned out not to be one.
+
+**Method.** All 58 entries in `docs/blueprint/Requirements_Catalogue.json`,
+each requirement's own enumerated list against its own `verify` text. 45
+enumerate three or more items. A mechanical word-overlap pass flagged 34 as
+missing two or more — but that pass counts a synonym as a gap, so it was
+used only to rank candidates, and every top candidate was then read and
+judged against the primary text. That distinction matters: the mechanical
+output alone would have produced four confident-looking findings that are
+not real.
+
+**1. REQ-010 is worse than the register said.** Its text names **seven**
+schemes — tracks, gates, classification, role, status, decision,
+applicability — and TST-010 verifies three ("classes, roles and gates").
+The register row recorded "four things vs three" from memory of the
+conversation; reading the catalogue says seven vs three. The role scheme is
+now implemented (PR #18); `applicability` and `tracks` remain unverified by
+TST-010's own text.
+
+**2. REQ-017 — a genuine match, and it yielded a real defect.** REQ-017
+requires tracking evidence status, owner, due date, completion date and
+reference; TST-017 verifies only the revision/attribution half ("Editing
+creates a new revision; prior actor, time and values remain available") and
+never asserts the five fields. Following the field list into the code found
+that `CreateEvidenceRevisionRequest` defaults `owner_user_id`, `due_date`,
+`completed_date` and `reference` to `None`, and `routers/projects.py`
+assigns all four to the item unconditionally.
+
+Probed, not assumed. After setting owner=`1f0f3339...` and
+due=`2026-12-01`, a revision sending only `{base_revision, status,
+reference}` left the item at **owner=`None`, due=`None`**. The append-only
+history is intact — revision 2 still holds both — so this is current-state
+loss, not audit-trail loss. Two consequences: REQ-017's own field list is
+silently dropped by a routine status update, and
+`_require_permitted_to_attest`'s first exemption reads
+`item.owner_user_id`, so an owner who posts a status update clears their
+own ownership and loses that exemption next time.
+
+**Recorded, deliberately not fixed.** `EvidenceItem`'s docstring says the
+item fields "always mirror the latest EvidenceRevision", so mirroring
+`None` may be the intended append-only semantic — each revision a complete
+statement — rather than a bug. But the API offers no way to say "keep the
+current owner" and nothing documents that every revision must re-send these
+fields. Which of the two it is (a missing partial-update semantic, or an
+undocumented complete-statement contract) is an owner's design call, so it
+is in the register with its probe evidence instead of being changed
+unilaterally. The probe itself was throwaway and is **not** committed, on
+purpose: a test asserting today's behaviour would pin in whichever semantic
+turns out to be the unintended one.
+
+**3. REQ-008 looked like the worst of them and is not a defect.** A
+*tenant-isolation* requirement naming workers, files, caches, search and
+exports, whose TST-008 verifies only pooled-connection reuse and
+mixed-tenant jobs. On the mechanical ranking this was the top security
+candidate. On checking the code it is **vacuous by absence**: every named
+surface that exists is covered — files by
+`test_wp15_evidence_attachments.py`'s cross-tenant download refusal plus
+the handler's own `tenant_id` filter, exports by
+`test_wp09_tenant_isolation_rls.py` (2 tests) — and the three uncovered
+ones **do not exist in this codebase at all**. Grep for
+redis/memcached/cachetools/lru_cache, celery/rq/BackgroundTasks, and
+tsvector/to_tsquery/ILIKE returns nothing, and no such dependency is
+declared. Written down as absence, not as a hole, and explicitly not
+rounded up — this is the row where the audit was most tempted to overclaim.
+
+**4. REQ-023, REQ-015, REQ-044 — document-level narrowness, not gaps.**
+REQ-023's verify ends in a catch-all ("include all required bindings").
+REQ-015's field list is covered in practice by `test_projects.py` though its
+verify text asserts only atomicity. REQ-044 matches the shape but is an
+assurance requirement already inside IPA04's "no independent assurance
+performed", not a separate code gap.
+
+**What is left, and why the WP05 row stays Open.** A decision on the
+REQ-017 finding, and whether TST-008's and TST-010's verify *text* should be
+corrected to name which surfaces they cover — so a future reader can tell
+"covered" from "does not exist". Neither is done, so the row is updated with
+the audit's result rather than closed.
+
+**No gate decision.** An audit, a probe, and two register writes. No
+`tracker_cli.py` invocation of any kind.
