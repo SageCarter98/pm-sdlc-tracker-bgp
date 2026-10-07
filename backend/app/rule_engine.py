@@ -72,6 +72,11 @@ OPERATORS_BY_VOCABULARY_VERSION: dict[int, set[str]] = {
     # below) and evaluation of a rule's `conditions` tree. Stated here
     # because "same set as 2" otherwise looks like a copy-paste slip.
     3: {"eq", "in", "all", "any", "not", "gte", "lte", "count"},
+    # Vocabulary 4 adds NO operators either. The bump carries role semantics
+    # instead: structured role entries (RoleDefinition below) declaring
+    # attests/decides. Stated here for the same reason as the vocabulary 3
+    # comment above.
+    4: {"eq", "in", "all", "any", "not", "gte", "lte", "count"},
 }
 ALLOWED_OPERATORS = OPERATORS_BY_VOCABULARY_VERSION[VOCABULARY_VERSION]
 
@@ -283,6 +288,12 @@ MAX_STATUS_ID_LENGTH = 30
 # error.
 MAX_OUTCOME_ID_LENGTH = 30
 
+# ProjectMembership.role is String(30) (app/models.py), with the same
+# consequence one step later as a status id: a longer declared role id
+# validates, is offered for assignment, and then fails at project-creation
+# time as a database error.
+MAX_ROLE_ID_LENGTH = 30
+
 # v1/v2 templates declare bare strings. These two maps are what make
 # "old templates evaluate identically forever" (DEC07 Q10) true with no
 # migration: today's hardcoded literals, expressed as data.
@@ -295,6 +306,19 @@ _LEGACY_OUTCOME_KINDS = {
     "Redirect": "recording",
     "Terminate": "recording",
 }
+
+# The third legacy map, same purpose as the two above: today's hardcoded
+# decision_authority role names, expressed as data so a v1/v2/v3 template
+# keeps deciding exactly as it always did (spec G5). Deliberately frozen by
+# design, NOT drift-guarded against decisions.py's DECISION_AUTHORITY_ROLES:
+# this constant encodes what a template published BEFORE this work MEANT by
+# those role names at the time it was published, so it must stay fixed even
+# if the live platform constant is later renamed or its membership changes
+# -- that is what makes "old templates evaluate identically forever" true
+# for roles rather than merely aspirational. (A later task in this plan
+# renames the live constant, which is exactly the kind of change this one
+# must NOT follow.)
+_LEGACY_DECIDING_ROLES = {"approver", "sponsor", "tenant_administrator"}
 
 
 class StatusDefinition(BaseModel):
@@ -325,6 +349,23 @@ class OutcomeDefinition(BaseModel):
 
     id: str = Field(min_length=1)
     kind: Literal["approving", "conditional_approving", "recording"]
+
+
+class RoleDefinition(BaseModel):
+    """One framework role plus what it MAY DO, so authorization can ask the
+    bound template instead of matching a platform role name.
+
+    `attests` defaults True and `decides` defaults False: supplying evidence
+    is the ordinary case for a declared role, and granting approval is the
+    deliberate act. No max_length on `id` for the same reason
+    StatusDefinition has none -- see its comment: the explicit loop in
+    _cross_references_resolve is the single enforcement point, so REQ-012's
+    one-error-per-problem aggregation survives.
+    """
+
+    id: str = Field(min_length=1)
+    attests: bool = True
+    decides: bool = False
 
 
 def status_satisfies(definition: "StatusDefinition | None") -> bool:
@@ -360,7 +401,7 @@ class TemplateSchema(BaseModel):
     vocabulary_version: int = 1
     tracks: list[str] = Field(min_length=1)
     classes: list[str] = Field(min_length=1)
-    roles: list[str] = Field(min_length=1)
+    roles: list[str | RoleDefinition] = Field(min_length=1)
     statuses: list[str | StatusDefinition] = Field(min_length=1)
     decision_outcomes: list[str | OutcomeDefinition] = Field(min_length=1)
     gates: list[GateDefinition] = Field(min_length=1)
@@ -398,6 +439,25 @@ class TemplateSchema(BaseModel):
                 out[entry] = OutcomeDefinition(id=entry, kind=kind)
         return out
 
+    def role_lookup(self) -> dict[str, RoleDefinition]:
+        """Normalise mixed strings/objects into one lookup, like
+        status_lookup(). A plain string resolves per vocabulary_version --
+        at 1-3 through the legacy deciding-role map, which is what makes
+        "old templates evaluate identically forever" true for roles too;
+        at 4+ a bare string is an attesting, non-deciding role, so a
+        template that wants a decider must say so explicitly (and §5.2's
+        at-least-one-decider rule makes it)."""
+        out: dict[str, RoleDefinition] = {}
+        for entry in self.roles:
+            if isinstance(entry, RoleDefinition):
+                out[entry.id] = entry
+                continue
+            if self.vocabulary_version <= 3:
+                out[entry] = RoleDefinition(id=entry, decides=(entry in _LEGACY_DECIDING_ROLES))
+            else:
+                out[entry] = RoleDefinition(id=entry)
+        return out
+
     def initial_status(self) -> str:
         """G7: the status a seeded item starts in comes from the template,
         never from a literal in the seeding code."""
@@ -423,7 +483,8 @@ class TemplateSchema(BaseModel):
     @model_validator(mode="after")
     def _cross_references_resolve(self) -> "TemplateSchema":
         errors: list[str] = []
-        class_set, role_set = set(self.classes), set(self.roles)
+        role_lookup = self.role_lookup()
+        class_set, role_set = set(self.classes), set(role_lookup)
         seen_gate_ids: set[str] = set()
         seen_rule_ids: set[str] = set()
 
@@ -452,6 +513,17 @@ class TemplateSchema(BaseModel):
                 unknown_role_ids = set(rule.permitted_role_ids) - role_set
                 if unknown_role_ids:
                     errors.append(f"rule '{rule.rule_id}' references undeclared role(s) {sorted(unknown_role_ids)}")
+
+                non_attesting = sorted(
+                    role_id
+                    for role_id in rule.permitted_role_ids
+                    if role_id in role_lookup and not role_lookup[role_id].attests
+                )
+                if non_attesting:
+                    errors.append(
+                        f"rule '{rule.rule_id}' names role(s) {non_attesting} that does not attest -- "
+                        f"a rule cannot nominate a role the template says may not supply evidence"
+                    )
 
                 unknown_rule_classes = set(rule.class_ids) - class_set
                 if unknown_rule_classes:
@@ -521,6 +593,24 @@ class TemplateSchema(BaseModel):
                         f"imposed by DecisionRecord.outcome"
                     )
 
+        declared_role_ids = [entry.id if isinstance(entry, RoleDefinition) else entry for entry in self.roles]
+        has_structured_role = any(isinstance(entry, RoleDefinition) for entry in self.roles)
+
+        # Same reasoning as the status and outcome blocks above, and the same
+        # correction DEC07's I1 fix applied: enforce as soon as the template
+        # carries a structured role entry, at ANY vocabulary version, because
+        # a structured entry cannot exist in a template published before this
+        # work. Plain-string leniency stays version-gated (G5).
+        if self.vocabulary_version >= 4 or has_structured_role:
+            if len(declared_role_ids) != len(set(declared_role_ids)):
+                errors.append("duplicate role id declared")
+            for role_id in declared_role_ids:
+                if len(role_id) > MAX_ROLE_ID_LENGTH:
+                    errors.append(
+                        f"role '{role_id}' exceeds the {MAX_ROLE_ID_LENGTH}-character limit "
+                        f"imposed by ProjectMembership.role"
+                    )
+
         # These three are genuinely about what vocabulary 3 MEANS, not about
         # a storage limit, so they stay keyed to the declared version.
         if self.vocabulary_version >= 3:
@@ -534,6 +624,10 @@ class TemplateSchema(BaseModel):
                         f"decision outcome '{entry}': vocabulary 3 requires an explicit kind "
                         f"(approving | conditional_approving | recording)"
                     )
+
+        if self.vocabulary_version >= 4:
+            if not any(definition.decides for definition in role_lookup.values()):
+                errors.append("vocabulary 4 requires at least one role with decides: true")
 
         if errors:
             raise ValueError("; ".join(errors))
