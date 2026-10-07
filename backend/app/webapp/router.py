@@ -854,10 +854,12 @@ def project_new_submit(
     if member_user_id.strip():
         if not member_role.strip():
             return _render_form_error("Choose a role for the additional member.")
-        try:
-            members.append(projects_router.ProjectMemberIn(user_id=member_user_id, role=Role(member_role)))
-        except ValueError:
-            return _render_form_error("Unrecognised role for the additional member.")
+        # NOT coerced through Role() any more. At vocabulary 4 a member's
+        # project role is one the bound template declares, so coercing here
+        # would reject every valid v4 role before create_project could see
+        # it -- and create_project's own 422 names the permitted set for
+        # the actual binding, which is a better error than this one was.
+        members.append(projects_router.ProjectMemberIn(user_id=member_user_id, role=member_role.strip()))
 
     payload = projects_router.CreateProjectRequest(
         name=name, template_version_id=template_version_id, class_id=class_id, members=members

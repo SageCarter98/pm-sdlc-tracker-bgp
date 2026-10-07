@@ -37,6 +37,15 @@ def _register_and_login_ui(client, email, password="correct horse battery staple
     return resp
 
 
+def _login_ui(client, email, password="correct horse battery staple"):
+    """Switching BACK to an already-registered user. `/ui/register` cannot do
+    it -- registering a taken email leaves the session as whoever it already
+    was, which silently runs the rest of a test as the wrong user."""
+    resp = client.post("/ui/login", data={"email": email, "password": password})
+    assert resp.status_code in (200, 303), resp.text
+    return resp
+
+
 @pytest.fixture()
 def ui_client():
     from fastapi.testclient import TestClient
@@ -102,6 +111,133 @@ def test_project_creation_page_lists_published_starter_and_creates_project(ui_cl
 
     projects = ui_client.get(f"/orgs/{tenant_id}/projects").json()
     assert any(p["name"] == "My first project" for p in projects)
+
+
+_V4_SCHEMA = {
+    "schema_version": 1,
+    "vocabulary_version": 4,
+    "tracks": ["Delivery"],
+    "classes": ["A"],
+    "roles": [
+        {"id": "product_owner", "attests": True, "decides": True},
+        {"id": "developer", "attests": True},
+    ],
+    "statuses": [{"id": "Not met", "initial": True}, {"id": "Met", "satisfies": True}],
+    "decision_outcomes": [{"id": "Accept", "kind": "approving"}],
+    "gates": [
+        {
+            "gate_id": "G1",
+            "name": "Intake",
+            "sequence": 1,
+            "class_ids": ["A"],
+            "rules": [
+                {
+                    "version": 1,
+                    "rule_id": "R1",
+                    "class_ids": ["A"],
+                    "occurrence_type": "routine",
+                    "evidence_kind": "document",
+                    "permitted_role_ids": ["developer"],
+                    "blocker_level": "hard",
+                }
+            ],
+        }
+    ],
+}
+
+
+def test_the_creation_form_can_assign_a_role_only_the_template_declares(ui_client):
+    """The UI half of role indirection. This page used to offer a hardcoded
+    <select> of the five platform roles and coerce the submission through
+    Role(), so a v4 template -- whose assignable roles are the ones it
+    DECLARES -- had no selectable value the API would accept and no way to
+    name one. The starter label now reports the binding's member roles and
+    the field passes the string straight through for create_project to
+    validate against that binding."""
+    admin = f"{uuid.uuid4()}@example.com"
+    member = f"{uuid.uuid4()}@example.com"
+    _register_and_login_ui(ui_client, admin)
+    tenant_id = ui_client.post("/orgs", json={"name": "WP13 v4 org"}).json()["id"]
+    tv = ui_client.post(
+        f"/orgs/{tenant_id}/templates/import", json={"name": "WP13 v4 starter", "schema_json": _V4_SCHEMA}
+    ).json()
+    ui_client.post(f"/orgs/{tenant_id}/templates/{tv['template_id']}/versions/{tv['id']}/publish")
+
+    token = ui_client.post(f"/orgs/{tenant_id}/invitations", json={"email": member, "role": "contributor"}).json()[
+        "token"
+    ]
+    _register_and_login_ui(ui_client, member)
+    me = ui_client.get("/auth/me").json()
+    assert me["email"] == member, f"the session is not the invited member: {me}"
+    member_id = me["id"]
+    assert ui_client.post("/invitations/accept", json={"token": token}).status_code == 200
+
+    _login_ui(ui_client, admin)
+    form_page = ui_client.get(f"/ui/orgs/{tenant_id}/projects/new")
+    assert form_page.status_code == 200
+    assert "member roles: developer, product_owner" in form_page.text, (
+        "the form must report what the binding accepts, not a fixed platform list"
+    )
+    assert 'value="assurance_reviewer"' not in form_page.text, (
+        "the hardcoded platform-role options would all be refused by a v4 binding"
+    )
+
+    resp = ui_client.post(
+        f"/ui/orgs/{tenant_id}/projects/new",
+        data={
+            "name": "V4 via UI",
+            "template_version_id": tv["id"],
+            "class_id": "A",
+            "member_user_id": member_id,
+            "member_role": "developer",
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert "There is a problem" not in resp.text, resp.text
+    projects = ui_client.get(f"/orgs/{tenant_id}/projects").json()
+    assert any(p["name"] == "V4 via UI" for p in projects)
+
+
+def test_the_creation_form_surfaces_the_bindings_own_role_rejection(ui_client):
+    """And the other direction: a platform role a v4 binding does not
+    declare is refused with a message naming what IS permitted, which is
+    strictly more useful than the old 'Unrecognised role' this replaced."""
+    admin = f"{uuid.uuid4()}@example.com"
+    member = f"{uuid.uuid4()}@example.com"
+    _register_and_login_ui(ui_client, admin)
+    tenant_id = ui_client.post("/orgs", json={"name": "WP13 v4 reject org"}).json()["id"]
+    tv = ui_client.post(
+        f"/orgs/{tenant_id}/templates/import", json={"name": "WP13 v4 starter", "schema_json": _V4_SCHEMA}
+    ).json()
+    ui_client.post(f"/orgs/{tenant_id}/templates/{tv['template_id']}/versions/{tv['id']}/publish")
+
+    token = ui_client.post(f"/orgs/{tenant_id}/invitations", json={"email": member, "role": "contributor"}).json()[
+        "token"
+    ]
+    _register_and_login_ui(ui_client, member)
+    me = ui_client.get("/auth/me").json()
+    assert me["email"] == member, f"the session is not the invited member: {me}"
+    member_id = me["id"]
+    assert ui_client.post("/invitations/accept", json={"token": token}).status_code == 200
+
+    _login_ui(ui_client, admin)
+    resp = ui_client.post(
+        f"/ui/orgs/{tenant_id}/projects/new",
+        data={
+            "name": "V4 bad role",
+            "template_version_id": tv["id"],
+            "class_id": "A",
+            "member_user_id": member_id,
+            "member_role": "approver",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert "There is a problem" in resp.text
+    assert "product_owner" in resp.text, "the error must name the roles this binding does permit"
+    projects = ui_client.get(f"/orgs/{tenant_id}/projects").json()
+    assert not any(p["name"] == "V4 bad role" for p in projects)
 
 
 def test_project_creation_rejects_unknown_class_without_creating_a_partial_project(ui_client):

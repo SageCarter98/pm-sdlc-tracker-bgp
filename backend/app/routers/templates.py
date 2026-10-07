@@ -107,6 +107,12 @@ class PublishedVersionOut(BaseModel):
     version_id: str
     version_number: int
     classes: list[str]
+    # Which project roles a member may hold under THIS binding, because
+    # the answer stopped being a constant at vocabulary 4: a v4 template
+    # declares its own assignable roles, and create_project validates
+    # against exactly this set. The form cannot offer a fixed list of
+    # platform roles any more without offering roles the API will refuse.
+    member_roles: list[str]
 
 
 @router.get("/published", response_model=list[PublishedVersionOut])
@@ -141,6 +147,11 @@ def list_published_versions(
                 version_id=version.id,
                 version_number=version.version_number,
                 classes=schema.classes,
+                member_roles=(
+                    sorted(schema.role_lookup())
+                    if schema.vocabulary_version >= 4
+                    else sorted(role.value for role in Role)
+                ),
             )
         )
     return out

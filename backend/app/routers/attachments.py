@@ -28,7 +28,12 @@ from app.core.config import settings
 from app.db import get_db
 from app.deps import get_active_membership
 from app.models import EvidenceAttachment, EvidenceItem, Membership
-from app.routers.projects import _require_permitted_to_attest, _require_project_member
+from app.routers.projects import (
+    _get_owned_project_or_404,
+    _load_bound_schema,
+    _require_permitted_to_attest,
+    _require_project_member,
+)
 
 router = APIRouter(tags=["attachments"])
 
@@ -99,7 +104,9 @@ async def upload_attachment(
     # displacement was attributed and reversible (nothing is deleted), which
     # is why this is not higher than Medium -- but the active evidence a
     # reviewer sees should not be swappable by a non-permitted role.
-    _require_permitted_to_attest(item, pm, membership)
+    project = _get_owned_project_or_404(db, tenant_id, item.project_id)
+    schema = _load_bound_schema(db, tenant_id, project.template_version_id)
+    _require_permitted_to_attest(item, pm, membership, schema)
 
     data = await file.read()
     if len(data) == 0:
