@@ -3461,3 +3461,88 @@ branch's scope, and it needs a decision about whether to hold a scanner
 credential in CI secrets or to add a mocked-transport test that at least
 pins the quarantine logic). Recorded so the next person does not discover it
 the way this branch did — by reconciling two test counts.
+
+## REQ-010's last two schemes probed: `applicability` is fine, `tracks` is inert (2026-10-10)
+
+The REQ/TST audit left one question of its own unanswered — REQ-010 names
+**seven** schemes (tracks, gates, classification, role, status, decision,
+applicability) and TST-010 verifies three, so were the two never-checked ones
+honoured or not? Probed now, and they **split**, which is why both halves are
+written down rather than one headline.
+
+**`applicability` is honoured — no defect.** It is a real rule-level
+`Condition` (`rule_engine.py`'s `Rule.applicability`), evaluated against
+`class_id` at project creation (`routers/projects.py`: `if
+rule.applicability is not None and not evaluate_condition(rule.applicability,
+{"class_id": class_id}, as_at=as_at)`), counted in the node budget alongside
+`conditions`, and covered by DEC07's `as_at` fail-closed path for
+date-comparing rules. Recorded explicitly so nobody spends the probe again:
+this one was a false lead, and it is the second time this audit's mechanical
+ranking pointed somewhere real work was already done.
+
+**`tracks` is inert — the third field of REQ-010's list to fail the same way**
+as statuses (DEC07-Q11) and roles. Required of the author
+(`tracks: list[str] = Field(min_length=1)`, and `tracks: str = Form(...)` in
+the guided form), validated, echoed in the editor, rendered on the version
+page — and **consumed by nothing**. Exhaustive grep of `backend/app/` returns
+exactly **8** references, every one of them declaration, parse or display.
+There is no `track_lookup()` beside `status_lookup()`/`outcome_lookup()`/
+`role_lookup()`. **`GateDefinition` has no `track` field at all.**
+`models.py` carries no track column on any table. No validation
+cross-references gates against declared tracks the way `permitted_role_ids`
+is checked against declared `roles`.
+
+**Two shipped fixtures assert a structure the engine cannot represent:**
+`standard.json` declares `["Delivery", "Assurance"]` across 4 gates;
+`regulated.json` declares `["Delivery", "Assurance", "Compliance"]` across 6.
+A gate cannot be assigned to any of them, so a multi-track framework
+collapses to a flat gate list.
+
+**Rated Low, deliberately below its two siblings, and the reason matters.**
+Statuses broke readiness evaluation; roles failed attestation authority
+**open**. `tracks` drives no behaviour at all — nothing is mis-evaluated, no
+control is bypassed, no gate decision is affected, no data is lost. It is a
+required field that is inert. What keeps it off Negligible is specific: this
+product exists to run the PM (Gates 1-7) and SDLC (G0-G6) sequences **side by
+side** — the PM Framework's own Appendix I reconciles exactly two tracks, and
+the `pm-sdlc-tracker` CLI renders a `track` column — so the one structure the
+product is built to express is the structure a template cannot currently
+express. Recorded as functional/representational, **not** as a control
+failure, and not inflated to match the siblings it resembles.
+
+**Not fixed, and for the same reason the role vocabulary was a two-step job.**
+Binding gates to tracks changes the **versioned template contract**, and
+template versions are immutable under REQ-011, so a naive required `track` on
+`GateDefinition` would invalidate every already-published template. The two
+honest options are a `vocabulary_version`-gated optional `track` (the
+mechanism DEC07 and the role work both used), or a decision that `tracks` is
+presentational metadata and should be **documented as such rather than
+implemented** — a legitimate and much cheaper answer. Which it is, is an
+owner's design call, exactly as the REQ-017 row was.
+
+**No test committed, deliberately.** There is no behaviour to assert, and a
+test pinning today's state would assert that a required field does nothing —
+pinning in the gap if the answer turns out to be the gated binding.
+Independent confirmation that TST-010 never covered this: all 15 `tracks`
+occurrences across `backend/tests/` are fixture literals satisfying the
+required field; not one asserts track behaviour.
+
+**What this does NOT close, and why the WP05 row stays Open.** All seven of
+REQ-010's schemes are now accounted for (six honoured, one not), so the
+audit's own question is answered. What remains is the documentation half
+alone: whether TST-008's and TST-010's verify *text* should be corrected to
+name which surfaces they cover. **That is not an agent's edit to make.**
+`docs/blueprint/Requirements_Catalogue.json` is an approved, controlled
+blueprint artefact (APR-001, 2026-09-15); correcting a requirement's verify
+text changes an approved document and needs the owner's authority, not a
+convenient in-place fix. Flagged, not done.
+
+**Merge note on PR #19.** Approved by `kenAddme` and merged as `1e05b31`.
+Recorded precisely: that is the **delivery lead's** approval — the authority
+who instructed the work — and **not** the independent review. `TRACKER.md`'s
+own "Named roles" names Milton as independent reviewer, and the PM
+Framework's Section 3.3 bars self-approval, so every register row's
+"Not reviewed" cell stays as written. A merged PR with an APPROVED review is
+not independent assurance and must not be cited as satisfying one.
+
+**No gate decision.** A probe and two register writes.
