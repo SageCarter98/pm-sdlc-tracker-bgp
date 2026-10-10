@@ -147,6 +147,9 @@ def test_ordinary_write_budget_evidence_revision(pg_client):
                 "status": "In progress",
                 "reference": f"doc-{counter['revision']}",
                 "source_hash": "sha256:x",
+                "owner_user_id": None,
+                "due_date": None,
+                "completed_date": None,
             },
         )
         assert resp.status_code == 201, resp.text

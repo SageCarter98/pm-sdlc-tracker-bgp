@@ -156,7 +156,17 @@ def project_with_regulated_roles(client):
 
 
 def _submit(client, tenant_id, item_id, base_revision=1, **extra):
-    body = {"base_revision": base_revision, "status": "Complete", "reference": "https://ci.example/run/1"}
+    # owner_user_id/due_date/completed_date are restated as None rather than
+    # omitted (the complete-statement contract); `extra` still overrides any
+    # of them for the tests that set an owner deliberately.
+    body = {
+        "base_revision": base_revision,
+        "status": "Complete",
+        "owner_user_id": None,
+        "due_date": None,
+        "completed_date": None,
+        "reference": "https://ci.example/run/1",
+    }
     body.update(extra)
     return client.post(f"/orgs/{tenant_id}/evidence/{item_id}/revisions", json=body)
 

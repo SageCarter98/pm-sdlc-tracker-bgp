@@ -78,7 +78,15 @@ def test_round_trip_import_recreates_current_state_with_matched_actor(client):
     s1_item_id = next(e["id"] for e in created["evidence_items"] if e["gate_id"] == "S1")
     client.post(
         f"/orgs/{tenant_a}/evidence/{s1_item_id}/revisions",
-        json={"base_revision": 1, "status": "Complete", "reference": "doc-1", "source_hash": "x"},
+        json={
+            "base_revision": 1,
+            "status": "Complete",
+            "reference": "doc-1",
+            "source_hash": "x",
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     archive = client.post(f"/orgs/{tenant_a}/exports").json()["archive"]
 
@@ -181,11 +189,27 @@ def test_full_evidence_revision_history_survives_import(client):
 
     client.post(
         f"/orgs/{tenant_a}/evidence/{s1_item_id}/revisions",
-        json={"base_revision": 1, "status": "Complete", "reference": "doc-1", "source_hash": "sha256:v1"},
+        json={
+            "base_revision": 1,
+            "status": "Complete",
+            "reference": "doc-1",
+            "source_hash": "sha256:v1",
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     client.post(
         f"/orgs/{tenant_a}/evidence/{s1_item_id}/revisions",
-        json={"base_revision": 2, "status": "Complete", "reference": "doc-2", "source_hash": "sha256:v2"},
+        json={
+            "base_revision": 2,
+            "status": "Complete",
+            "reference": "doc-2",
+            "source_hash": "sha256:v2",
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     archive = client.post(f"/orgs/{tenant_a}/exports").json()["archive"]
 
@@ -241,7 +265,15 @@ def test_unmatched_revision_author_and_timestamp_survive_reexport(client):
 
     client.post(
         f"/orgs/{tenant_a}/evidence/{s1_item_id}/revisions",
-        json={"base_revision": 1, "status": "Complete", "reference": "doc-1", "source_hash": "sha256:v1"},
+        json={
+            "base_revision": 1,
+            "status": "Complete",
+            "reference": "doc-1",
+            "source_hash": "sha256:v1",
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     archive = client.post(f"/orgs/{tenant_a}/exports").json()["archive"]
     original_item = next(
@@ -321,6 +353,8 @@ def test_decision_exception_and_compensating_review_preserved_through_second_exp
             "owner_user_id": admin_id,
             "reference": "doc-1",
             "source_hash": "x",
+            "due_date": None,
+            "completed_date": None,
         },
     )
     preview = client.post(f"/orgs/{tenant_a}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={})

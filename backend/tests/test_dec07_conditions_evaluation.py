@@ -84,7 +84,14 @@ def _preview(client, tenant_id, created):
 def _meet(client, tenant_id, item):
     resp = client.post(
         f"/orgs/{tenant_id}/evidence/{item['id']}/revisions",
-        json={"base_revision": 1, "status": "Met", "reference": "note-1"},
+        json={
+            "base_revision": 1,
+            "status": "Met",
+            "reference": "note-1",
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     assert resp.status_code == 201, resp.text
 
@@ -95,7 +102,14 @@ def _waive(client, tenant_id, item):
     shape that must stay out of a sibling's facts."""
     resp = client.post(
         f"/orgs/{tenant_id}/evidence/{item['id']}/revisions",
-        json={"base_revision": 1, "status": "Waived", "reference": "note-1"},
+        json={
+            "base_revision": 1,
+            "status": "Waived",
+            "reference": "note-1",
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     assert resp.status_code == 201, resp.text
 
@@ -184,7 +198,14 @@ def test_conditions_are_not_evaluated_for_a_v2_template(client):
 
     resp = client.post(
         f"/orgs/{tenant_id}/evidence/{items['dod.summary']['id']}/revisions",
-        json={"base_revision": 1, "status": "Complete", "reference": "note-1"},
+        json={
+            "base_revision": 1,
+            "status": "Complete",
+            "reference": "note-1",
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     assert resp.status_code == 201, resp.text
     assert items["dod.summary"]["id"] not in _preview(client, tenant_id, project)["hard_blockers"], (

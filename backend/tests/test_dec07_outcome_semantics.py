@@ -22,7 +22,14 @@ def ready_v3(client):
     item = project["evidence_items"][0]
     resp = client.post(
         f"/orgs/{tenant_id}/evidence/{item['id']}/revisions",
-        json={"base_revision": 1, "status": "Met", "reference": "https://ci/1"},
+        json={
+            "base_revision": 1,
+            "status": "Met",
+            "reference": "https://ci/1",
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     assert resp.status_code == 201, resp.text
     return tenant_id, project
@@ -78,7 +85,14 @@ def test_an_approving_outcome_can_actually_be_recorded(client):
     item = project["evidence_items"][0]
     resp = client.post(
         f"/orgs/{tenant_id}/evidence/{item['id']}/revisions",
-        json={"base_revision": 1, "status": "Met", "reference": "https://ci/1"},
+        json={
+            "base_revision": 1,
+            "status": "Met",
+            "reference": "https://ci/1",
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     assert resp.status_code == 201, resp.text
 

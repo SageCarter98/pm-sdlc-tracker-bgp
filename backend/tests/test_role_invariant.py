@@ -58,7 +58,14 @@ def test_a_declared_decider_whose_tenant_role_cannot_decide_is_still_refused(cli
         assert (
             client.post(
                 f"/orgs/{tenant_id}/evidence/{item['id']}/revisions",
-                json={"base_revision": 1, "status": "Met", "reference": "https://ci.example/run/1"},
+                json={
+                    "base_revision": 1,
+                    "status": "Met",
+                    "reference": "https://ci.example/run/1",
+                    "owner_user_id": None,
+                    "due_date": None,
+                    "completed_date": None,
+                },
             ).status_code
             == 201
         ), item

@@ -533,9 +533,21 @@ def evidence_submit_revision(
     # create_evidence_revision itself).
     project = projects_router._get_owned_project_or_404(db, tenant_id, detail.item.project_id)
     schema = projects_router._load_bound_schema(db, tenant_id, project.template_version_id)
+    # Owner and dates are restated from the item's CURRENT state, not left
+    # out: a revision is a complete statement of the mirrored fields (see
+    # CreateEvidenceRevisionRequest), and this form edits only status and
+    # reference. Omitting them is what made every UI submit silently clear
+    # the item's owner_user_id, due_date and completed_date -- the live
+    # instance of the register row settled on 2026-10-08. Carrying them
+    # forward preserves the fields the form never asked the user about,
+    # while the required-field contract makes a future omission here a
+    # loud failure instead of a silent wipe.
     payload = projects_router.CreateEvidenceRevisionRequest(
         base_revision=detail.item.latest_revision_number,
         status=status_value,
+        owner_user_id=detail.item.owner_user_id,
+        due_date=detail.item.due_date,
+        completed_date=detail.item.completed_date,
         reference=reference or None,
     )
     try:
