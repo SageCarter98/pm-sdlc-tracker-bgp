@@ -3321,3 +3321,102 @@ the audit's result rather than closed.
 
 **No gate decision.** An audit, a probe, and two register writes. No
 `tracker_cli.py` invocation of any kind.
+
+## The REQ-017 finding, decided and fixed: a revision is a complete statement (2026-10-10)
+
+The REQ/TST audit above left exactly one thing for an owner rather than an
+agent: **which of two readings the owner/due/completed clearing actually
+was** — a missing partial-update semantic, or an undocumented
+complete-statement contract. The audit deliberately refused to pick, and
+deliberately committed no test, because a test asserting the *current*
+behaviour would have pinned in whichever semantic turned out to be
+unintended.
+
+**The decision (owner, 2026-10-08): the second.** `EvidenceItem` mirroring
+the latest `EvidenceRevision` is intended. A revision *is* a whole statement
+of the item's state, and `None` legitimately means "no owner"/"no date". So
+the mirroring was never the defect. The defect was that
+`CreateEvidenceRevisionRequest` let a caller **omit** those fields and still
+receive a 201 — losing ownership and dates by accident rather than by
+instruction.
+
+**The fix is therefore a contract, not a behaviour change.** The four
+mirrored fields (`owner_user_id`, `due_date`, `completed_date`, `reference`)
+are now **required and still nullable**: clearing stays available to a caller
+who says so, and omitting is refused 422 naming the field.
+`source_version` and `source_hash` stay optional — they are recorded on the
+revision and never mirrored onto the item, so they are outside the contract,
+and a test pins that they were not swept into it. The contract is documented
+on the request model itself, which is the half of the register row's
+complaint that documentation rather than code had to answer.
+
+**Making the fields required immediately found a second, live defect — the
+more serious one.** `webapp/router.py`'s evidence-submit handler, UI04's
+Submit button and the endpoint's actual production caller, built its payload
+from `status` and `reference` alone. So **every browser evidence submission
+had been clearing the item's owner and both dates**, which makes the
+register row's "silent" rating understated: this was not a latent API
+sharp edge, it was the default path. The form now restates the owner and
+dates it does not itself edit. Worth naming plainly: a required-field
+contract converted a silent production data loss into a loud failure within
+one test run, which is the whole argument for the owner's choice over a
+`None`-means-keep patch.
+
+**Nine tests, written RED first** (`test_revision_complete_statement.py`;
+the five omission cases returned 201 and mirrored `None` before the change —
+the probe the register row recorded, now committed as a test). Both
+directions are covered, not just the refusal: each of the four fields
+parametrised separately so a default silently reappearing on any one of them
+fails on its own; a refused revision leaves owner, due date and
+`latest_revision_number` untouched (a refusal that still mutated would be
+worse than the defect it replaces); an explicit `null` **still clears**, so
+the fix is not a narrowing dressed up as validation; a complete revision
+carries owner and dates forward, which is REQ-017's actual requirement; and
+the UI submit path keeps the owner and due date while still applying the
+`reference` its form does edit.
+
+**The breaking change was settled across the suite, not suppressed.** ~47
+request literals in 13 existing test files plus the one production call site
+were made explicit. The transform was checked mechanically rather than by
+eye: parsing every dict literal in all 14 modified test files, old versus
+new, and normalising away mirrored keys whose value is exactly `None`, leaves
+the two sides **identical** — so no test's subject changed, every added value
+is an explicit statement of what that payload was already getting by
+default.
+
+**Verified: the whole suite, chunked.** Two files per pytest process (3.46GB
+RAM): **26 chunks, 387 passed, no skips**. One red, and it is **not** this
+change — `test_dec08_performance_budgets.py::test_decision_write_budget_hold_and_supersede`
+breached its latency budget while sharing a process with `test_decisions.py`,
+the load-dependent false-red this file already documents above ("this machine
+can produce a false-red budget check under load", with the standing
+instruction to run that file alone). Re-run alone per that protocol: **3
+passed in 27s**, against 212s for the paired chunk — so 388 distinct tests
+green. The budget was not loosened and no retry or skip was added, matching
+how the earlier instance was handled. `ruff check` and `ruff format` clean.
+
+**`docs/openapi.json` regenerated, and what that exposed.** The contract
+change is a router change, and `docs/api-reference.md` carries a standing
+instruction to regenerate the snapshot after any such change. Doing so moved
+it from **46 paths / 58 schemas to 92 paths / 84 schemas** — nothing removed.
+Only a few of those are this change; the rest is three weeks of accumulated
+drift from WP11/WP13/WP15, IPA02 and UI09 that nobody regenerated for. That
+drift is not a side effect worth hiding: it is direct evidence for the
+caveat tracker item **#125** already carries, that nothing in CI checks the
+snapshot against the live schema. #125's evidence citation is corrected to
+the new counts and **stays In progress** — the regeneration fixes the
+staleness, not the gap, and the same drift recurs on the next router change.
+Its closing evidence would be a CI step that fails when snapshot and live
+schema disagree, plus the architecture/data/operational docs that still do
+not exist.
+
+**Register effects.** The REQ-017 row moves to **Closed (2026-10-10)** with
+the decision, the fix, the second defect it found, and the test evidence.
+The **WP05 REQ/TST row stays Open**, narrowed: its REQ-017 arm is now
+decided and fixed, so what remains is the documentation half — whether
+TST-008's and TST-010's verify *text* should name which surfaces they cover,
+plus TST-010's two still-unverified schemes (`applicability`, `tracks`).
+
+**No gate decision.** One evidence-item evidence correction (#125, status
+unchanged at In progress) and two register writes. No `tracker_cli.py gate`
+invocation, and none is implied by a green suite.

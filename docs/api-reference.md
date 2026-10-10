@@ -16,7 +16,7 @@ generates from the code itself — not this file. Two ways to read it:
   ```
 
   Regenerate after any router change — this snapshot is a point-in-time
-  export (46 paths as of 2026-09-19), not a live document, and nothing in CI
+  export (92 paths as of 2026-10-10), not a live document, and nothing in CI
   currently checks it against the actual running schema.
 
 **What this is not**: a hand-written data dictionary, architecture diagram,

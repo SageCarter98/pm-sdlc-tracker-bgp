@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Build Governance Platform",
-    "description": "Local prototype: identity/sessions/MFA/invitations (WP03), PostgreSQL RLS tenant isolation (WP04), versioned templates with a declarative rule interpreter (WP05), projects/evidence revisions with atomic occurrence seeding (WP06), exceptions/decisions with idempotent, append-only recording (WP07), hash-chain integrity checkpoints with incident-blocking (WP08), open-format tenant export/import (WP09 -- full evidence revision history and full decision/exception/compensating-review content, since BGP-F04; decisions/exceptions/audit/integrity-receipts/compensating-reviews stay historical-only, never re-created as live rows on import, but ARE preserved and re-emitted on a later export of the importing tenant -- see ImportedHistoricalRecord), and essential-journey backend support (WP10 -- My work with reason/direct-action, save/resume drafts, plain-language blocker explanations and a permitted-outcomes confirmation summary). No frontend exists yet (DEC04 unresolved) -- REQ-033's guided-form navigation and REQ-039's timezone display/translation are frontend-only concerns this backend cannot satisfy alone. DEC05 (decision durability mechanism) is still unresolved -- decisions here commit atomically to a single local Postgres instance only, and the integrity checkpoint's custody is enforced by this same instance's RLS, not by a genuinely separate system (see IntegrityCheckpoint's docstring). See docs/blueprint/ Section 6 for the delivery sequence. Session mechanism is a prototype signed cookie, not the DEC04-approved design. WP12: secrets moved off hardcoded literals and MFA secrets are now encrypted at rest, security logging covers auth/MFA/invitation events, and CI now runs dependency and secret scans (REQ-045/046/047) -- REQ-043's numeric performance budgets remain DEC08-gated, and a real 99.5% monthly-availability baseline needs production traffic history this prototype has never had; only the measurement mechanism (below) is built. 2026-09-17: BGP_Development_Review_Findings_v1.0.pdf's BGP-F01-F04 fixed -- login only issues a real session after a session-bound second-factor check (app/routers/mfa.py's login-verify), a compensating review is now an authenticated action from the reviewer's own session (CompensatingReview), decision commits and evidence-revision writes take coordinated row locks plus two partial unique indexes close the remaining races (see decisions.py's _compute_readiness/_require_decision_authority docstrings), and export/import gained per-row source_id stability and full historical preservation described above. BGP-F05 (README) fixed the same day. See TRACKER.md for details and the tests proving each one.",
+    "description": "Local prototype: identity/sessions/MFA/invitations (WP03), PostgreSQL RLS tenant isolation (WP04), versioned templates with a declarative rule interpreter (WP05), projects/evidence revisions with atomic occurrence seeding (WP06), exceptions/decisions with idempotent, append-only recording (WP07), hash-chain integrity checkpoints with incident-blocking (WP08), open-format tenant export/import (WP09 -- full evidence revision history and full decision/exception/compensating-review content, since BGP-F04; decisions/exceptions/audit/integrity-receipts/compensating-reviews stay historical-only, never re-created as live rows on import, but ARE preserved and re-emitted on a later export of the importing tenant -- see ImportedHistoricalRecord), and essential-journey backend support (WP10 -- My work with reason/direct-action, save/resume drafts, plain-language blocker explanations and a permitted-outcomes confirmation summary), and a first real frontend (WP11, 2026-09-20 -- DEC04 resolved: server-rendered HTML via app/webapp/, same-origin, reusing this same session cookie; login/MFA, an org picker, and the five essential journeys are real pages now -- REQ-039's timezone display/translation remains a frontend gap this first increment does not close). DEC05 (decision durability mechanism) is still unresolved -- decisions here commit atomically to a single local Postgres instance only, and the integrity checkpoint's custody is enforced by this same instance's RLS, not by a genuinely separate system (see IntegrityCheckpoint's docstring). See docs/blueprint/ Section 6 for the delivery sequence. Session mechanism is the same signed cookie used since WP03 -- DEC04 (2026-09-20) kept it as-is rather than introducing a new one. WP12: secrets moved off hardcoded literals and MFA secrets are now encrypted at rest, security logging covers auth/MFA/invitation events, and CI now runs dependency and secret scans (REQ-045/046/047) -- REQ-043's numeric performance budgets remain DEC08-gated, and a real 99.5% monthly-availability baseline needs production traffic history this prototype has never had; only the measurement mechanism (below) is built. 2026-09-17: BGP_Development_Review_Findings_v1.0.pdf's BGP-F01-F04 fixed -- login only issues a real session after a session-bound second-factor check (app/routers/mfa.py's login-verify), a compensating review is now an authenticated action from the reviewer's own session (CompensatingReview), decision commits and evidence-revision writes take coordinated row locks plus two partial unique indexes close the remaining races (see decisions.py's _compute_readiness/_require_decision_authority docstrings), and export/import gained per-row source_id stability and full historical preservation described above. BGP-F05 (README) fixed the same day. See TRACKER.md for details and the tests proving each one.",
     "version": "0.1.0-bgp-remediation"
   },
   "paths": {
@@ -668,6 +668,60 @@
         }
       }
     },
+    "/me/orgs": {
+      "get": {
+        "tags": [
+          "orgs"
+        ],
+        "summary": "My Orgs",
+        "description": "WP11 frontend entry point: which organisations can this user act in,\nbefore any tenant_id is known to put in a URL -- get_active_membership\ncan't help here, it requires a tenant_id already claimed. Uses migration\n0015's narrow self-lookup policy (see there for why the ordinary\nper-tenant RLS policy structurally can't answer this in one query).\n`tenants` itself carries no RLS (it isn't tenant-owned data, see WP04\nmigration's TENANT_OWNED_TABLES), so the name lookup needs no context.",
+        "operationId": "my_orgs_me_orgs_get",
+        "parameters": [
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MyOrgOut"
+                  },
+                  "title": "Response My Orgs Me Orgs Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/orgs/{tenant_id}/approval-gate-check": {
       "get": {
         "tags": [
@@ -774,6 +828,152 @@
                     "$ref": "#/components/schemas/AccessReviewEntryOut"
                   },
                   "title": "Response Access Review Orgs  Tenant Id  Access Review Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/memberships/{membership_id}/role": {
+      "post": {
+        "tags": [
+          "orgs"
+        ],
+        "summary": "Change Membership Role",
+        "description": "UI10/FE-014: role changes are a tenant_administrator-only operation\n(docs/DEFECT_REGISTER.md IPA02 -- previously unbuilt). Never allowed to\nleave a tenant with zero active administrators: nobody would be left who\ncould ever undo it, invite anyone else, or run the next access review.",
+        "operationId": "change_membership_role_orgs__tenant_id__memberships__membership_id__role_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "membership_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Membership Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleChangeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessReviewEntryOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/memberships/{membership_id}/revoke": {
+      "post": {
+        "tags": [
+          "orgs"
+        ],
+        "summary": "Revoke Membership",
+        "description": "UI10/FE-014 (docs/DEFECT_REGISTER.md IPA02 -- previously unbuilt).\nRevocation never deletes the row -- same pattern as REQ-021's exception\nrevoke -- so access-review's own 'includes inactive memberships too'\nclaim stays true after a real revocation happens through this endpoint,\nnot just when a row is seeded inactive directly in a test.",
+        "operationId": "revoke_membership_orgs__tenant_id__memberships__membership_id__revoke_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "membership_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Membership Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessReviewEntryOut"
                 }
               }
             }
@@ -903,6 +1103,141 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TemplateVersionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/templates/published": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "List Published Versions",
+        "description": "WP13 UI02 (First project creation): the create-project form needs a\nstarter picker with each starter's applicable classes (REQ-021,\n'explain available licensed starters'). Same visibility rule as\nlist_templates/_load_bound_schema (own tenant + shared platform\nstarters), scoped to published versions only -- a draft can't be bound\nto a project (projects.py's _load_bound_schema rejects it).",
+        "operationId": "list_published_versions_orgs__tenant_id__templates_published_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PublishedVersionOut"
+                  },
+                  "title": "Response List Published Versions Orgs  Tenant Id  Templates Published Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/templates/{template_id}/versions": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "List Template Versions",
+        "description": "UI08: only get-by-id existed before -- the guided authoring page\nneeds a template's full version history (which draft is current, which\nversions are already published) to render its list/editor pages.",
+        "operationId": "list_template_versions_orgs__tenant_id__templates__template_id__versions_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TemplateVersionOut"
+                  },
+                  "title": "Response List Template Versions Orgs  Tenant Id  Templates  Template Id  Versions Get"
                 }
               }
             }
@@ -1433,6 +1768,76 @@
       }
     },
     "/orgs/{tenant_id}/projects/{project_id}/occurrences": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "List Occurrences",
+        "description": "Return the project-scoped gate occurrences in display order.\n\nThe webapp gate dashboard calls this function directly so it shares the\nsame project-membership and tenant scoping as the JSON API rather than\nreimplementing an occurrence query in the page route.",
+        "operationId": "list_occurrences_orgs__tenant_id__projects__project_id__occurrences_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OccurrenceOut"
+                  },
+                  "title": "Response List Occurrences Orgs  Tenant Id  Projects  Project Id  Occurrences Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "tags": [
           "projects"
@@ -1852,7 +2257,7 @@
           "decisions"
         ],
         "summary": "Create Decision",
-        "description": "Blueprint Sec.5.4 steps 1-6, 8: authenticate/MFA (dependency), resolve\nproject membership and authority, idempotency check, recompute\nreadiness against current state and reject stale manifests, construct\nand append the decision atomically. Step 7 (DEC05 durability) is\nexplicitly not implemented -- see DecisionRecord's docstring.",
+        "description": "Blueprint Sec.5.4 steps 1-6, 8: authenticate/MFA (dependency), resolve\nproject membership and authority, idempotency check, recompute\nreadiness against current state and reject stale manifests, construct\nand append the decision atomically. Step 7 (DEC05 durability): the\nsynchronous chain-link checkpoint half is now built (_record_decision's\n_checkpoint_this_project call) -- the synchronous cross-zone/cross-\nregion replica confirmation DEC05 also asks for is infra this prototype\ndoesn't have; see the DEC05 design spec's non-goals for what's still\nhonestly unbuilt.",
         "operationId": "create_decision_orgs__tenant_id__projects__project_id__occurrences__occurrence_id__decisions_post",
         "parameters": [
           {
@@ -1993,6 +2398,78 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DecisionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/projects/{project_id}/decisions": {
+      "get": {
+        "tags": [
+          "decisions"
+        ],
+        "summary": "List Decisions",
+        "description": "WP13 UI07 (Audit history & supersession tracker): a project-level\ntimeline needs every decision, not just one looked up by id (the only\nexisting read path, get_decision above). Read-only, membership-gated\nthe same way get_decision already is; each row's own\nsupersedes_decision_id is what lets the page draw the correction chain\n-- no new field, no new write path.",
+        "operationId": "list_decisions_orgs__tenant_id__projects__project_id__decisions_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DecisionOut"
+                  },
+                  "title": "Response List Decisions Orgs  Tenant Id  Projects  Project Id  Decisions Get"
                 }
               }
             }
@@ -2820,6 +3297,67 @@
             }
           }
         }
+      },
+      "get": {
+        "tags": [
+          "export-import"
+        ],
+        "summary": "List Exports",
+        "description": "REQ-031: own-data export history always available. Summary only --\nno archive_json -- a tenant's archive can be large and this list is not\nthe place a caller needs the full content; GET .../exports/{id} still\nreturns that in full.",
+        "operationId": "list_exports_orgs__tenant_id__exports_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExportJobSummaryOut"
+                  },
+                  "title": "Response List Exports Orgs  Tenant Id  Exports Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/orgs/{tenant_id}/exports/{job_id}": {
@@ -2939,6 +3477,69 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ImportJobOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/imports": {
+      "get": {
+        "tags": [
+          "export-import"
+        ],
+        "summary": "List Imports",
+        "description": "Same gate as get_import (any active member) -- validate/commit stay\ntenant_administrator-only, this is read-only history visibility. Unlike\nlist_exports, the full validation/commit report is included per row\n(not excluded like exports' archive_json) -- those reports are small\ncounts/errors summaries, not a full tenant data dump.",
+        "operationId": "list_imports_orgs__tenant_id__imports_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ImportJobOut"
+                  },
+                  "title": "Response List Imports Orgs  Tenant Id  Imports Get"
                 }
               }
             }
@@ -3357,6 +3958,2422 @@
         }
       }
     },
+    "/orgs/{tenant_id}/evidence/{evidence_item_id}/attachments": {
+      "get": {
+        "tags": [
+          "attachments"
+        ],
+        "summary": "List Attachments",
+        "operationId": "list_attachments_orgs__tenant_id__evidence__evidence_item_id__attachments_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "evidence_item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Evidence Item Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AttachmentOut"
+                  },
+                  "title": "Response List Attachments Orgs  Tenant Id  Evidence  Evidence Item Id  Attachments Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "attachments"
+        ],
+        "summary": "Upload Attachment",
+        "operationId": "upload_attachment_orgs__tenant_id__evidence__evidence_item_id__attachments_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "evidence_item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Evidence Item Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_attachment_orgs__tenant_id__evidence__evidence_item_id__attachments_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/orgs/{tenant_id}/attachments/{attachment_id}/download": {
+      "get": {
+        "tags": [
+          "attachments"
+        ],
+        "summary": "Download Attachment",
+        "operationId": "download_attachment_orgs__tenant_id__attachments__attachment_id__download_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "attachment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Attachment Id"
+            }
+          },
+          {
+            "name": "bgp_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Bgp Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/login": {
+      "get": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Login Form",
+        "operationId": "login_form_ui_login_get",
+        "parameters": [
+          {
+            "name": "next",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Next"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Login Submit",
+        "operationId": "login_submit_ui_login_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_login_submit_ui_login_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/mfa/login-verify": {
+      "get": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Mfa Login Verify Form",
+        "operationId": "mfa_login_verify_form_ui_mfa_login_verify_get",
+        "parameters": [
+          {
+            "name": "next",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Next"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Mfa Login Verify Submit",
+        "operationId": "mfa_login_verify_submit_ui_mfa_login_verify_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_mfa_login_verify_submit_ui_mfa_login_verify_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/register": {
+      "get": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Register Form",
+        "operationId": "register_form_ui_register_get",
+        "parameters": [
+          {
+            "name": "next",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Next"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Register Submit",
+        "operationId": "register_submit_ui_register_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_register_submit_ui_register_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/logout": {
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Logout Submit",
+        "operationId": "logout_submit_ui_logout_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/mfa/enroll": {
+      "get": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Mfa Enroll Form",
+        "operationId": "mfa_enroll_form_ui_mfa_enroll_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/mfa/enroll/verify": {
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Mfa Enroll Verify Submit",
+        "operationId": "mfa_enroll_verify_submit_ui_mfa_enroll_verify_post",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_mfa_enroll_verify_submit_ui_mfa_enroll_verify_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/invitations/accept": {
+      "get": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Invitation Accept Page",
+        "description": "REQ-038: the essential invited-user journey. Deliberately GET-only\nfor rendering, never accepting on GET (an accept is a state-changing\naction -- see decide_page/decide_submit's own GET-preview/POST-commit\nsplit for the same reasoning) -- if not signed in yet, this renders a\nlanding page whose sign-in/register links carry `next` back to this\nexact URL (see _safe_next) so completing sign-in returns the user here\nautomatically instead of dropping them at the generic org picker.",
+        "operationId": "invitation_accept_page_ui_invitations_accept_get",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Invitation Accept Submit",
+        "operationId": "invitation_accept_submit_ui_invitations_accept_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_invitation_accept_submit_ui_invitations_accept_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs": {
+      "get": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Orgs Picker",
+        "operationId": "orgs_picker_ui_orgs_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Create Org Submit",
+        "operationId": "create_org_submit_ui_orgs_post",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_create_org_submit_ui_orgs_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/my-work": {
+      "get": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "My Work Page",
+        "operationId": "my_work_page_ui_orgs__tenant_id__my_work_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "status_filter",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status Filter"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/evidence/{evidence_item_id}": {
+      "get": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Evidence Form Page",
+        "operationId": "evidence_form_page_ui_orgs__tenant_id__evidence__evidence_item_id__get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "evidence_item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Evidence Item Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/evidence/{evidence_item_id}/draft": {
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Evidence Save Draft",
+        "operationId": "evidence_save_draft_ui_orgs__tenant_id__evidence__evidence_item_id__draft_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "evidence_item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Evidence Item Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_evidence_save_draft_ui_orgs__tenant_id__evidence__evidence_item_id__draft_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/evidence/{evidence_item_id}/submit": {
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Evidence Submit Revision",
+        "operationId": "evidence_submit_revision_ui_orgs__tenant_id__evidence__evidence_item_id__submit_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "evidence_item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Evidence Item Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_evidence_submit_revision_ui_orgs__tenant_id__evidence__evidence_item_id__submit_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/evidence/{evidence_item_id}/attachments": {
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Evidence Upload Attachment",
+        "operationId": "evidence_upload_attachment_ui_orgs__tenant_id__evidence__evidence_item_id__attachments_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "evidence_item_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Evidence Item Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_evidence_upload_attachment_ui_orgs__tenant_id__evidence__evidence_item_id__attachments_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/projects/{project_id}/occurrences/{occurrence_id}/decide": {
+      "get": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Decide Page",
+        "operationId": "decide_page_ui_orgs__tenant_id__projects__project_id__occurrences__occurrence_id__decide_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "occurrence_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Occurrence Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Decide Submit",
+        "operationId": "decide_submit_ui_orgs__tenant_id__projects__project_id__occurrences__occurrence_id__decide_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "occurrence_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Occurrence Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_decide_submit_ui_orgs__tenant_id__projects__project_id__occurrences__occurrence_id__decide_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/projects/new": {
+      "get": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Project New Form",
+        "operationId": "project_new_form_ui_orgs__tenant_id__projects_new_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Project New Submit",
+        "operationId": "project_new_submit_ui_orgs__tenant_id__projects_new_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_project_new_submit_ui_orgs__tenant_id__projects_new_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/projects/{project_id}/gates": {
+      "get": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Gate Dashboard Page",
+        "operationId": "gate_dashboard_page_ui_orgs__tenant_id__projects__project_id__gates_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/projects/{project_id}/history": {
+      "get": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Project History Page",
+        "operationId": "project_history_page_ui_orgs__tenant_id__projects__project_id__history_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/settings": {
+      "get": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Settings Page",
+        "operationId": "settings_page_ui_orgs__tenant_id__settings_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/settings/invitations": {
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Settings Invite Submit",
+        "operationId": "settings_invite_submit_ui_orgs__tenant_id__settings_invitations_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_settings_invite_submit_ui_orgs__tenant_id__settings_invitations_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/settings/memberships/{membership_id}/revoke": {
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Settings Revoke Submit",
+        "description": "IPA02: the UI counterpart to orgs.py's revoke_membership -- settings.html\nused to say no such control existed at all.",
+        "operationId": "settings_revoke_submit_ui_orgs__tenant_id__settings_memberships__membership_id__revoke_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "membership_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Membership Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/settings/memberships/{membership_id}/role": {
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Settings Role Submit",
+        "description": "IPA02: the UI counterpart to orgs.py's change_membership_role -- same\ngap settings_revoke_submit closes for revocation.",
+        "operationId": "settings_role_submit_ui_orgs__tenant_id__settings_memberships__membership_id__role_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "membership_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Membership Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_settings_role_submit_ui_orgs__tenant_id__settings_memberships__membership_id__role_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/export-import": {
+      "get": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Export Import Page",
+        "operationId": "export_import_page_ui_orgs__tenant_id__export_import_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/export-import/exports": {
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Export Import Create Export",
+        "description": "REQ-031: any active member, no role gate -- same as exports.py's own\ncreate_export.",
+        "operationId": "export_import_create_export_ui_orgs__tenant_id__export_import_exports_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/export-import/exports/{job_id}/download": {
+      "get": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Export Import Download",
+        "operationId": "export_import_download_ui_orgs__tenant_id__export_import_exports__job_id__download_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/export-import/imports/validate": {
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Export Import Validate Submit",
+        "description": "FE-070: validated in quarantine (exports.py's validate_import creates\nan ImportJob row, nothing live) before any commit is possible.",
+        "operationId": "export_import_validate_submit_ui_orgs__tenant_id__export_import_imports_validate_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_export_import_validate_submit_ui_orgs__tenant_id__export_import_imports_validate_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/export-import/imports/{job_id}/commit": {
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Export Import Commit Submit",
+        "description": "FE-072: explicit, separate commit action -- never implied by\nvalidation alone.",
+        "operationId": "export_import_commit_submit_ui_orgs__tenant_id__export_import_imports__job_id__commit_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/templates": {
+      "get": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Templates List Page",
+        "operationId": "templates_list_page_ui_orgs__tenant_id__templates_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Templates Create Submit",
+        "description": "REQ-012/AC08: blank guided creation -- no JSON typed by the caller at\nall, same as create_template's own blank-default path.",
+        "operationId": "templates_create_submit_ui_orgs__tenant_id__templates_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_templates_create_submit_ui_orgs__tenant_id__templates_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/templates/import": {
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Templates Import Submit",
+        "operationId": "templates_import_submit_ui_orgs__tenant_id__templates_import_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_templates_import_submit_ui_orgs__tenant_id__templates_import_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/templates/{template_id}/versions/{version_id}/fork": {
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Templates Fork Submit",
+        "operationId": "templates_fork_submit_ui_orgs__tenant_id__templates__template_id__versions__version_id__fork_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/templates/{template_id}/versions/{version_id}": {
+      "get": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Template Editor Page",
+        "operationId": "template_editor_page_ui_orgs__tenant_id__templates__template_id__versions__version_id__get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/templates/{template_id}/versions/{version_id}/metadata": {
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Template Metadata Submit",
+        "operationId": "template_metadata_submit_ui_orgs__tenant_id__templates__template_id__versions__version_id__metadata_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_template_metadata_submit_ui_orgs__tenant_id__templates__template_id__versions__version_id__metadata_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/templates/{template_id}/versions/{version_id}/gates": {
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Template Add Gate Submit",
+        "operationId": "template_add_gate_submit_ui_orgs__tenant_id__templates__template_id__versions__version_id__gates_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_template_add_gate_submit_ui_orgs__tenant_id__templates__template_id__versions__version_id__gates_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/templates/{template_id}/versions/{version_id}/gates/{gate_id}/remove": {
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Template Remove Gate Submit",
+        "operationId": "template_remove_gate_submit_ui_orgs__tenant_id__templates__template_id__versions__version_id__gates__gate_id__remove_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version Id"
+            }
+          },
+          {
+            "name": "gate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Gate Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/templates/{template_id}/versions/{version_id}/gates/{gate_id}/rules": {
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Template Add Rule Submit",
+        "operationId": "template_add_rule_submit_ui_orgs__tenant_id__templates__template_id__versions__version_id__gates__gate_id__rules_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version Id"
+            }
+          },
+          {
+            "name": "gate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Gate Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_template_add_rule_submit_ui_orgs__tenant_id__templates__template_id__versions__version_id__gates__gate_id__rules_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/templates/{template_id}/versions/{version_id}/gates/{gate_id}/rules/{rule_id}/remove": {
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Template Remove Rule Submit",
+        "operationId": "template_remove_rule_submit_ui_orgs__tenant_id__templates__template_id__versions__version_id__gates__gate_id__rules__rule_id__remove_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version Id"
+            }
+          },
+          {
+            "name": "gate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Gate Id"
+            }
+          },
+          {
+            "name": "rule_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rule Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/templates/{template_id}/versions/{version_id}/raw": {
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Template Raw Edit Submit",
+        "description": "The escape hatch: full nested all/any conditions, applicability, or\nany other schema shape the guided forms above don't cover. Still goes\nthrough update_draft's real validation -- never a bypass, just a\ndifferent input method for the same validated write.",
+        "operationId": "template_raw_edit_submit_ui_orgs__tenant_id__templates__template_id__versions__version_id__raw_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_template_raw_edit_submit_ui_orgs__tenant_id__templates__template_id__versions__version_id__raw_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/orgs/{tenant_id}/templates/{template_id}/versions/{version_id}/publish": {
+      "post": {
+        "tags": [
+          "webapp"
+        ],
+        "summary": "Template Publish Submit",
+        "operationId": "template_publish_submit_ui_orgs__tenant_id__templates__template_id__versions__version_id__publish_post",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "summary": "Healthz",
@@ -3414,6 +6431,10 @@
       },
       "AccessReviewEntryOut": {
         "properties": {
+          "membership_id": {
+            "type": "string",
+            "title": "Membership Id"
+          },
           "user_id": {
             "type": "string",
             "title": "User Id"
@@ -3438,6 +6459,7 @@
         },
         "type": "object",
         "required": [
+          "membership_id",
           "user_id",
           "email",
           "role",
@@ -3445,6 +6467,65 @@
           "member_since"
         ],
         "title": "AccessReviewEntryOut"
+      },
+      "AttachmentOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "evidence_item_id": {
+            "type": "string",
+            "title": "Evidence Item Id"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "content_type": {
+            "type": "string",
+            "title": "Content Type"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes"
+          },
+          "checksum_sha256": {
+            "type": "string",
+            "title": "Checksum Sha256"
+          },
+          "scan_status": {
+            "type": "string",
+            "title": "Scan Status"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "uploaded_by_user_id": {
+            "type": "string",
+            "title": "Uploaded By User Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "evidence_item_id",
+          "filename",
+          "content_type",
+          "size_bytes",
+          "checksum_sha256",
+          "scan_status",
+          "status",
+          "uploaded_by_user_id",
+          "created_at"
+        ],
+        "title": "AttachmentOut"
       },
       "BlockerExplanation": {
         "properties": {
@@ -3478,6 +6559,515 @@
           "corrective_action"
         ],
         "title": "BlockerExplanation"
+      },
+      "Body_create_org_submit_ui_orgs_post": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "Body_create_org_submit_ui_orgs_post"
+      },
+      "Body_decide_submit_ui_orgs__tenant_id__projects__project_id__occurrences__occurrence_id__decide_post": {
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "title": "Outcome"
+          },
+          "manifest_digest": {
+            "type": "string",
+            "title": "Manifest Digest"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "title": "Idempotency Key"
+          },
+          "condition_items": {
+            "type": "string",
+            "title": "Condition Items",
+            "default": ""
+          },
+          "condition_owner_user_id": {
+            "type": "string",
+            "title": "Condition Owner User Id",
+            "default": ""
+          },
+          "condition_deadline": {
+            "type": "string",
+            "title": "Condition Deadline",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "outcome",
+          "manifest_digest",
+          "idempotency_key"
+        ],
+        "title": "Body_decide_submit_ui_orgs__tenant_id__projects__project_id__occurrences__occurrence_id__decide_post"
+      },
+      "Body_evidence_save_draft_ui_orgs__tenant_id__evidence__evidence_item_id__draft_post": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "reference": {
+            "type": "string",
+            "title": "Reference",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "Body_evidence_save_draft_ui_orgs__tenant_id__evidence__evidence_item_id__draft_post"
+      },
+      "Body_evidence_submit_revision_ui_orgs__tenant_id__evidence__evidence_item_id__submit_post": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "reference": {
+            "type": "string",
+            "title": "Reference",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "Body_evidence_submit_revision_ui_orgs__tenant_id__evidence__evidence_item_id__submit_post"
+      },
+      "Body_evidence_upload_attachment_ui_orgs__tenant_id__evidence__evidence_item_id__attachments_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_evidence_upload_attachment_ui_orgs__tenant_id__evidence__evidence_item_id__attachments_post"
+      },
+      "Body_export_import_validate_submit_ui_orgs__tenant_id__export_import_imports_validate_post": {
+        "properties": {
+          "archive_text": {
+            "type": "string",
+            "title": "Archive Text",
+            "default": ""
+          },
+          "archive_file": {
+            "anyOf": [
+              {
+                "type": "string",
+                "contentMediaType": "application/octet-stream"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archive File"
+          }
+        },
+        "type": "object",
+        "title": "Body_export_import_validate_submit_ui_orgs__tenant_id__export_import_imports_validate_post"
+      },
+      "Body_invitation_accept_submit_ui_invitations_accept_post": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "title": "Token"
+          }
+        },
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "title": "Body_invitation_accept_submit_ui_invitations_accept_post"
+      },
+      "Body_login_submit_ui_login_post": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "password": {
+            "type": "string",
+            "title": "Password"
+          },
+          "next": {
+            "type": "string",
+            "title": "Next",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "title": "Body_login_submit_ui_login_post"
+      },
+      "Body_mfa_enroll_verify_submit_ui_mfa_enroll_verify_post": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "title": "Body_mfa_enroll_verify_submit_ui_mfa_enroll_verify_post"
+      },
+      "Body_mfa_login_verify_submit_ui_mfa_login_verify_post": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "next": {
+            "type": "string",
+            "title": "Next",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "title": "Body_mfa_login_verify_submit_ui_mfa_login_verify_post"
+      },
+      "Body_project_new_submit_ui_orgs__tenant_id__projects_new_post": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "template_version_id": {
+            "type": "string",
+            "title": "Template Version Id"
+          },
+          "class_id": {
+            "type": "string",
+            "title": "Class Id"
+          },
+          "member_user_id": {
+            "type": "string",
+            "title": "Member User Id",
+            "default": ""
+          },
+          "member_role": {
+            "type": "string",
+            "title": "Member Role",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "template_version_id",
+          "class_id"
+        ],
+        "title": "Body_project_new_submit_ui_orgs__tenant_id__projects_new_post"
+      },
+      "Body_register_submit_ui_register_post": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "password": {
+            "type": "string",
+            "title": "Password"
+          },
+          "confirm_password": {
+            "type": "string",
+            "title": "Confirm Password"
+          },
+          "next": {
+            "type": "string",
+            "title": "Next",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "email",
+          "password",
+          "confirm_password"
+        ],
+        "title": "Body_register_submit_ui_register_post"
+      },
+      "Body_settings_invite_submit_ui_orgs__tenant_id__settings_invitations_post": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          }
+        },
+        "type": "object",
+        "required": [
+          "email",
+          "role"
+        ],
+        "title": "Body_settings_invite_submit_ui_orgs__tenant_id__settings_invitations_post"
+      },
+      "Body_settings_role_submit_ui_orgs__tenant_id__settings_memberships__membership_id__role_post": {
+        "properties": {
+          "role": {
+            "type": "string",
+            "title": "Role"
+          }
+        },
+        "type": "object",
+        "required": [
+          "role"
+        ],
+        "title": "Body_settings_role_submit_ui_orgs__tenant_id__settings_memberships__membership_id__role_post"
+      },
+      "Body_template_add_gate_submit_ui_orgs__tenant_id__templates__template_id__versions__version_id__gates_post": {
+        "properties": {
+          "gate_id": {
+            "type": "string",
+            "title": "Gate Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "sequence": {
+            "type": "integer",
+            "title": "Sequence"
+          },
+          "class_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Class Ids",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "gate_id",
+          "name",
+          "sequence"
+        ],
+        "title": "Body_template_add_gate_submit_ui_orgs__tenant_id__templates__template_id__versions__version_id__gates_post"
+      },
+      "Body_template_add_rule_submit_ui_orgs__tenant_id__templates__template_id__versions__version_id__gates__gate_id__rules_post": {
+        "properties": {
+          "rule_id": {
+            "type": "string",
+            "title": "Rule Id"
+          },
+          "class_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Class Ids",
+            "default": []
+          },
+          "occurrence_type": {
+            "type": "string",
+            "title": "Occurrence Type"
+          },
+          "evidence_kind": {
+            "type": "string",
+            "title": "Evidence Kind"
+          },
+          "permitted_role_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Permitted Role Ids",
+            "default": []
+          },
+          "blocker_level": {
+            "type": "string",
+            "title": "Blocker Level"
+          },
+          "guidance": {
+            "type": "string",
+            "title": "Guidance",
+            "default": ""
+          },
+          "evidence_example": {
+            "type": "string",
+            "title": "Evidence Example",
+            "default": ""
+          },
+          "cond_combinator": {
+            "type": "string",
+            "title": "Cond Combinator",
+            "default": "single"
+          },
+          "cond1_fact": {
+            "type": "string",
+            "title": "Cond1 Fact",
+            "default": ""
+          },
+          "cond1_op": {
+            "type": "string",
+            "title": "Cond1 Op",
+            "default": ""
+          },
+          "cond1_value": {
+            "type": "string",
+            "title": "Cond1 Value",
+            "default": ""
+          },
+          "cond2_fact": {
+            "type": "string",
+            "title": "Cond2 Fact",
+            "default": ""
+          },
+          "cond2_op": {
+            "type": "string",
+            "title": "Cond2 Op",
+            "default": ""
+          },
+          "cond2_value": {
+            "type": "string",
+            "title": "Cond2 Value",
+            "default": ""
+          },
+          "cond3_fact": {
+            "type": "string",
+            "title": "Cond3 Fact",
+            "default": ""
+          },
+          "cond3_op": {
+            "type": "string",
+            "title": "Cond3 Op",
+            "default": ""
+          },
+          "cond3_value": {
+            "type": "string",
+            "title": "Cond3 Value",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "rule_id",
+          "occurrence_type",
+          "evidence_kind",
+          "blocker_level"
+        ],
+        "title": "Body_template_add_rule_submit_ui_orgs__tenant_id__templates__template_id__versions__version_id__gates__gate_id__rules_post"
+      },
+      "Body_template_metadata_submit_ui_orgs__tenant_id__templates__template_id__versions__version_id__metadata_post": {
+        "properties": {
+          "tracks": {
+            "type": "string",
+            "title": "Tracks"
+          },
+          "classes": {
+            "type": "string",
+            "title": "Classes"
+          },
+          "roles": {
+            "type": "string",
+            "title": "Roles"
+          },
+          "statuses": {
+            "type": "string",
+            "title": "Statuses"
+          },
+          "decision_outcomes": {
+            "type": "string",
+            "title": "Decision Outcomes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tracks",
+          "classes",
+          "roles",
+          "statuses",
+          "decision_outcomes"
+        ],
+        "title": "Body_template_metadata_submit_ui_orgs__tenant_id__templates__template_id__versions__version_id__metadata_post"
+      },
+      "Body_template_raw_edit_submit_ui_orgs__tenant_id__templates__template_id__versions__version_id__raw_post": {
+        "properties": {
+          "schema_text": {
+            "type": "string",
+            "title": "Schema Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "schema_text"
+        ],
+        "title": "Body_template_raw_edit_submit_ui_orgs__tenant_id__templates__template_id__versions__version_id__raw_post"
+      },
+      "Body_templates_create_submit_ui_orgs__tenant_id__templates_post": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "Body_templates_create_submit_ui_orgs__tenant_id__templates_post"
+      },
+      "Body_templates_import_submit_ui_orgs__tenant_id__templates_import_post": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "schema_text": {
+            "type": "string",
+            "title": "Schema Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "schema_text"
+        ],
+        "title": "Body_templates_import_submit_ui_orgs__tenant_id__templates_import_post"
+      },
+      "Body_upload_attachment_orgs__tenant_id__evidence__evidence_item_id__attachments_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_attachment_orgs__tenant_id__evidence__evidence_item_id__attachments_post"
       },
       "CheckpointOut": {
         "properties": {
@@ -3691,9 +7281,14 @@
         "type": "object",
         "required": [
           "base_revision",
-          "status"
+          "status",
+          "owner_user_id",
+          "due_date",
+          "completed_date",
+          "reference"
         ],
-        "title": "CreateEvidenceRevisionRequest"
+        "title": "CreateEvidenceRevisionRequest",
+        "description": "A revision is a COMPLETE STATEMENT of the item's mirrored fields.\n\n`EvidenceItem` always mirrors the latest `EvidenceRevision`, so every\nrevision restates the item's whole state rather than patching it. The four\nmirrored fields below are therefore REQUIRED and still nullable: `None`\nmeans \"no owner\"/\"no date\", and a caller may clear a field, but only by\nsaying so. They are not optional, because a payload that omitted them used\nto be accepted and silently blank whatever a previous revision had set --\nlosing the owner that `_require_permitted_to_attest` and `my_work` both\nread, and the dates REQ-017 requires be tracked.\n\n`source_version` and `source_hash` stay optional: they are recorded on the\nrevision and never mirrored onto the item, so they are outside this\ncontract."
       },
       "CreateExceptionRequest": {
         "properties": {
@@ -4393,6 +7988,40 @@
         ],
         "title": "ExportJobOut"
       },
+      "ExportJobSummaryOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "format_version": {
+            "type": "integer",
+            "title": "Format Version"
+          },
+          "archive_digest": {
+            "type": "string",
+            "title": "Archive Digest"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "format_version",
+          "archive_digest",
+          "created_at"
+        ],
+        "title": "ExportJobSummaryOut"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -4651,6 +8280,29 @@
         ],
         "title": "MembershipOut"
       },
+      "MyOrgOut": {
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "title": "Tenant Id"
+          },
+          "tenant_name": {
+            "type": "string",
+            "title": "Tenant Name"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tenant_id",
+          "tenant_name",
+          "role"
+        ],
+        "title": "MyOrgOut"
+      },
       "MyWorkItemOut": {
         "properties": {
           "item": {
@@ -4870,7 +8522,8 @@
             "title": "User Id"
           },
           "role": {
-            "$ref": "#/components/schemas/Role"
+            "type": "string",
+            "title": "Role"
           }
         },
         "type": "object",
@@ -4917,6 +8570,50 @@
           "owner_user_id"
         ],
         "title": "ProjectOut"
+      },
+      "PublishedVersionOut": {
+        "properties": {
+          "template_id": {
+            "type": "string",
+            "title": "Template Id"
+          },
+          "template_name": {
+            "type": "string",
+            "title": "Template Name"
+          },
+          "version_id": {
+            "type": "string",
+            "title": "Version Id"
+          },
+          "version_number": {
+            "type": "integer",
+            "title": "Version Number"
+          },
+          "classes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Classes"
+          },
+          "member_roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Member Roles"
+          }
+        },
+        "type": "object",
+        "required": [
+          "template_id",
+          "template_name",
+          "version_id",
+          "version_number",
+          "classes",
+          "member_roles"
+        ],
+        "title": "PublishedVersionOut"
       },
       "RecoverRequest": {
         "properties": {
@@ -4979,6 +8676,18 @@
         ],
         "title": "Role",
         "description": "Blueprint Sec.2 role table. platform_operator is out of tenant scope\n(no membership row) and is not modelled here yet -- WP12."
+      },
+      "RoleChangeRequest": {
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          }
+        },
+        "type": "object",
+        "required": [
+          "role"
+        ],
+        "title": "RoleChangeRequest"
       },
       "SaveDraftRequest": {
         "properties": {
