@@ -85,7 +85,7 @@
       "wp": "WP04",
       "ac": "AC02",
       "test": "TST-008",
-      "verify": "Reuse a connection between two tenants and run mixed-tenant jobs; no data crosses boundaries.",
+      "verify": "Reuse a pooled connection between two tenants and run mixed-tenant jobs; no data crosses boundaries. Verify each surface REQ-008 names, and distinguish covered from absent: pooled-transaction context reset and mixed-tenant jobs (covered -- tenant-isolation RLS suites); files (covered -- cross-tenant attachment download is refused, and the handler filters on tenant_id); exports (covered -- export isolation tests). Caches, search indexes and background workers are NOT implemented in this codebase (no cache, search or task-queue dependency is declared or imported), so there is nothing to isolate and this verification is vacuous for them by absence, NOT satisfied by test. If any of those three is introduced, this requirement is no longer verified and TST-008 must be extended before the change ships.",
       "priority": "Must"
     },
     {
@@ -107,7 +107,7 @@
       "wp": "WP05",
       "ac": "AC09 AC13",
       "test": "TST-010",
-      "verify": "Three distinct framework fixtures represent expected classes, roles and gates without application code changes.",
+      "verify": "Distinct framework fixtures represent, without application code changes, every scheme REQ-010 enumerates -- tracks, gates, classification, role, status, decision and applicability -- each asserted by name rather than as a group: gates and classification (fixture gate/class structures drive occurrence creation); role (a template's declared roles are assignable and govern who may attest); status (a template's own completion vocabulary governs readiness, not a hardcoded word); decision (outcomes resolve by declared kind, including the separation-of-duties gate); applicability (a rule's applicability condition is evaluated against the project class); tracks (a declared track is bound to the gates that belong to it). A fixture that merely DECLARES a scheme does not verify it -- the assertion must show the declared value changing behaviour, which is the specific gap that let the status, role and track schemes ship unhonoured.",
       "priority": "Must"
     },
     {
@@ -1020,5 +1020,19 @@
       "Partly decided",
       "Decided"
     ]
-  }
+  },
+  "amendments": [
+    {
+      "id": "AMD-001",
+      "date": "2026-10-10",
+      "authority": "Owner authorisation, 2026-10-10, given in response to the REQ/TST verification audit",
+      "scope": "Correction of the `verify` text of REQ-008 (TST-008) and REQ-010 (TST-010) only. No requirement text, priority, work-package or acceptance-criterion mapping was changed, and no requirement was added or removed. This amendment changes what must be CHECKED, not what is REQUIRED.",
+      "reason": "The REQ/TST verification audit (2026-10-07, extended 2026-10-10) confirmed a defect class: a requirement enumerating N items whose verify text asserts fewer than N leaves the difference unverified while the pair reads as complete. That gap is not theoretical -- it is how the status scheme (DEC07-Q11), the role scheme and the track scheme each shipped declared but unhonoured, and how REQ-017's owner/date loss went unnoticed. TST-008 named 5 surfaces and asserted 2; TST-010 named 7 schemes and asserted 3. Both now enumerate their own subject and, for TST-008, distinguish 'covered by test' from 'absent from the implementation' so a future reader cannot mistake the second for the first.",
+      "does_not_claim": "This amendment does not assert that every enumerated item is currently verified. REQ-010's track scheme is declared but not yet bound to gates (recorded Open in docs/DEFECT_REGISTER.md); the corrected text states the requirement the tests must meet, which is the point of a verification column. APR-001's approval of the baseline is unchanged and this is not a re-approval of it.",
+      "superseded_text": {
+        "REQ-008 (TST-008) verify": "Reuse a connection between two tenants and run mixed-tenant jobs; no data crosses boundaries.",
+        "REQ-010 (TST-010) verify": "Three distinct framework fixtures represent expected classes, roles and gates without application code changes."
+      }
+    }
+  ]
 }

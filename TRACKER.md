@@ -3546,3 +3546,67 @@ Framework's Section 3.3 bars self-approval, so every register row's
 not independent assurance and must not be cited as satisfying one.
 
 **No gate decision.** A probe and two register writes.
+
+### AMD-001: the verify text of TST-008 and TST-010 corrected, on owner authorisation (2026-10-10)
+
+The WP05 REQ/TST row's last outstanding action was the one an agent could not
+take on its own: `docs/blueprint/Requirements_Catalogue.json` is an **approved
+controlled artefact** (APR-001, 2026-09-15), so correcting a requirement's
+verification text changes an approved document. Authorisation was asked for
+and **given by the owner on 2026-10-10**, so it is now done — and recorded in
+a way that survives the commit message.
+
+**The trail lives inside the artefact.** The file gained an `amendments`
+array whose first entry, `AMD-001`, records the date, the authority, the
+scope, the reason, an explicit `does_not_claim`, and — importantly — the
+**prior wording of both fields preserved verbatim** in `superseded_text`. A
+controlled document's change history belongs with the document; a reader who
+opens the catalogue in two years should not have to find a git log to learn
+that two verify fields were rewritten, or what they used to say.
+
+**Scope held deliberately narrow, and verified mechanically rather than
+asserted.** Comparing the parsed old and new documents: 58 requirements
+before and after, order preserved, and **exactly two fields changed —
+`REQ-008.verify` and `REQ-010.verify`.** Every other section
+(`work_packages`, `acceptance`, `remediation`, `decisions`, `approval`) is
+byte-identical, and `APR-001` itself is untouched. No requirement `text`,
+`priority`, `wp`, `ac` or `source` was altered and none was added or removed.
+**The amendment changes what must be CHECKED, never what is REQUIRED**, and
+it is not a re-approval of APR-001.
+
+**TST-008** now enumerates all five surfaces REQ-008 names and does the thing
+the register actually asked for: it **distinguishes "covered by test" from
+"absent from the implementation"**. Pooled-transaction reset and mixed-tenant
+jobs, files, and exports are named as covered, with what covers them. Caches,
+search indexes and background workers are named as **not implemented here**,
+so the verification is vacuous for them **by absence, not satisfied by test**
+— and the text now carries the trigger: if any of the three is introduced,
+REQ-008 is no longer verified and TST-008 must be extended before that change
+ships. That last clause is the part that makes this a control rather than a
+footnote.
+
+**TST-010** now enumerates all seven schemes REQ-010 names — tracks, gates,
+classification, role, status, decision, applicability — each to be asserted
+*by name* rather than as a group, with what each assertion must show. It also
+states the rule this entire defect class turned on, so it cannot be
+re-learned the hard way a fourth time: **a fixture that merely DECLARES a
+scheme does not verify it** — the assertion must show the declared value
+changing behaviour. That is precisely how the status scheme (DEC07-Q11), the
+role scheme and now the track scheme each shipped declared but unhonoured.
+
+**The honest consequence, stated rather than buried.** The corrected TST-010
+is now **knowingly unmet** on its track clause, because `tracks` is still
+inert pending its own register row. That is deliberate and it is an
+improvement, not a regression: a verification text that correctly describes
+an unmet requirement is worth more than one that reads as satisfied because
+it asked for less than the requirement did. The same logic is why the
+previous wording was a defect in the first place.
+
+**WP05 REQ/TST row → Closed (2026-10-10).** All three of its actions are
+complete: the REQ-017 finding decided and fixed, `applicability`/`tracks`
+probed and split, and both verify texts corrected. The remaining
+implementation work is not lost — it is carried by the `tracks` row, where it
+belongs, rather than keeping a verification-gap row open to stand in for it.
+
+**No gate decision.** An owner-authorised amendment to a controlled artefact
+and one register closure. No `tracker_cli.py gate` invocation.
