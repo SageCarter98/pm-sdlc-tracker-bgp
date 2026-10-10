@@ -106,7 +106,14 @@ def _prepare_and_preview(client, tenant_id, project):
     assert (
         client.post(
             f"/orgs/{tenant_id}/evidence/{item['id']}/revisions",
-            json={"base_revision": 1, "status": "Met", "reference": "https://ci/1"},
+            json={
+                "base_revision": 1,
+                "status": "Met",
+                "reference": "https://ci/1",
+                "owner_user_id": None,
+                "due_date": None,
+                "completed_date": None,
+            },
         ).status_code
         == 201
     )
@@ -240,7 +247,14 @@ def test_a_v1_project_members_approver_may_still_attest_as_before(client):
     assert (
         client.post(
             f"/orgs/{tenant_id}/evidence/{item['id']}/revisions",
-            json={"base_revision": 1, "status": "Complete", "reference": "doc-1"},
+            json={
+                "base_revision": 1,
+                "status": "Complete",
+                "reference": "doc-1",
+                "owner_user_id": None,
+                "due_date": None,
+                "completed_date": None,
+            },
         ).status_code
         == 201
     )
@@ -350,7 +364,14 @@ def test_a_tenant_sponsor_may_still_decide_on_a_lightweight_v1_binding(client):
     assert (
         client.post(
             f"/orgs/{tenant_id}/evidence/{item['id']}/revisions",
-            json={"base_revision": 1, "status": "Complete", "reference": "doc-1"},
+            json={
+                "base_revision": 1,
+                "status": "Complete",
+                "reference": "doc-1",
+                "owner_user_id": None,
+                "due_date": None,
+                "completed_date": None,
+            },
         ).status_code
         == 201
     )

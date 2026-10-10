@@ -136,7 +136,14 @@ def test_two_routine_and_one_triggered_occurrence_keep_separate_evidence(client)
     # editing the first S1 item must not affect the second occurrence's item
     client.post(
         f"/orgs/{tenant_id}/evidence/{first_s1_item_id}/revisions",
-        json={"base_revision": 1, "status": "In progress", "reference": None},
+        json={
+            "base_revision": 1,
+            "status": "In progress",
+            "reference": None,
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     second_item_detail = client.get(f"/orgs/{tenant_id}/evidence/{second_s1_item_id}").json()
     assert second_item_detail["item"]["status"] == "Not started"
@@ -150,20 +157,42 @@ def test_evidence_revision_history_is_immutable_and_attributed(client):
 
     progress = client.post(
         f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
-        json={"base_revision": 1, "status": "In progress", "reference": None},
+        json={
+            "base_revision": 1,
+            "status": "In progress",
+            "reference": None,
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     assert progress.status_code == 201, progress.text
     assert progress.json()["item"]["latest_revision_number"] == 2
 
     rejected = client.post(
         f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
-        json={"base_revision": 2, "status": "Complete", "reference": None},
+        json={
+            "base_revision": 2,
+            "status": "Complete",
+            "reference": None,
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     assert rejected.status_code == 422, rejected.text  # REQ-018: required item, no reference
 
     done = client.post(
         f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
-        json={"base_revision": 2, "status": "Complete", "reference": "doc-123", "source_hash": "sha256:abc"},
+        json={
+            "base_revision": 2,
+            "status": "Complete",
+            "reference": "doc-123",
+            "source_hash": "sha256:abc",
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     assert done.status_code == 201, done.text
     body = done.json()
@@ -187,7 +216,14 @@ def test_stale_base_revision_is_rejected(client):
 
     resp = client.post(
         f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
-        json={"base_revision": 0, "status": "In progress", "reference": None},
+        json={
+            "base_revision": 0,
+            "status": "In progress",
+            "reference": None,
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     assert resp.status_code == 409, resp.text
 
@@ -214,14 +250,28 @@ def test_only_explicit_project_members_can_submit_evidence(client):
     register_and_login(client, "member@tenant-a.example")
     as_member = client.post(
         f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
-        json={"base_revision": 1, "status": "In progress", "reference": None},
+        json={
+            "base_revision": 1,
+            "status": "In progress",
+            "reference": None,
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     assert as_member.status_code == 201, as_member.text
 
     register_and_login(client, "outsider@tenant-a.example")
     as_outsider = client.post(
         f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
-        json={"base_revision": 2, "status": "In progress", "reference": None},
+        json={
+            "base_revision": 2,
+            "status": "In progress",
+            "reference": None,
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     assert as_outsider.status_code == 403, as_outsider.text
     assert outsider_id != member_id
@@ -263,7 +313,14 @@ def test_my_work_reports_reason_deadline_state_and_direct_action(client):
     # admin's my-work once explicitly assigned to them as owner.
     client.post(
         f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
-        json={"base_revision": 1, "status": "Not started", "owner_user_id": admin_id, "reference": None},
+        json={
+            "base_revision": 1,
+            "status": "Not started",
+            "owner_user_id": admin_id,
+            "reference": None,
+            "due_date": None,
+            "completed_date": None,
+        },
     )
 
     work = client.get(f"/orgs/{tenant_id}/my-work")
@@ -278,7 +335,14 @@ def test_my_work_reports_reason_deadline_state_and_direct_action(client):
 
     client.post(
         f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
-        json={"base_revision": 2, "status": "Complete", "owner_user_id": admin_id, "reference": "doc-1"},
+        json={
+            "base_revision": 2,
+            "status": "Complete",
+            "owner_user_id": admin_id,
+            "reference": "doc-1",
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     after = client.get(f"/orgs/{tenant_id}/my-work").json()
     entry_after = next(e for e in after if e["item"]["id"] == s1_item_id)

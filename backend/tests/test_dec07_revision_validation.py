@@ -39,7 +39,14 @@ def test_req018_catches_a_satisfying_status_with_no_reference(client, v3_project
 
     resp = client.post(
         f"/orgs/{tenant_id}/evidence/{item['id']}/revisions",
-        json={"base_revision": 1, "status": "Met"},
+        json={
+            "base_revision": 1,
+            "status": "Met",
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+            "reference": None,
+        },
     )
     assert resp.status_code == 422
     assert "REQ-018" in resp.text
@@ -50,7 +57,14 @@ def test_a_non_satisfying_status_needs_no_reference(client, v3_project):
     item = created["evidence_items"][0]
     resp = client.post(
         f"/orgs/{tenant_id}/evidence/{item['id']}/revisions",
-        json={"base_revision": 1, "status": "Not met"},
+        json={
+            "base_revision": 1,
+            "status": "Not met",
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+            "reference": None,
+        },
     )
     assert resp.status_code == 201, resp.text
 
@@ -61,7 +75,14 @@ def test_an_undeclared_status_is_rejected(client, v3_project):
     item = created["evidence_items"][0]
     resp = client.post(
         f"/orgs/{tenant_id}/evidence/{item['id']}/revisions",
-        json={"base_revision": 1, "status": "Bananas", "reference": "x"},
+        json={
+            "base_revision": 1,
+            "status": "Bananas",
+            "reference": "x",
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     assert resp.status_code == 422
     assert "Bananas" in resp.text
@@ -76,7 +97,14 @@ def test_near_miss_status_ids_are_rejected_not_silently_stored(client, v3_projec
     item = created["evidence_items"][0]
     resp = client.post(
         f"/orgs/{tenant_id}/evidence/{item['id']}/revisions",
-        json={"base_revision": 1, "status": near_miss, "reference": "x"},
+        json={
+            "base_revision": 1,
+            "status": near_miss,
+            "reference": "x",
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     assert resp.status_code == 422, f"{near_miss!r} should be rejected, not stored"
 
@@ -156,7 +184,14 @@ def test_undeclared_complete_still_demands_a_reference_below_v3(client):
 
     resp = client.post(
         f"/orgs/{tenant_id}/evidence/{item['id']}/revisions",
-        json={"base_revision": 1, "status": "Complete"},
+        json={
+            "base_revision": 1,
+            "status": "Complete",
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+            "reference": None,
+        },
     )
     assert resp.status_code == 422, resp.text
     assert "REQ-018" in resp.text

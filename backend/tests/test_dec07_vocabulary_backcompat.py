@@ -80,7 +80,14 @@ def test_complete_still_clears_a_blocker_and_permits_the_declared_outcomes(clien
         if item["gate_id"] == gate_id and item["blocker_level"] in ("hard", "conditional"):
             resp = client.post(
                 f"/orgs/{tenant_id}/evidence/{item['id']}/revisions",
-                json={"base_revision": 1, "status": "Complete", "reference": "doc-1"},
+                json={
+                    "base_revision": 1,
+                    "status": "Complete",
+                    "reference": "doc-1",
+                    "owner_user_id": None,
+                    "due_date": None,
+                    "completed_date": None,
+                },
             )
             assert resp.status_code == 201, resp.text
 
@@ -124,7 +131,14 @@ def test_rule_conditions_are_still_not_evaluated_for_v1_v2(client, stem):
     for item in hard:
         client.post(
             f"/orgs/{tenant_id}/evidence/{item['id']}/revisions",
-            json={"base_revision": 1, "status": "Complete", "reference": "doc-1"},
+            json={
+                "base_revision": 1,
+                "status": "Complete",
+                "reference": "doc-1",
+                "owner_user_id": None,
+                "due_date": None,
+                "completed_date": None,
+            },
         )
 
     preview = client.post(
@@ -191,7 +205,14 @@ def test_a_v2_template_with_populated_conditions_still_ignores_them(client):
 
     client.post(
         f"/orgs/{tenant_id}/evidence/{item['id']}/revisions",
-        json={"base_revision": 1, "status": "Complete", "reference": "doc-1"},
+        json={
+            "base_revision": 1,
+            "status": "Complete",
+            "reference": "doc-1",
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+        },
     )
 
     preview = client.post(

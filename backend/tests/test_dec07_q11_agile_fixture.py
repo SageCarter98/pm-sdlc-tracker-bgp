@@ -82,7 +82,19 @@ class AgileProject:
         return resp.json()
 
     def revise(self, rule_id: str, status: str, reference: str | None = None, base_revision: int = 1):
-        payload: dict = {"base_revision": base_revision, "status": status}
+        # All four mirrored fields are restated, not omitted: a revision is a
+        # complete statement of them (CreateEvidenceRevisionRequest), and
+        # explicit None here reproduces exactly what this helper's omission
+        # used to mean implicitly. `reference` is overwritten just below when
+        # a caller supplies one.
+        payload: dict = {
+            "base_revision": base_revision,
+            "status": status,
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+            "reference": None,
+        }
         if reference is not None:
             payload["reference"] = reference
         return self.client.post(f"/orgs/{self.tenant_id}/evidence/{self.items[rule_id]['id']}/revisions", json=payload)

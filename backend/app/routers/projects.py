@@ -110,12 +110,28 @@ class CreateOccurrenceResponse(BaseModel):
 
 
 class CreateEvidenceRevisionRequest(BaseModel):
+    """A revision is a COMPLETE STATEMENT of the item's mirrored fields.
+
+    `EvidenceItem` always mirrors the latest `EvidenceRevision`, so every
+    revision restates the item's whole state rather than patching it. The four
+    mirrored fields below are therefore REQUIRED and still nullable: `None`
+    means "no owner"/"no date", and a caller may clear a field, but only by
+    saying so. They are not optional, because a payload that omitted them used
+    to be accepted and silently blank whatever a previous revision had set --
+    losing the owner that `_require_permitted_to_attest` and `my_work` both
+    read, and the dates REQ-017 requires be tracked.
+
+    `source_version` and `source_hash` stay optional: they are recorded on the
+    revision and never mirrored onto the item, so they are outside this
+    contract.
+    """
+
     base_revision: int
     status: str
-    owner_user_id: str | None = None
-    due_date: datetime | None = None
-    completed_date: datetime | None = None
-    reference: str | None = None
+    owner_user_id: str | None
+    due_date: datetime | None
+    completed_date: datetime | None
+    reference: str | None
     source_version: str | None = None
     source_hash: str | None = None
 

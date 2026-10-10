@@ -31,7 +31,15 @@ def _setup_project_with_second_approver(client):
 def _complete_item(client, tenant_id, item_id, revision=1):
     resp = client.post(
         f"/orgs/{tenant_id}/evidence/{item_id}/revisions",
-        json={"base_revision": revision, "status": "Complete", "reference": "doc-1", "source_hash": "sha256:x"},
+        json={
+            "base_revision": revision,
+            "status": "Complete",
+            "reference": "doc-1",
+            "source_hash": "sha256:x",
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     assert resp.status_code == 201, resp.text
     return resp.json()
@@ -72,7 +80,14 @@ def test_preview_gives_plain_language_blocker_explanations_and_permitted_outcome
 
     client.post(
         f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
-        json={"base_revision": 1, "status": "Complete", "reference": "doc-1"},
+        json={
+            "base_revision": 1,
+            "status": "Complete",
+            "reference": "doc-1",
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     clear = client.post(f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={})
     clear_body = clear.json()
@@ -114,6 +129,8 @@ def test_full_approval_flow_with_separation_of_duties_override(client):
             "owner_user_id": admin_id,
             "reference": "doc-1",
             "source_hash": "x",
+            "due_date": None,
+            "completed_date": None,
         },
     )
 
@@ -204,6 +221,8 @@ def test_clearing_or_reassigning_ownership_cannot_defeat_separation_of_duties(cl
             "owner_user_id": approver_id,
             "reference": "doc-1",
             "source_hash": "x",
+            "due_date": None,
+            "completed_date": None,
         },
     )
     assert reassign.status_code == 201, reassign.text
@@ -256,6 +275,8 @@ def test_stale_compensating_review_rejected_after_evidence_changes(client):
             "owner_user_id": admin_id,
             "reference": "doc-1",
             "source_hash": "x",
+            "due_date": None,
+            "completed_date": None,
         },
     )
 
@@ -276,6 +297,8 @@ def test_stale_compensating_review_rejected_after_evidence_changes(client):
             "owner_user_id": admin_id,
             "reference": "doc-2",
             "source_hash": "y",
+            "due_date": None,
+            "completed_date": None,
         },
     )
     preview = client.post(f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={})
@@ -307,7 +330,14 @@ def test_idempotent_retry_returns_same_decision_not_a_conflict(client):
     login(client, "approver2@tenant-a.example")
     client.post(
         f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
-        json={"base_revision": 1, "status": "Complete", "owner_user_id": approver_id, "reference": "doc-1"},
+        json={
+            "base_revision": 1,
+            "status": "Complete",
+            "owner_user_id": approver_id,
+            "reference": "doc-1",
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     login(client, "admin@tenant-a.example")
     preview = client.post(f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={})
@@ -350,7 +380,14 @@ def test_second_decision_on_same_occurrence_requires_superseding(client):
     login(client, "approver2@tenant-a.example")
     client.post(
         f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
-        json={"base_revision": 1, "status": "Complete", "owner_user_id": approver_id, "reference": "doc-1"},
+        json={
+            "base_revision": 1,
+            "status": "Complete",
+            "owner_user_id": approver_id,
+            "reference": "doc-1",
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     login(client, "admin@tenant-a.example")
     preview = client.post(f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={})
@@ -393,7 +430,14 @@ def test_stale_manifest_digest_is_rejected(client):
 
     client.post(
         f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
-        json={"base_revision": 1, "status": "Complete", "owner_user_id": approver_id, "reference": "doc-1"},
+        json={
+            "base_revision": 1,
+            "status": "Complete",
+            "owner_user_id": approver_id,
+            "reference": "doc-1",
+            "due_date": None,
+            "completed_date": None,
+        },
     )
 
     decide = client.post(
@@ -570,7 +614,14 @@ def test_decision_commit_failure_leaves_no_partial_state(client, monkeypatch):
 
     client.post(
         f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
-        json={"base_revision": 1, "status": "Complete", "owner_user_id": approver_id, "reference": "doc-1"},
+        json={
+            "base_revision": 1,
+            "status": "Complete",
+            "owner_user_id": approver_id,
+            "reference": "doc-1",
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     preview = client.post(f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={})
     digest = preview.json()["manifest_digest"]

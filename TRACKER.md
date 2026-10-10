@@ -3165,3 +3165,299 @@ extended from 9 to 11, `test_wp13_webapp_new_pages.py` by 2, and
 no `tracker_cli.py` invocation of any kind and no `tracker_cli.py gate`
 action. The register rows above are findings and closures of findings, not
 approvals; a gate decision remains a named human authority's sign-off.
+
+## IPA04's stale DEC08 sub-part claim corrected; what actually keeps it Open (2026-10-07)
+
+Housekeeping with a real finding in it, done immediately after PR #18
+merged (`de06592`, CI run `37700760348` success, and — worth noting for the
+first time in this project's history — a genuine `APPROVED` review from
+kenAddme on commit `09c4da5`, checked via `gh pr view --json reviews`
+rather than inferred from "merged", per the EC-202 precedent that every
+previously sampled PR carried only `COMMENTED`).
+
+**The finding.** `docs/DEFECT_REGISTER.md`'s IPA04 row — the only High,
+explicitly release-blocking row still Open — listed two of DEC08's three
+numeric sub-parts as unbuilt:
+
+> render-timing (LCP/INP/CLS) and page-weight budgets (need a
+> Lighthouse-CI-style harness this project doesn't have) and the async
+> export-streaming budget (exports.py is synchronous in this prototype per
+> WP01's own scope limit, so there's no "begin streaming" moment to
+> measure yet)
+
+**Both were built on 2026-10-01 in `5e9baf5` (PR #9) and the row was never
+updated.** Verified against primary sources rather than the row's own
+prose, which is the whole point:
+
+- `tools/perf-budgets/` exists and is committed — `check.mjs` (16.9 KB),
+  `package.json`, `package-lock.json`, README — and is driven by a
+  **blocking** CI step, "Render-timing and page-weight budgets (DEC08
+  Q14/Q16)" in `.github/workflows/ci.yml`, alongside the Node-setup and
+  dev-server-health steps it needs. Measured with real headless Chrome via
+  Lighthouse, not simulated.
+- The export budget's premise no longer holds. `exports.py`'s download
+  endpoint streams incrementally through `_iter_archive_json` and a real
+  `StreamingResponse`, so the "begin streaming" moment exists and is
+  measured by `test_wp12_render_and_export_budgets.py` (2 tests, live
+  Postgres): one proving `_iter_archive_json` yields more than one chunk
+  and matches `json.dumps`, one proving the download does not buffer the
+  whole body first.
+
+So all three of REQ-043's numeric sub-parts are enforced, each in the only
+place able to measure it. The identical stale claim was also sitting in
+`backend/tests/test_dec08_performance_budgets.py`'s own docstring, where it
+was actively misleading — a reader of that file would have concluded the
+other two sub-parts did not exist — and is corrected in the same commit to
+name where each one IS enforced.
+
+**This changes nothing about IPA04's Status, and the row says so
+explicitly.** It stays **Open**. What keeps it open is the assurance half,
+untouched by this edit and not performable by an agent:
+
+- the manual WCAG audit (keyboard, screen reader, zoom, colour contrast —
+  the 2026-09-30 axe-core/jsdom pass found 0 violations after one real fix
+  but cannot evaluate paint-dependent rules, as that writeup states);
+- an independent security review;
+- usability sessions (kenAddme named reviewer 2026-09-30 — an assignment,
+  not a performance);
+- real cross-zone/cross-region replication, a named non-goal of the DEC05
+  design spec rather than an omission.
+
+**Why this matters beyond one row.** This is the exact failure mode
+`CLAUDE.md`'s backfill note describes — real work shipped, the governance
+record never caught up — and it was sitting in a High release-blocking row,
+where a stale "still unbuilt" list is worse than no list: it invites
+re-doing work already done, and it misrepresents readiness in the direction
+of under-claiming while the row's headline over-claims what remains. Found
+by checking the row against the repository, which is the only way these
+surface.
+
+**No gate decision.** A register correction and a docstring correction,
+both evidence-backed. No `tracker_cli.py` invocation of any kind.
+
+## The REQ/TST verification audit, run: one real defect, one false alarm refused (2026-10-07)
+
+`docs/DEFECT_REGISTER.md`'s WP05 row asked a question it did not answer:
+REQ-010 named four schemes and TST-010 asserted three, so **do other
+REQ/TST pairs share that shape?** That audit is now run. The answer is yes,
+and it found one probed defect, one thing worse than first recorded, and
+one apparent high-severity hole that turned out not to be one.
+
+**Method.** All 58 entries in `docs/blueprint/Requirements_Catalogue.json`,
+each requirement's own enumerated list against its own `verify` text. 45
+enumerate three or more items. A mechanical word-overlap pass flagged 34 as
+missing two or more — but that pass counts a synonym as a gap, so it was
+used only to rank candidates, and every top candidate was then read and
+judged against the primary text. That distinction matters: the mechanical
+output alone would have produced four confident-looking findings that are
+not real.
+
+**1. REQ-010 is worse than the register said.** Its text names **seven**
+schemes — tracks, gates, classification, role, status, decision,
+applicability — and TST-010 verifies three ("classes, roles and gates").
+The register row recorded "four things vs three" from memory of the
+conversation; reading the catalogue says seven vs three. The role scheme is
+now implemented (PR #18); `applicability` and `tracks` remain unverified by
+TST-010's own text.
+
+**2. REQ-017 — a genuine match, and it yielded a real defect.** REQ-017
+requires tracking evidence status, owner, due date, completion date and
+reference; TST-017 verifies only the revision/attribution half ("Editing
+creates a new revision; prior actor, time and values remain available") and
+never asserts the five fields. Following the field list into the code found
+that `CreateEvidenceRevisionRequest` defaults `owner_user_id`, `due_date`,
+`completed_date` and `reference` to `None`, and `routers/projects.py`
+assigns all four to the item unconditionally.
+
+Probed, not assumed. After setting owner=`1f0f3339...` and
+due=`2026-12-01`, a revision sending only `{base_revision, status,
+reference}` left the item at **owner=`None`, due=`None`**. The append-only
+history is intact — revision 2 still holds both — so this is current-state
+loss, not audit-trail loss. Two consequences: REQ-017's own field list is
+silently dropped by a routine status update, and
+`_require_permitted_to_attest`'s first exemption reads
+`item.owner_user_id`, so an owner who posts a status update clears their
+own ownership and loses that exemption next time.
+
+**Recorded, deliberately not fixed.** `EvidenceItem`'s docstring says the
+item fields "always mirror the latest EvidenceRevision", so mirroring
+`None` may be the intended append-only semantic — each revision a complete
+statement — rather than a bug. But the API offers no way to say "keep the
+current owner" and nothing documents that every revision must re-send these
+fields. Which of the two it is (a missing partial-update semantic, or an
+undocumented complete-statement contract) is an owner's design call, so it
+is in the register with its probe evidence instead of being changed
+unilaterally. The probe itself was throwaway and is **not** committed, on
+purpose: a test asserting today's behaviour would pin in whichever semantic
+turns out to be the unintended one.
+
+**3. REQ-008 looked like the worst of them and is not a defect.** A
+*tenant-isolation* requirement naming workers, files, caches, search and
+exports, whose TST-008 verifies only pooled-connection reuse and
+mixed-tenant jobs. On the mechanical ranking this was the top security
+candidate. On checking the code it is **vacuous by absence**: every named
+surface that exists is covered — files by
+`test_wp15_evidence_attachments.py`'s cross-tenant download refusal plus
+the handler's own `tenant_id` filter, exports by
+`test_wp09_tenant_isolation_rls.py` (2 tests) — and the three uncovered
+ones **do not exist in this codebase at all**. Grep for
+redis/memcached/cachetools/lru_cache, celery/rq/BackgroundTasks, and
+tsvector/to_tsquery/ILIKE returns nothing, and no such dependency is
+declared. Written down as absence, not as a hole, and explicitly not
+rounded up — this is the row where the audit was most tempted to overclaim.
+
+**4. REQ-023, REQ-015, REQ-044 — document-level narrowness, not gaps.**
+REQ-023's verify ends in a catch-all ("include all required bindings").
+REQ-015's field list is covered in practice by `test_projects.py` though its
+verify text asserts only atomicity. REQ-044 matches the shape but is an
+assurance requirement already inside IPA04's "no independent assurance
+performed", not a separate code gap.
+
+**What is left, and why the WP05 row stays Open.** A decision on the
+REQ-017 finding, and whether TST-008's and TST-010's verify *text* should be
+corrected to name which surfaces they cover — so a future reader can tell
+"covered" from "does not exist". Neither is done, so the row is updated with
+the audit's result rather than closed.
+
+**No gate decision.** An audit, a probe, and two register writes. No
+`tracker_cli.py` invocation of any kind.
+
+## The REQ-017 finding, decided and fixed: a revision is a complete statement (2026-10-10)
+
+The REQ/TST audit above left exactly one thing for an owner rather than an
+agent: **which of two readings the owner/due/completed clearing actually
+was** — a missing partial-update semantic, or an undocumented
+complete-statement contract. The audit deliberately refused to pick, and
+deliberately committed no test, because a test asserting the *current*
+behaviour would have pinned in whichever semantic turned out to be
+unintended.
+
+**The decision (owner, 2026-10-08): the second.** `EvidenceItem` mirroring
+the latest `EvidenceRevision` is intended. A revision *is* a whole statement
+of the item's state, and `None` legitimately means "no owner"/"no date". So
+the mirroring was never the defect. The defect was that
+`CreateEvidenceRevisionRequest` let a caller **omit** those fields and still
+receive a 201 — losing ownership and dates by accident rather than by
+instruction.
+
+**The fix is therefore a contract, not a behaviour change.** The four
+mirrored fields (`owner_user_id`, `due_date`, `completed_date`, `reference`)
+are now **required and still nullable**: clearing stays available to a caller
+who says so, and omitting is refused 422 naming the field.
+`source_version` and `source_hash` stay optional — they are recorded on the
+revision and never mirrored onto the item, so they are outside the contract,
+and a test pins that they were not swept into it. The contract is documented
+on the request model itself, which is the half of the register row's
+complaint that documentation rather than code had to answer.
+
+**Making the fields required immediately found a second, live defect — the
+more serious one.** `webapp/router.py`'s evidence-submit handler, UI04's
+Submit button and the endpoint's actual production caller, built its payload
+from `status` and `reference` alone. So **every browser evidence submission
+had been clearing the item's owner and both dates**, which makes the
+register row's "silent" rating understated: this was not a latent API
+sharp edge, it was the default path. The form now restates the owner and
+dates it does not itself edit. Worth naming plainly: a required-field
+contract converted a silent production data loss into a loud failure within
+one test run, which is the whole argument for the owner's choice over a
+`None`-means-keep patch.
+
+**Nine tests, written RED first** (`test_revision_complete_statement.py`;
+the five omission cases returned 201 and mirrored `None` before the change —
+the probe the register row recorded, now committed as a test). Both
+directions are covered, not just the refusal: each of the four fields
+parametrised separately so a default silently reappearing on any one of them
+fails on its own; a refused revision leaves owner, due date and
+`latest_revision_number` untouched (a refusal that still mutated would be
+worse than the defect it replaces); an explicit `null` **still clears**, so
+the fix is not a narrowing dressed up as validation; a complete revision
+carries owner and dates forward, which is REQ-017's actual requirement; and
+the UI submit path keeps the owner and due date while still applying the
+`reference` its form does edit.
+
+**The breaking change was settled across the suite, not suppressed.** ~47
+request literals in 13 existing test files plus the one production call site
+were made explicit. The transform was checked mechanically rather than by
+eye: parsing every dict literal in all 14 modified test files, old versus
+new, and normalising away mirrored keys whose value is exactly `None`, leaves
+the two sides **identical** — so no test's subject changed, every added value
+is an explicit statement of what that payload was already getting by
+default.
+
+**Verified: the whole suite, chunked.** Two files per pytest process (3.46GB
+RAM): **26 chunks, 387 passed, no skips**. One red, and it is **not** this
+change — `test_dec08_performance_budgets.py::test_decision_write_budget_hold_and_supersede`
+breached its latency budget while sharing a process with `test_decisions.py`,
+the load-dependent false-red this file already documents above ("this machine
+can produce a false-red budget check under load", with the standing
+instruction to run that file alone). Re-run alone per that protocol: **3
+passed in 27s**, against 212s for the paired chunk — so 388 distinct tests
+green. The budget was not loosened and no retry or skip was added, matching
+how the earlier instance was handled. `ruff check` and `ruff format` clean.
+
+**`docs/openapi.json` regenerated, and what that exposed.** The contract
+change is a router change, and `docs/api-reference.md` carries a standing
+instruction to regenerate the snapshot after any such change. Doing so moved
+it from **46 paths / 58 schemas to 92 paths / 84 schemas** — nothing removed.
+Only a few of those are this change; the rest is three weeks of accumulated
+drift from WP11/WP13/WP15, IPA02 and UI09 that nobody regenerated for. That
+drift is not a side effect worth hiding: it is direct evidence for the
+caveat tracker item **#125** already carries, that nothing in CI checks the
+snapshot against the live schema. #125's evidence citation is corrected to
+the new counts and **stays In progress** — the regeneration fixes the
+staleness, not the gap, and the same drift recurs on the next router change.
+Its closing evidence would be a CI step that fails when snapshot and live
+schema disagree, plus the architecture/data/operational docs that still do
+not exist.
+
+**Register effects.** The REQ-017 row moves to **Closed (2026-10-10)** with
+the decision, the fix, the second defect it found, and the test evidence.
+The **WP05 REQ/TST row stays Open**, narrowed: its REQ-017 arm is now
+decided and fixed, so what remains is the documentation half — whether
+TST-008's and TST-010's verify *text* should name which surfaces they cover,
+plus TST-010's two still-unverified schemes (`applicability`, `tracks`).
+
+**No gate decision.** One evidence-item evidence correction (#125, status
+unchanged at In progress) and two register writes. No `tracker_cli.py gate`
+invocation, and none is implied by a green suite.
+
+### CI result on this branch, and two things it settled (2026-10-10)
+
+Run `38064789545` on `121422d`: **green**, every step including the blocking
+render-timing/page-weight budgets, the dependency-vulnerability scan and the
+secret scan. `pytest -q`: **386 passed, 2 skipped** in 185s.
+
+**1. The DEC08 false-red does not reproduce on GitHub's runners — an open
+question above, now answered.** The note on the earlier instance said
+plainly: "**Not yet known**: whether GitHub Actions' own runners (far more
+RAM than this box) would ever reproduce this inside `ci.yml`'s `pytest -q`
+step". They do not. CI ran the **entire suite in one long-lived process** —
+the exact shape that OOM-kills this dev box — and
+`test_decision_write_budget_hold_and_supersede` passed inside it, then
+passed again in its dedicated step (3 passed in **4.12s**, against 27s
+running alone locally and 212s for the paired local chunk). So the red seen
+locally is confirmed machine-local, and the budget numbers themselves have
+real headroom on the runner. This is the evidence the earlier note said was
+missing; it is **not** a licence to dismiss a future CI red on that file,
+which would mean something different entirely.
+
+**2. CI never exercises the live malware scanner — the 2 skips, and they are
+not from this change.** Both are `test_wp15_cloudmersive_scanner.py`, whose
+module-level `pytestmark` skips on `not settings.cloudmersive_api_key`.
+**`BGP_CLOUDMERSIVE_API_KEY` is never referenced in `.github/workflows/ci.yml`
+at all**, so it is never set there — grep confirms. It *is* configured on this
+dev machine, which is why the local chunked sweep reported **zero** skips and
+388 passed while CI reports 386 + 2. Same 388 tests collected either way; the
+difference is entirely those two.
+
+What that means, stated plainly rather than filed as a counting curiosity:
+**the EICAR detection-and-quarantine path is only ever proven on one
+developer's machine.** The attachment scanner is the control that keeps an
+infected upload from becoming a downloadable active attachment — adjacent to
+REQ-046 and to the attachment-authorisation row above — and CI silently
+skips its only live test instead of failing or warning. A reader of a green
+CI run would reasonably assume otherwise. **Not fixed here** (out of this
+branch's scope, and it needs a decision about whether to hold a scanner
+credential in CI secrets or to add a mocked-transport test that at least
+pins the quarantine logic). Recorded so the next person does not discover it
+the way this branch did — by reconciling two test counts.

@@ -130,7 +130,14 @@ def test_a_declared_satisfying_status_clears_a_hard_blocker(client, v3_project):
 
     resp = client.post(
         f"/orgs/{tenant_id}/evidence/{item['id']}/revisions",
-        json={"base_revision": 1, "status": "Met", "reference": "https://ci/1"},
+        json={
+            "base_revision": 1,
+            "status": "Met",
+            "reference": "https://ci/1",
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     assert resp.status_code == 201, resp.text
     assert _preview(client, tenant_id, created)["hard_blockers"] == []
@@ -144,7 +151,14 @@ def test_the_literal_complete_is_not_special_for_a_v3_template(client, v3_projec
     item = created["evidence_items"][0]
     resp = client.post(
         f"/orgs/{tenant_id}/evidence/{item['id']}/revisions",
-        json={"base_revision": 1, "status": "Complete", "reference": "x"},
+        json={
+            "base_revision": 1,
+            "status": "Complete",
+            "reference": "x",
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     if resp.status_code == 201:
         assert _preview(client, tenant_id, created)["hard_blockers"] == [item["id"]]
@@ -159,7 +173,14 @@ def test_requires_exception_status_does_not_satisfy_without_a_valid_exception(cl
     item = created["evidence_items"][0]
     resp = client.post(
         f"/orgs/{tenant_id}/evidence/{item['id']}/revisions",
-        json={"base_revision": 1, "status": "Waived", "reference": "waiver-note"},
+        json={
+            "base_revision": 1,
+            "status": "Waived",
+            "reference": "waiver-note",
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     assert resp.status_code == 201, resp.text
     assert _preview(client, tenant_id, created)["hard_blockers"] == [item["id"]], (
@@ -175,7 +196,14 @@ def test_requires_exception_status_satisfies_with_a_valid_exception(client, v3_p
 
     client.post(
         f"/orgs/{tenant_id}/evidence/{item['id']}/revisions",
-        json={"base_revision": 1, "status": "Waived", "reference": "waiver-note"},
+        json={
+            "base_revision": 1,
+            "status": "Waived",
+            "reference": "waiver-note",
+            "owner_user_id": None,
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     exc = client.post(
         f"/orgs/{tenant_id}/evidence/{item['id']}/exceptions",

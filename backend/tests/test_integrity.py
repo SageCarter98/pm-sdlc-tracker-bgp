@@ -39,7 +39,14 @@ def _record_one_approval(client, tenant_id, created, approver_id, key="k1"):
     login(client, "approver2@tenant-a.example")
     client.post(
         f"/orgs/{tenant_id}/evidence/{s1_item_id}/revisions",
-        json={"base_revision": 1, "status": "Complete", "owner_user_id": approver_id, "reference": "doc-1"},
+        json={
+            "base_revision": 1,
+            "status": "Complete",
+            "owner_user_id": approver_id,
+            "reference": "doc-1",
+            "due_date": None,
+            "completed_date": None,
+        },
     )
     login(client, "admin@tenant-a.example")
     preview = client.post(f"/orgs/{tenant_id}/projects/{project_id}/occurrences/{s1_occurrence_id}/preview", json={})
