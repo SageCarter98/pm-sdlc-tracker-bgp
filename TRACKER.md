@@ -3420,3 +3420,44 @@ plus TST-010's two still-unverified schemes (`applicability`, `tracks`).
 **No gate decision.** One evidence-item evidence correction (#125, status
 unchanged at In progress) and two register writes. No `tracker_cli.py gate`
 invocation, and none is implied by a green suite.
+
+### CI result on this branch, and two things it settled (2026-10-10)
+
+Run `38064789545` on `121422d`: **green**, every step including the blocking
+render-timing/page-weight budgets, the dependency-vulnerability scan and the
+secret scan. `pytest -q`: **386 passed, 2 skipped** in 185s.
+
+**1. The DEC08 false-red does not reproduce on GitHub's runners — an open
+question above, now answered.** The note on the earlier instance said
+plainly: "**Not yet known**: whether GitHub Actions' own runners (far more
+RAM than this box) would ever reproduce this inside `ci.yml`'s `pytest -q`
+step". They do not. CI ran the **entire suite in one long-lived process** —
+the exact shape that OOM-kills this dev box — and
+`test_decision_write_budget_hold_and_supersede` passed inside it, then
+passed again in its dedicated step (3 passed in **4.12s**, against 27s
+running alone locally and 212s for the paired local chunk). So the red seen
+locally is confirmed machine-local, and the budget numbers themselves have
+real headroom on the runner. This is the evidence the earlier note said was
+missing; it is **not** a licence to dismiss a future CI red on that file,
+which would mean something different entirely.
+
+**2. CI never exercises the live malware scanner — the 2 skips, and they are
+not from this change.** Both are `test_wp15_cloudmersive_scanner.py`, whose
+module-level `pytestmark` skips on `not settings.cloudmersive_api_key`.
+**`BGP_CLOUDMERSIVE_API_KEY` is never referenced in `.github/workflows/ci.yml`
+at all**, so it is never set there — grep confirms. It *is* configured on this
+dev machine, which is why the local chunked sweep reported **zero** skips and
+388 passed while CI reports 386 + 2. Same 388 tests collected either way; the
+difference is entirely those two.
+
+What that means, stated plainly rather than filed as a counting curiosity:
+**the EICAR detection-and-quarantine path is only ever proven on one
+developer's machine.** The attachment scanner is the control that keeps an
+infected upload from becoming a downloadable active attachment — adjacent to
+REQ-046 and to the attachment-authorisation row above — and CI silently
+skips its only live test instead of failing or warning. A reader of a green
+CI run would reasonably assume otherwise. **Not fixed here** (out of this
+branch's scope, and it needs a decision about whether to hold a scanner
+credential in CI secrets or to add a mocked-transport test that at least
+pins the quarantine logic). Recorded so the next person does not discover it
+the way this branch did — by reconciling two test counts.
